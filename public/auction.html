@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auctions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<div class="shop-app">
+  <aside class="shop-side">
+    <div class="shop-brand">
+      <a class="wordmark" id="sn" data-brand="name" href="store.html">Outpost</a>
+      <nav><a href="store.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg><span>Shop</span></a><a href="auction.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6-3 3-6-6 3-3z"/><path d="M11 7l-6 6 3 3 6-6"/><path d="M4 20h9"/></svg><span>Auctions</span></a></nav>
+    </div>
+    <div class="cart bidpanel" id="bidpanel" hidden></div>
+    <div class="cart mybids" id="mybids"></div>
+    <img class="side-art" data-brand="mascot" alt="" hidden>
+  </aside>
+  <main class="shop-content">
+    <a class="wordmark mobhead" data-brand="name" href="store.html">Outpost</a><div id="stage"></div></main>
+</div>
+<script>
+(() => {
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pad = (n) => String(n).padStart(2, '0');
+  const fmtDate = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const countdown = (ms) => {
+    if (ms <= 0) return 'Ending…';
+    const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    return d > 0 ? `${d}d ${h}h ${m}m` : `${pad(h)}:${pad(m)}:${pad(s % 60)}`;
+  };
+  const COLORS = ['#e07a6f', '#e9b96e', '#7aa88f', '#7a96c4', '#b48ac0', '#d98fa3'];
+
+  // storage that never throws
+  const mem = {};
+  const ls = { get(k) { try { return localStorage.getItem(k); } catch { return mem[k] || null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { mem[k] = v; } } };
+  const isStaff = () => { try { return !!sessionStorage.getItem('outpost_token'); } catch { return false; } };
+  let bidder = null;
+  try { bidder = JSON.parse(ls.get('outpost_bidder') || 'null'); } catch { /* ignore */ }
+
+  const lot = new URLSearchParams(location.search).get('lot');
+  const stage = $('#stage');
+  let offset = 0, timers = [];
+
+  let siteKey = '', cardRequired = false, shopName = 'the seller', cardInfo = null;
+  const loadedAt = Date.now();
+  fetch('/api/settings').then((r) => r.json()).then((s) => { siteKey = s.captcha_site_key || ''; cardRequired = !!s.bid_card_required; shopName = s.store_name || shopName; OutpostBrand.apply(s); }).catch(() => {});
+  const headers = () => (bidder ? { 'x-bidder-token': bidder.token } : {});
+  const bk = isStaff() ? '<a href="/">← Back to Outpost</a>' : `<a href="auction.html">← All lots</a>`;
+  const pic = (url, name, cls) => url ? `<img class="${cls}" src="${esc(url)}" alt="">` : `<div class="${cls} ph">${esc((name || '?').charAt(0).toUpperCase())}</div>`;
+
+  // ---------------- "Your bidding" panel (left column) ----------------
+  const needsAction = (x) => x.you && (x.you.has_bid || x.you.watching);
+  const endMark = (x) => { if (x.phase !== 'live') return null; const left = x.end_at - (Date.now() + offset); return left <= 5 * 60e3 ? ['Final minutes', 'b-out'] : left <= 3600e3 ? ['Ending soon', 'b-warn'] : null; };
+  function myStatus(x) {
+    const y = x.you, ph = x.phase;
+    if (!y.has_bid) return ph === 'live' ? ['Watching', 'b-sched'] : ['Watched', 'b-unsold'];
+    if (ph === 'live') return y.is_high ? ['Winning', 'b-live'] : ['Outbid', 'b-out'];
+    if ((ph === 'sold' || ph === 'paid') && y.is_high) return ph === 'paid' ? ['Won · Paid', 'b-paid'] : ['You won', 'b-live'];
+    if (ph === 'sold' || ph === 'paid' || ph === 'unsold') return ['Not won', 'b-unsold'];
+    return ['', ''];
+  }
+  let mineCache = [];
+  function paintMine(lots) {
+    if (lots) mineCache = lots;
+    const box = $('#mybids');
+    if (!bidder) {
+      box.innerHTML = `<div class="cart-head"><h2>Your bidding</h2></div><div class="empty">Bid on or watch any lot and it will show up here.</div>`;
+      return;
+    }
+    const mine = mineCache.filter(needsAction);
+    const order = { live: 0, sold: 1, paid: 2, unsold: 3 };
+    mine.sort((p, q) => (order[p.phase] ?? 9) - (order[q.phase] ?? 9));
+    const winning = mine.filter((x) => x.phase === 'live' && x.you.is_high).length;
+    const outbid = mine.filter((x) => x.phase === 'live' && x.you.has_bid && !x.you.is_high).length;
+    const toPay = mine.filter((x) => x.phase === 'sold' && x.you.is_high).length;
+    const watching = mine.filter((x) => x.phase === 'live' && !x.you.has_bid).length;
+    box.innerHTML = `<div class="cart-head"><h2>Your bidding</h2></div>
+      <div class="muted small" style="margin:-4px 0 10px">Bidding as ${esc(bidder.name)}${cardInfo ? ` · ${esc((cardInfo.card_brand || 'Card').replace(/^./, (c) => c.toUpperCase()))} ending ${esc(cardInfo.card_last4 || '')} on file` : ''}</div>
+      ${mine.length ? `<div class="mb-sum">${[winning ? `<span><b>${winning}</b> winning</span>` : '', outbid ? `<span class="warn"><b>${outbid}</b> outbid</span>` : '', toPay ? `<span><b>${toPay}</b> to pay</span>` : '', watching ? `<span><b>${watching}</b> watching</span>` : ''].filter(Boolean).join('') || '<span>No active bids</span>'}</div>
+      <div class="mb-list">${mine.map((x) => { const st = myStatus(x); const cur = x.current_bid_cents;
+        return `<a class="mb-item${String(x.id) === String(lot) ? ' here' : ''}" href="auction.html?lot=${x.id}">
+          ${pic(x.image_url, x.title, 'thumb')}
+          <div class="mb-body"><span class="badge ${st[1]}">${st[0]}</span><div class="nm">${esc(x.title)}</div>
+            ${x.you.has_bid ? `<div class="small muted">Your bid ${fmt(x.you.my_bid_cents || 0)}</div>` : ''}
+            ${x.phase === 'live' && cur != null ? `<div class="small muted">Current ${fmt(cur)}</div>` : ''}
+            ${x.phase === 'live' ? `<div class="small muted">Ends in <span data-end="${x.end_at}">${countdown(x.end_at - (Date.now() + offset))}</span></div>` : ''}</div></a>`; }).join('')}</div>` : '<div class="empty">You aren’t bidding or watching anything yet.</div>'}`;
+  }
+  async function loadMine() {
+    try {
+      const r = await fetch('/api/auctions', { headers: headers() });
+      const lots = await r.json();
+      if (lots.length) offset = lots[0].serverNow - Date.now();
+      cardInfo = lots.length && lots[0].you && lots[0].you.has_card ? lots[0].you : cardInfo;
+      paintMine(lots);
+    } catch { /* ignore */ }
+  }
+  paintMine([]);
+  loadMine();
+  setInterval(loadMine, 5000);
+  setInterval(() => document.querySelectorAll('#mybids [data-end]').forEach((el) => { el.textContent = countdown(Number(el.dataset.end) - (Date.now() + offset)); }), 1000);
+
+  // ---------------- list of lots ----------------
+  async function list() {
+    stage.innerHTML = `<div class="stage-top"><h1 style="font-size:38px">Auctions</h1></div><div class="lots" id="lots"></div>`;
+    const paint = async () => {
+      const r = await fetch('/api/auctions', { headers: headers() });
+      const lots = await r.json();
+      if (lots.length) offset = lots[0].serverNow - Date.now();
+      $('#lots').innerHTML = lots.map((a) => {
+        const live = a.phase === 'live';
+        const em = endMark(a);
+        const status = em || { live: ['Live', 'b-live'], scheduled: ['Opens soon', 'b-sched'], sold: ['Sold', 'b-sold'], paid: ['Sold', 'b-paid'], unsold: ['Unsold', 'b-unsold'] }[a.phase] || ['', ''];
+        return `<a class="lotcard" href="auction.html?lot=${a.id}">${pic(a.image_url, a.title, 'cardpic')}
+          <div class="body"><span class="badge ${status[1]}">${status[0]}</span><h3>${esc(a.title)}</h3>
+          <div>${a.current_bid_cents != null ? `<b>${fmt(a.current_bid_cents)}</b> · ${a.bid_count} bid${a.bid_count === 1 ? '' : 's'}` : `Starting at <b>${fmt(a.starting_bid_cents)}</b>`}</div>
+          <div class="muted small">${live ? `Ends in <span data-end="${a.end_at}">${countdown(a.end_at - (Date.now() + offset))}</span>` : a.phase === 'scheduled' ? `Opens ${fmtDate(a.start_at)}` : ''}</div></div></a>`;
+      }).join('') || '<div class="card empty" style="grid-column:1/-1">No auctions right now. Check back soon!</div>';
+    };
+    await paint();
+    timers.push(setInterval(() => document.querySelectorAll('[data-end]').forEach((el) => { el.textContent = countdown(Number(el.dataset.end) - (Date.now() + offset)); }), 1000));
+    timers.push(setInterval(() => paint().catch(() => {}), 5000));
+  }
+
+  // ---------------- one lot: live bidding ----------------
+  async function single() {
+    let a = null, busy = false;
+    stage.innerHTML = `<div class="stage-top"><span>${bk}</span><div class="spacer"></div><span id="live"></span></div>
+      <div class="lotgrid"><div id="left"></div><div id="right"></div></div>`;
+
+    async function fetchLot() {
+      const r = await fetch('/api/auctions/' + encodeURIComponent(lot), { headers: headers() });
+      if (!r.ok) { stage.innerHTML = `<div class="stage-top"><span>${bk}</span></div><div class="card empty">That lot isn't available.</div>`; throw new Error('gone'); }
+      a = await r.json(); offset = a.serverNow - Date.now(); paint();
+    }
+
+    function paint() {
+      const live = a.phase === 'live';
+      document.title = `${a.title} — Lot ${a.id}`;
+      const em = endMark(a);
+      $('#live').innerHTML = live ? `${em ? `<span class="badge ${em[1]}" style="margin-right:8px">${em[0]}</span>` : ''}<span class="live-dot"></span><b>Live Auction</b>` : `<span class="badge">${({ scheduled: 'Opens soon', sold: 'Sold', paid: 'Sold', unsold: 'Unsold' })[a.phase] || ''}</span>`;
+      $('#left').innerHTML = pic(a.image_url, a.title, 'lotpic');
+      const hasBids = a.current_bid_cents != null;
+      let status = '';
+      if (a.phase === 'sold' || a.phase === 'paid') status = `<div class="msg" style="text-align:center"><b>Sold</b> to ${esc(a.winner)} for ${fmt(a.final_bid_cents)}</div>`;
+      if (a.phase === 'sold' && a.pay_url) status = `<div class="msg" style="text-align:center"><b>You won this lot!</b> Your winning bid was ${fmt(a.final_bid_cents)} (plus tax if it applies).</div><a class="placebid" style="display:block;text-align:center;text-decoration:none" href="${esc(a.pay_url)}">Pay now</a>`;
+      if (a.you && a.you.is_high && a.you.charge === 'paid' && a.you.receipt_url) status = `<div class="msg" style="text-align:center"><b>You won this lot!</b> Your card${a.you.card_last4 ? ' ending ' + esc(a.you.card_last4) : ''} was charged ${fmt(a.final_bid_cents)} (plus tax if it applies).</div><a class="placebid" style="display:block;text-align:center;text-decoration:none" href="${esc(a.you.receipt_url)}">Add your shipping address</a>`;
+      if (a.you && a.you.is_high && a.phase === 'sold' && a.you.charge === 'charging') status = '<div class="msg" style="text-align:center"><b>You won!</b> Charging your card…</div>';
+      if (a.you && a.you.is_high && a.phase === 'sold' && a.you.charge === 'failed') status = `<div class="msg err" style="text-align:center"><b>You won this lot,</b> but your card didn’t go through. Please pay with the secure link below.</div><a class="placebid" style="display:block;text-align:center;text-decoration:none" href="${esc(a.pay_url)}">Pay now</a>`;
+      if (a.phase === 'unsold') status = '<div class="msg" style="text-align:center">This lot closed without any bids.</div>';
+      let you = '';
+      if (live && a.you && a.you.is_high) you = '<div class="msg" style="text-align:center">You have the highest bid. 🎉</div>';
+      else if (live && a.you && a.you.has_bid) you = '<div class="msg err" style="text-align:center">You’ve been outbid.</div>';
+
+      $('#right').innerHTML = `
+        <div class="lotno">Lot ${a.id}</div><h1 class="lottitle">${esc(a.title)}</h1>
+        <div class="lotdesc">${esc(a.description)}</div>
+        ${a.bids.length ? `<h3 class="histhead">Bid history</h3><div class="bidhist">${a.bids.slice(0, 10).map((b) => `<div class="b"><span class="dot" style="background:${COLORS[b.color % 6]}"></span><span>${esc(b.name)}</span><span class="amt">${fmt(b.amount_cents)}</span><span class="when">${fmtTime(b.created_at)}</span></div>`).join('')}</div>` : ''}`;
+      const bp = $('#bidpanel'); bp.hidden = false;
+      const keepAmt = $('#amt') ? $('#amt').value : '', keepOpen = $('#otherbox') ? !$('#otherbox').hidden : false;
+      bp.innerHTML = `
+        <div class="bidbox"><div>${hasBids ? 'Current bid' : 'Starting bid'}</div>
+          <div class="cur">${fmt(hasBids ? a.current_bid_cents : a.starting_bid_cents)}</div>
+          <div class="cnt">${a.bid_count} bid${a.bid_count === 1 ? '' : 's'}</div>
+          ${live ? `<div class="clock">Ends in <span id="cd">${countdown(a.end_at - (Date.now() + offset))}</span></div>` : ''}
+          ${a.phase === 'scheduled' ? `<div class="clock">Opens ${fmtDate(a.start_at)}</div>` : ''}</div>
+        ${you}${status}
+        ${live ? `<button class="placebid" id="bid">Place Bid — ${fmt(a.next_min_bid_cents)}</button>
+          <div class="center mt small"><button class="link-btn" id="other" style="color:var(--forest)">Bid a different amount</button></div>
+          <div id="otherbox" ${keepOpen ? '' : 'hidden'} class="row mt"><input class="input" id="amt" inputmode="decimal" placeholder="${(a.next_min_bid_cents / 100).toFixed(2)} or more"><button class="btn btn-dark" id="bid2">Bid</button></div>` : ''}
+        ${live || a.phase === 'scheduled' ? `<button class="btn btn-ghost btn-block mt" id="watch">${a.you && a.you.watching ? '✓ Watching this lot' : 'Watch this lot'}</button>
+          <p class="hint center">Watched lots stay in “Your bidding” so you can find them again. We don’t send emails.</p>` : ''}
+        <div id="bmsg"></div>`;
+      if ($('#amt')) $('#amt').value = keepAmt;
+      if ($('#watch')) $('#watch').onclick = toggleWatch;
+      if (live) {
+        $('#bid').onclick = () => placeBid(a.next_min_bid_cents);
+        $('#other').onclick = () => { $('#otherbox').hidden = !$('#otherbox').hidden; };
+        $('#bid2').onclick = () => { const c = Math.round(parseFloat($('#amt').value.replace(/[$,]/g, '')) * 100); Number.isFinite(c) ? placeBid(c) : ($('#bmsg').innerHTML = '<div class="msg err">Enter an amount like 75.00</div>'); };
+      }
+    }
+
+    async function toggleWatch() {
+      if (!bidder) return signUp(toggleWatch);
+      try {
+        const r = await fetch(`/api/auctions/${a.id}/watch`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: '{}' });
+        if (r.status === 401) { bidder = null; ls.set('outpost_bidder', 'null'); return signUp(toggleWatch); }
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not update');
+        if (a.you) a.you.watching = d.watching; else a.you = { watching: d.watching };
+        paint(); loadMine();
+      } catch (e) { const m = $('#bmsg'); if (m) m.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    }
+
+    function signUp(then) {
+      const back = document.createElement('div');
+      back.className = 'modal-back';
+      back.innerHTML = `<div class="modal" style="text-align:left"><h2>Join to bid</h2>
+        <p class="muted small">We’ll use your email to send you your payment link if you win.</p>
+        <label class="field"><span class="label">Your name</span><input class="input" id="bn" autocomplete="name"></label>
+        <label class="field"><span class="label">Email</span><input class="input" id="be" type="email" autocomplete="email"></label>
+        <div class="hp" aria-hidden="true"><label>Leave this empty <input id="bw" tabindex="-1" autocomplete="off"></label></div>
+        <div id="bcap"></div>
+        <p class="hint">${cardRequired ? 'Next you’ll save a card with Stripe. You’re only charged if you win.' : 'By bidding you agree to pay if you win.'}</p>
+        <div id="berr"></div><button class="btn btn-primary btn-block" id="bgo">Continue</button>
+        <button class="btn btn-ghost btn-block mt" id="bno">Cancel</button></div>`;
+      document.body.appendChild(back);
+      let capToken = '', capId = null;
+      if (siteKey) {
+        const mount = () => { capId = window.turnstile.render($('#bcap', back), { sitekey: siteKey, callback: (t) => { capToken = t; }, 'expired-callback': () => { capToken = ''; } }); };
+        if (window.turnstile) mount();
+        else { window.__tsReady = mount; const sc = document.createElement('script'); sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__tsReady&render=explicit'; sc.async = true; document.head.appendChild(sc); }
+      }
+      $('#bno', back).onclick = () => back.remove();
+      $('#bgo', back).onclick = async () => {
+        try {
+          const r = await fetch('/api/bidders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#bn', back).value, email: $('#be', back).value, started: loadedAt, website: $('#bw', back).value, captcha: capToken }) });
+          const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not sign up');
+          bidder = { token: d.token, name: d.name }; ls.set('outpost_bidder', JSON.stringify(bidder));
+          back.remove(); then();
+        } catch (e) { $('#berr', back).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; if (capId !== null && window.turnstile) { window.turnstile.reset(capId); capToken = ''; } }
+      };
+    }
+
+    function cardModal() {
+      const back = document.createElement('div'); back.className = 'modal-back';
+      back.innerHTML = `<div class="modal" style="text-align:left"><h2>Add a card to bid</h2>
+        <p>${esc(shopName)} asks bidders to save a card before bidding. This keeps auctions fair for everyone.</p>
+        <p class="muted small"><b>You are not charged now.</b> If you win a lot you bid on, ${esc(shopName)} charges this card once for your winning bid plus any sales tax. Your card details go straight to Stripe. This shop never sees them.</p>
+        <div id="cerr"></div><button class="btn btn-primary btn-block" id="cgo">Add a card with Stripe</button><button class="btn btn-ghost btn-block mt" id="cno">Not now</button></div>`;
+      document.body.appendChild(back);
+      $('#cno', back).onclick = () => back.remove();
+      $('#cgo', back).onclick = async () => {
+        $('#cgo', back).disabled = true;
+        try {
+          const r = await fetch('/api/bidders/card', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify({ lot: a ? a.id : 0 }) });
+          const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not start');
+          location.href = d.url;
+        } catch (e) { $('#cerr', back).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#cgo', back).disabled = false; }
+      };
+    }
+
+    async function placeBid(cents) {
+      if (!bidder) return signUp(() => placeBid(cents));
+      if (busy) return; busy = true;
+      try {
+        const r = await fetch(`/api/auctions/${a.id}/bids`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify({ amount_cents: cents }) });
+        const d = await r.json();
+        if (r.status === 401) { bidder = null; ls.set('outpost_bidder', 'null'); busy = false; return signUp(() => placeBid(cents)); }
+        if (r.status === 402 && d.need_card) { busy = false; return cardModal(); }
+        if (!r.ok) throw new Error(d.error || 'Bid failed');
+        a = d; offset = a.serverNow - Date.now(); paint(); loadMine();
+      } catch (e) { const m = $('#bmsg'); if (m) m.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+      busy = false;
+    }
+
+    await fetchLot().catch(() => { throw 0; });
+    timers.push(setInterval(() => { const c = $('#cd'); if (c && a) c.textContent = countdown(a.end_at - (Date.now() + offset)); }, 1000));
+    timers.push(setInterval(() => { if (!busy) fetchLot().catch(() => {}); }, 2500));
+  }
+
+  const cardMsg = new URLSearchParams(location.search).get('card');
+  if (cardMsg) {
+    try { history.replaceState(null, '', location.pathname + (lot ? '?lot=' + encodeURIComponent(lot) : '')); } catch { /* ignore */ }
+    const n = document.createElement('div'); n.className = cardMsg === 'ok' ? 'msg' : 'msg err'; n.style.margin = '0 0 12px';
+    n.textContent = cardMsg === 'ok' ? 'Card saved. You can bid now. You’re only charged if you win.' : 'We couldn’t save that card. Please try again.';
+    stage.parentNode.insertBefore(n, stage); setTimeout(() => n.remove(), 9000);
+  }
+  (lot ? single() : list()).catch(() => {});
+})();
+</script>
+</body>
+</html>

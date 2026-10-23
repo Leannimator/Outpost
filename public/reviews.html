@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reviews</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<div class="shop-app">
+  <aside class="shop-side">
+    <div class="shop-brand">
+      <a class="wordmark" id="sn" data-brand="name" href="store.html">Outpost</a>
+      <nav><a href="store.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg><span>Shop</span></a><a href="auction.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6-3 3-6-6 3-3z"/><path d="M11 7l-6 6 3 3 6-6"/><path d="M4 20h9"/></svg><span>Auctions</span></a></nav>
+    </div>
+    <img class="side-art" data-brand="mascot" alt="" hidden>
+  </aside>
+  <main class="shop-content">
+    <a class="wordmark mobhead" data-brand="name" href="store.html">Outpost</a>
+    <section class="revpage" id="page"><p class="muted">Loading…</p></section>
+  </main>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const stars = (n) => `<span class="stars" aria-label="${n} out of 5">${'★'.repeat(Math.round(n))}<span class="off">${'★'.repeat(5 - Math.round(n))}</span></span>`;
+  const when = (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  Promise.all([fetch('/api/settings').then((r) => r.json()), fetch('/api/reviews').then((r) => r.json())]).then(([s, rv]) => {
+    OutpostBrand.apply(s); document.title = 'Reviews — ' + s.store_name;
+    if (!rv.on || (!rv.count && !rv.hidden_count)) { $('page').innerHTML = '<h1>Reviews</h1><p class="muted">No reviews yet. Buyers can leave one from their receipt once their order has shipped.</p>'; return; }
+    $('page').innerHTML = `<h1>What buyers say</h1>
+      <div class="revsum"><span class="big">${rv.avg.toFixed(1)}</span><div>${stars(rv.avg)}<div class="muted small">${rv.count} verified review${rv.count === 1 ? '' : 's'}</div></div></div>
+      <p class="muted small">Every review here comes from a real paid order (“Verified purchase”). Reviewers are shown by first name and last initial.${rv.hidden_count ? ` The seller has hidden ${rv.hidden_count} review${rv.hidden_count === 1 ? '' : 's'}.` : ''}</p>
+      ${rv.reviews.map((r) => `<div class="rev"><div class="rvhead">${stars(r.rating)} <b>${esc(r.name)}</b> <span class="vp">✓ Verified purchase</span><span class="spacer"></span><span class="small muted">${esc(when(r.created_at))}</span></div>
+        ${r.items ? `<div class="small muted">${esc(r.items)}</div>` : ''}${r.body ? `<p>${esc(r.body)}</p>` : ''}
+        ${r.reply ? `<div class="rvreply"><b>Reply from the seller</b><br>${esc(r.reply)}</div>` : ''}</div>`).join('')}
+`;
+  }).catch(() => { $('page').innerHTML = '<p>Couldn’t load reviews. Please try again.</p>'; });
+})();
+</script>
+</body>
+</html>

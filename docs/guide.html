@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outpost: Start here</title>
+<style>
+:root { --bg:#fcf6ea; --card:#fffaf0; --ink:#232b28; --muted:#6f685b; --line:#eadfca; --forest:#c42300; --rose:#ebc9b0; --rose-ink:#8a2f2a; --code:#262b28; --codeink:#f1ece1; --ok:#e8f1ea; --warn:#fbe9d3; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1d1a15; --card:#26221b; --ink:#f1ece1; --muted:#a79f8e; --line:#3a342a; --forest:#ff8f73; --rose:#5a4636; --rose-ink:#ffe3df; --code:#12100c; --ok:#22302a; --warn:#3a2f20; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 760px; margin: 0 auto; padding: 0 20px 80px; }
+header { padding: 48px 0 8px; }
+h1 { font-family: Georgia, "Times New Roman", serif; font-size: 40px; line-height: 1.1; margin: 0 0 10px; }
+h2 { font-family: Georgia, serif; font-size: 28px; margin: 56px 0 6px; }
+h3 { font-size: 18px; margin: 0 0 6px; }
+p { margin: 0 0 14px; }
+.lead { font-size: 19px; color: var(--muted); }
+nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 20px; margin: 24px 0; }
+nav.toc b { display: block; margin-bottom: 6px; }
+nav.toc ol { margin: 0; padding-left: 22px; }
+nav.toc a { color: var(--forest); }
+.step { display: grid; grid-template-columns: 44px 1fr; gap: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px 18px 8px; margin: 14px 0; }
+.num { width: 36px; height: 36px; border-radius: 50%; background: var(--rose); color: var(--rose-ink); display: grid; place-items: center; font-weight: 700; margin-top: 2px; }
+.step > div > :last-child { margin-bottom: 10px; }
+pre { background: var(--code); color: var(--codeink); border-radius: 12px; padding: 14px 16px; padding-right: 76px; overflow-x: auto; font: 14px/1.5 ui-monospace, Menlo, monospace; position: relative; margin: 8px 0 14px; white-space: pre-wrap; word-break: break-all; }
+pre button { position: absolute; top: 8px; right: 8px; font: 600 12px system-ui; background: #f1ece1; color: #232b28; border: 0; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+code { background: rgba(0,0,0,.07); padding: 1px 6px; border-radius: 6px; font: 0.9em ui-monospace, Menlo, monospace; }
+pre code { background: none; padding: 0; }
+.note, .warn { border-radius: 12px; padding: 12px 14px; margin: 10px 0 14px; font-size: 16px; }
+.note { background: var(--ok); }
+.warn { background: var(--warn); }
+.note b:first-child, .warn b:first-child { display: block; margin-bottom: 2px; }
+kbd { background: var(--card); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 0 6px; font: 0.9em ui-monospace, Menlo, monospace; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0 18px; font-size: 16px; }
+td, th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; margin: 10px 0; }
+summary { cursor: pointer; font-weight: 600; }
+details p { margin: 10px 0 0; }
+a { color: var(--forest); }
+.pill { display: inline-block; background: var(--rose); color: var(--rose-ink); border-radius: 99px; padding: 2px 12px; font-size: 14px; font-weight: 700; }
+footer { margin-top: 56px; color: var(--muted); font-size: 15px; }
+.step > div, details, .note, .warn { min-width: 0; }
+body { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  h1 { font-size: 32px; } h2 { font-size: 24px; } .step { grid-template-columns: 1fr; padding: 16px 14px 6px; }
+  table, tbody, tr, td { display: block; width: 100%; }
+  thead { display: none; }
+  tr { border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px; margin-bottom: 10px; background: var(--card); }
+  td, th { border: 0; padding: 4px 0; }
+  td:first-child { font-weight: 600; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Outpost: start here</h1>
+  <p class="lead">This guide takes you from “I downloaded it” to “my shop is online and I can take a payment.” No coding. Go one step at a time and don’t skip ahead.</p>
+</header>
+
+<nav class="toc">
+  <b>What’s in this guide</b>
+  <ol>
+    <li><a href="#need">What you’ll need</a></li>
+    <li><a href="#try">Part 1: Try it on your own computer (15 minutes)</a></li>
+    <li><a href="#online">Part 2: Put your shop online</a></li>
+    <li><a href="#stripe">Part 3: Connect payments (Stripe)</a></li>
+    <li><a href="#setup">Part 4: Set up your shop</a></li>
+    <li><a href="#use">Part 5: Using Outpost day to day</a></li>
+    <li><a href="#safe">Part 6: Keep your shop safe</a></li>
+    <li><a href="#fix">When something goes wrong</a></li>
+    <li><a href="#legal">Terms, privacy and being honest with buyers</a></li>
+  </ol>
+</nav>
+
+<h2 id="need">What you’ll need</h2>
+<ul>
+  <li>A computer (these steps show a Mac; Windows is similar, ask a friend if you get stuck).</li>
+  <li>A free <b>GitHub</b> account (this is where the Outpost files live).</li>
+  <li>A <b>Stripe</b> account to take card payments (free to open; Stripe takes a fee per sale).</li>
+  <li>A hosting account to keep your shop online all day (Part 2 compares options; the worked example is Render).</li>
+  <li>About an hour the first time.</li>
+</ul>
+<table>
+  <tr><th>What</th><th>Cost</th></tr>
+  <tr><td>Outpost itself</td><td>Free</td></tr>
+  <tr><td>Hosting (a small paid plan so your shop’s data is kept permanently; see Part 2 for options)</td><td>Roughly $5 to $8 a month. Prices come from each company’s pricing page and can change.</td></tr>
+  <tr><td>Stripe</td><td>No monthly fee. A fee is taken from each card payment.</td></tr>
+  <tr><td>Your own web address (like <code>myshop.com</code>), optional</td><td>Usually $10 to $20 a year. You can start with the free address Render gives you.</td></tr>
+</table>
+<div class="note"><b>Nothing here is a trap.</b>You can do Parts 1 to 3 in “test mode,” where no real money moves, until you’re happy with everything.</div>
+
+<h2 id="try">Part 1: Try it on your own computer</h2>
+<p>This part is optional but worth doing. It lets you click around before anything is public. If you’d rather go straight online, skip to Part 2.</p>
+
+<div class="step"><div class="num">1</div><div>
+  <h3>Install Node.js (one time)</h3>
+  <p>Go to <b>nodejs.org</b>, click the big green <b>LTS</b> button, open the file it downloads and click through the installer. Node is the engine that runs Outpost.</p>
+</div></div>
+
+<div class="step"><div class="num">2</div><div>
+  <h3>Open Terminal</h3>
+  <p>Press <kbd>Cmd</kbd> + <kbd>Space</kbd>, type <b>Terminal</b>, press <kbd>Return</kbd>. A window with a blinking cursor opens. That’s where you paste the commands below.</p>
+</div></div>
+
+<div class="step"><div class="num">3</div><div>
+  <h3>Unzip Outpost and open its folder</h3>
+  <p>If you downloaded a <code>.tar.gz</code> file, it’s in your Downloads. Paste this, then press <kbd>Return</kbd>:</p>
+  <pre><code>cd ~/Downloads && tar -xzf "$(ls -t outpost*.tar.gz my-pos*.tar.gz 2>/dev/null | head -1)" && cd pos</code></pre>
+  <p>If you got Outpost from GitHub as a <b>Code → Download ZIP</b>, double-click the zip, then use <code>cd ~/Downloads/outpost-main</code> instead.</p>
+</div></div>
+
+<div class="step"><div class="num">4</div><div>
+  <h3>Install and start it</h3>
+  <pre><code>npm install && npm start</code></pre>
+  <p>Wait until you see <b>“Outpost running at http://localhost:3000”</b>. Leave this window open while you use it.</p>
+</div></div>
+
+<div class="step"><div class="num">5</div><div>
+  <h3>Open it</h3>
+  <p>In your browser go to <b>http://localhost:3000</b>. It will ask for a password. Until you choose one, use <code>change-me</code> (you will set a real one in Part 2). Your public shop is at <b>http://localhost:3000/store.html</b>.</p>
+  <p>To stop Outpost, click the Terminal window and press <kbd>Ctrl</kbd> + <kbd>C</kbd>. To start it again later: open Terminal, go to the folder (<code>cd ~/Downloads/pos</code>), then <code>npm start</code>.</p>
+  <div class="note"><b>On your computer you can sell cash and “other” payments right away.</b>Card payments switch on once you add your Stripe keys (Part 3).</div>
+</div></div>
+
+<h2 id="online">Part 2: Put your shop online</h2>
+<p>Outpost has to run on a computer that’s always on and keeps its files permanently. That’s what “hosting” is. You have a few choices, and none of them is the “official” one. We don’t earn anything from any of them.</p>
+<table>
+  <tr><th>Option</th><th>Roughly what it costs</th><th>Good for</th></tr>
+  <tr><td><b>Render</b></td><td>About $7 a month plus about 25¢ for 1 GB of permanent storage (render.com/pricing)</td><td>Easiest start. Outpost includes a setup file for it, and the steps below use it as the worked example.</td></tr>
+  <tr><td><b>Railway</b></td><td>Hobby plan is $5 a month, with usage included and permanent “volumes” up to 5 GB (docs.railway.com)</td><td>A similar, slightly cheaper alternative. Same idea: connect GitHub, add a volume, set the same settings listed below.</td></tr>
+  <tr><td><b>Fly.io or a small rented server</b></td><td>Varies</td><td>More technical. Fine if you or a friend are comfortable with it.</td></tr>
+  <tr><td><b>A computer at home + Cloudflare Tunnel</b></td><td>Free software, but the computer must stay on and online</td><td>Cheapest, and it keeps everything with Cloudflare. A spare Mac or Raspberry Pi works. If the power or internet drops, your shop is down.</td></tr>
+</table>
+<div class="note"><b>Can the whole thing live on Cloudflare?</b>Not today, not as-is. Cloudflare’s normal hosting (Workers and Pages) can’t run a program that keeps a database file and photos on a disk. Their newer “Containers” product was still in beta when I checked, and its disk is wiped whenever it goes to sleep, so a shop’s data wouldn’t be safe there. Moving Outpost fully onto Cloudflare would mean rewriting how it stores data. What <i>does</i> work well: buy your domain at Cloudflare, use their free Turnstile human check (Part 6), and, if you like, their Tunnel to serve a home computer.</div>
+<div class="warn"><b>Whatever you pick, it needs a permanent disk.</b>Free hosting plans wipe their files on every restart, which would delete your products, orders and photos. Outpost wants the host’s permanent disk, and you point <code>DATA_DIR</code> at it. Don’t try to save money here.</div>
+<p><b>The steps below use Render.</b> If you choose another host, the same settings apply: <code>DATA_DIR</code> (your permanent disk’s folder), <code>TRUST_PROXY=1</code>, <code>BASE_URL</code> (your shop’s address), <code>ADMIN_PASSWORD</code>, the two Stripe values, start command <code>npm start</code>, and Node 20 or newer.</p>
+
+<div class="step"><div class="num">1</div><div>
+  <h3>Make your own copy on GitHub</h3>
+  <p>Open the Outpost page on GitHub (<code>github.com/OWNER/outpost</code>) and click <b>Fork</b>, top right, then <b>Create fork</b>. That puts your own copy of Outpost in your GitHub account. You’re not changing anyone else’s.</p>
+</div></div>
+
+<div class="step"><div class="num">2</div><div>
+  <h3>Sign up for Render</h3>
+  <p>Go to <b>render.com</b> and sign up with your GitHub account. Add a payment card when it asks.</p>
+</div></div>
+
+<div class="step"><div class="num">3</div><div>
+  <h3>Create the shop from your copy</h3>
+  <p>In Render click <b>New +</b> then <b>Blueprint</b>. Choose your Outpost copy from the list (allow Render to see it if asked). Render reads a small file in Outpost called <code>render.yaml</code> and fills in everything for you: the plan, a 1 GB permanent disk, and the settings.</p>
+  <p>It will ask you for four values. Fill them in like this:</p>
+  <table>
+    <tr><td><code>ADMIN_PASSWORD</code></td><td>Your staff password. Make it long (a sentence works well). Write it down somewhere safe. Outpost won’t start online with a short or obvious one.</td></tr>
+    <tr><td><code>BASE_URL</code></td><td>Your shop’s address. Type <code>https://outpost.onrender.com</code> for now. If Render shows you a different address after step 4, you’ll fix this in step 5.</td></tr>
+    <tr><td><code>STRIPE_SECRET_KEY</code></td><td>Leave blank for now. We add it in Part 3.</td></tr>
+    <tr><td><code>STRIPE_WEBHOOK_SECRET</code></td><td>Leave blank for now. We add it in Part 3.</td></tr>
+  </table>
+  <p>Click <b>Apply</b> (or <b>Deploy Blueprint</b>).</p>
+</div></div>
+
+<div class="step"><div class="num">4</div><div>
+  <h3>Wait for the green “Live”</h3>
+  <p>Render builds your shop. This takes a few minutes. When the label turns <span class="pill">Live</span>, click your shop’s name and look at the address at the top, like <code>https://outpost-abcd.onrender.com</code>. That is your shop’s web address.</p>
+</div></div>
+
+<div class="step"><div class="num">5</div><div>
+  <h3>Make sure BASE_URL matches that address exactly</h3>
+  <p>Payment links and QR codes use <code>BASE_URL</code>, so it has to match. In Render open your service, then <b>Environment</b>. If <code>BASE_URL</code> isn’t exactly the address you saw (with <code>https://</code>, and no slash at the end), change it and click <b>Save</b>. Render restarts your shop on its own.</p>
+</div></div>
+
+<div class="step"><div class="num">6</div><div>
+  <h3>Going live (only when you’re ready)</h3>
+  <p>Test mode and live mode are two separate worlds inside Stripe, each with its own keys and its own webhook. Going live means doing the key and webhook steps one more time, in live mode. Here is every step in full.</p>
+  <div class="warn"><b>Don’t rush this.</b>Only do this once your test purchases above worked and you’re ready to take real money.</div>
+
+  <h3 style="margin-top:18px">6a. Finish Stripe’s business and bank setup</h3>
+  <p>In Stripe’s dashboard click <b>Activate your account</b> (or <b>Activate payments</b>). Stripe asks for your business details, who you are, and the bank account where your money should go. Fill it all in and submit. Stripe may take anywhere from a few minutes to a couple of days to approve it.</p>
+
+  <h3 style="margin-top:18px">6b. Switch Stripe to live mode</h3>
+  <p>Near the top of Stripe’s dashboard, turn <b>Test mode</b> (or <b>Sandbox</b>) <b>off</b>. The orange test banner should disappear. Everything from here on happens in live mode.</p>
+
+  <h3 style="margin-top:18px">6c. Copy your live secret key</h3>
+  <ol>
+    <li>In Stripe open <b>Developers → API keys</b>.</li>
+    <li>Click <b>Reveal</b> on the <b>Secret key</b>. It starts with <code>sk_live_</code> (not <code>sk_test_</code>). If it starts with <code>sk_test_</code>, you’re still in test mode: go back to 6b.</li>
+    <li>Copy it. Keep it private.</li>
+    <li>In Render open your service, click <b>Environment</b>, and find <code>STRIPE_SECRET_KEY</code>. Replace the old value with the new one. Don’t click Save yet; do 6d first so the shop restarts only once.</li>
+  </ol>
+
+  <h3 style="margin-top:18px">6d. Create the live webhook</h3>
+  <p>Your test webhook doesn’t carry over. Make a new one while still in live mode.</p>
+  <ol>
+    <li>In Stripe open the <b>Webhooks</b> page (use the search box at the top if you can’t find it) and click <b>Create an event destination</b>.</li>
+    <li>Choose <b>Your account</b>.</li>
+    <li>If it asks for the payload style, pick <b>Snapshot</b>, <u>not</u> “Thin.”</li>
+    <li>Search for and tick these two events:
+      <pre><code>checkout.session.completed</code></pre>
+      <pre><code>checkout.session.expired</code></pre></li>
+    <li>Choose <b>Webhook endpoint</b> as the destination type.</li>
+    <li>For the web address, type your shop’s address followed by <code>/webhook</code>. Use your real shop address, the same one you’d give a customer. For example, if your shop is at <code>https://outpost-abcd.onrender.com</code> then type:
+      <pre><code>https://outpost-abcd.onrender.com/webhook</code></pre>
+      If you later connect your own domain name, use that address instead, and make a new webhook if you change it.</li>
+    <li>Save it. On the next page click <b>Reveal</b> next to <b>Signing secret</b>. It starts with <code>whsec_</code>. Copy it.</li>
+    <li>Back in Render’s <b>Environment</b>, set <code>STRIPE_WEBHOOK_SECRET</code> to that new value.</li>
+    <li>Now click <b>Save</b>. Render restarts your shop with both live values. Wait until Render says it’s live again (a minute or two).</li>
+  </ol>
+  <div class="note"><b>Good to know.</b>You can delete your test webhook in Stripe once you’re live; it won’t be used. Test mode remains available whenever you want to try something new.</div>
+
+  <h3 style="margin-top:18px">6e. Make one small real purchase, then refund it</h3>
+  <ol>
+    <li>Make a cheap item (or temporarily set a price to $1.00).</li>
+    <li>Open your public shop and buy it with your own real card. Test cards like <code>4242 4242 4242 4242</code> won’t work in live mode, so use a real one.</li>
+    <li>In your staff app open <b>Orders</b>. The order should show <b>Paid</b> and the stock should drop by one. If it stays “pending,” the webhook isn’t right: see “When something goes wrong.”</li>
+    <li>Click <b>Manage</b> on that order and refund it. The money goes back to your card in a few days. Stripe keeps its small processing fee on that practice sale.</li>
+  </ol>
+
+  <h3 style="margin-top:18px">6f. Check Stripe’s fraud screening (Radar)</h3>
+  <p>In Stripe’s dashboard open <b>Radar</b> (search for it at the top). Stripe’s basic stolen-card screening is normally on for card payments. Open its settings or rules page and confirm it isn’t switched off. Stripe’s own page at <b>docs.stripe.com/radar</b> explains the options, and some advanced features cost extra, which you don’t need to start.</p>
+</div></div>
+
+<h2 id="setup">Part 4: Set up your shop</h2>
+<p>Everything below is in the staff app. The left menu has Sell, Auctions, Products, Orders, Customers, Reviews, Reports and Settings.</p>
+
+<div class="step"><div class="num">1</div><div>
+  <h3>Settings: the basics</h3>
+  <ul>
+    <li><b>Your shop:</b> shop name (appears on receipts) and sales tax rate. Check your local rules for what to charge.</li>
+    <li><b>Refund policy:</b> pick one. Buyers see it at checkout and it’s saved with each order, so a later change doesn’t rewrite old promises.</li>
+    <li><b>Trust and reviews:</b> write your “made by hand” statement, and set how many days you usually take to ship. Orders past that are flagged for you as <b>Running late</b>.</li>
+    <li><b>Your look:</b> pick a preset palette or your own custom colors, set text colors (one color for everything, or separate colors for regular text, headings, links and button text), and add your own artwork. Colors that are too hard to read can’t be saved.</li>
+  </ul>
+</div></div>
+
+<div class="step"><div class="num">2</div><div>
+  <h3>Add your first products</h3>
+  <p><b>Products → New product.</b> Add photos, a price, how many you have, and a description. The <b>How it’s made</b> box is optional and shows buyers your process. Have a spreadsheet already? Use <b>Import</b> (CSV) to bring many at once.</p>
+  <p><b>Tell shoppers about you.</b> In <b>Settings → About your shop</b>, write a few paragraphs about yourself and add links to your website, Instagram, TikTok and so on (paste the full address from your browser). An <b>About</b> page then appears in your shop’s left menu. Leave it blank and no About page shows.</p>
+  <p><b>Different sizes or colors?</b> Use <b>Options</b> on the product page. Add one row per version (for example <i>5 × 7</i>, <i>8 × 10</i>, <i>11 × 14</i>). Each option has its own stock, and its own price if you want one (leave Price blank to use the product’s price). Shoppers pick an option before adding to the cart, and stock goes down for that exact option. Your product’s total quantity is added up for you.</p>
+  <p><b>Name your option type.</b> Under the options list, type what you call them (Size, Color, Frame). Shoppers then see “Choose a size” instead of “Choose an option”.</p>
+  <p><b>Let buyers type something.</b> For engraving, a name, or a gift message, use <b>Questions for the buyer</b> on the product page (up to 3, each required or optional). Shoppers fill them in before adding to the cart, and the answers show on the order, the receipt, and in Stripe’s payment details, so you can see what to make. Different answers for the same item stay on separate lines. At the register, the same boxes pop up when you tap the item.</p>
+  <p><b>SKUs (optional).</b> A SKU is just your own code for a product or option, like <code>FOX-M</code>. Fill it in if you number your work or want a barcode scanner at the register: in <b>Sell</b>, scan (or type) the code into the search box and press Enter, and it goes straight into the cart. Every SKU must be different.</p>
+</div></div>
+
+<div class="step"><div class="num">3</div><div>
+  <h3>Look at your shop as a buyer</h3>
+  <p>Open <code>/store.html</code> on your address in another window. Add something to the cart, check out with the test card, and look at your receipt.</p>
+</div></div>
+
+<h2 id="use">Part 5: Using Outpost day to day</h2>
+
+<details open><summary>Selling in person (Sell)</summary>
+  <p>Tap products to add them to the cart. Choose <b>Cash</b>, <b>Other</b> or <b>Card</b>. For card, a QR code appears; your customer scans it with their phone and pays on Stripe’s page. Discount codes can be typed at the register.</p>
+</details>
+
+<details><summary>Online orders and shipping (Orders)</summary>
+  <p>New online orders appear as Paid. Open <b>Manage</b>, mark it <b>Packed</b>, then <b>Shipped</b> with the carrier and tracking number. <b>Email buyer</b> opens a ready-written email in your email app. Outpost does not send emails by itself, except that Stripe emails card receipts.</p>
+  <p>If you’ve set “I usually ship within X days,” late orders get a <b>Running late</b> badge and appear on Reports.</p>
+</details>
+
+<details><summary>Discount codes</summary>
+  <p><b>Settings → Discount codes.</b> You make up the code yourself (like <code>SPRING15</code>). Choose a percent or dollar amount, an optional minimum spend, an optional limit on uses, an optional <b>first day</b> and <b>last day</b>. Codes can’t be guessed in bulk because attempts are limited.</p>
+</details>
+
+<details><summary>Running an auction</summary>
+  <ol>
+    <li><b>Auctions → New auction.</b> Photo, title, starting bid, bid step and when it closes.</li>
+    <li>Share the lot’s link or QR code. Bidders join with a name and email and place bids. A bid in the last 2 minutes extends the lot by 2 minutes.</li>
+    <li>When it closes the top bidder wins. <b>If you turned on card-on-file</b>, their card is charged automatically and they’re asked to add a shipping address. <b>If not</b>, copy their payment link from the Auctions page (or use <b>Email winner</b>).</li>
+    <li>Winner doesn’t pay? <b>Didn’t pay → next bidder</b> offers it to the next person.</li>
+    <li>Suspicious bid? Remove it while the lot is open, or block the email.</li>
+  </ol>
+  <p>Bidders’ emails aren’t verified. The human check, rate limits and blocklist reduce abuse, and card-on-file makes fake bids much less likely.</p>
+</details>
+
+<details><summary>Reviews: how they work</summary>
+  <p>Only someone with a <b>real paid order</b> can leave a review, using the private link on their receipt. One review per order, editable for 14 days. Online and auction orders can review once shipped (or after 10 days). Reviews show a <b>Verified purchase</b> label and the buyer’s first name plus last initial.</p>
+  <p>You can <b>reply</b> to any review and <b>hide</b> abusive ones (you must note a reason for your own records). Shoppers see how many reviews were hidden, so hiding only the critical ones would show.</p>
+  <div class="note"><b>Honest limit.</b>Outpost is yours, on your host, so a determined seller could still change their own database. “Verified” here means a real paid order. Buyers’ trust ultimately rests on you, which is true of every handmade shop.</div>
+</details>
+
+<details><summary>If a buyer disputes a payment (chargeback)</summary>
+  <p>In <b>Orders → Manage</b> use <b>Dispute evidence page</b>. It gathers the order, your refund policy as it was at the time, tracking, and (for auctions) the bidder’s history and what they agreed to. Print it or save as PDF, then upload it in Stripe’s dispute screen.</p>
+</details>
+
+<details><summary>Reports</summary>
+  <p>Sales by day, where sales come from, best sellers, running low, and what needs attention (to ship, running late, awaiting payment, ending soon).</p>
+</details>
+
+<h2 id="safe">Part 6: Keep your shop safe</h2>
+
+<div class="step"><div class="num">1</div><div>
+  <h3>Back up often</h3>
+  <p><b>Settings → Back up your shop → Download backup.</b> You get one file with your products, orders and photos. Do this weekly, and before any update. Keep it somewhere that isn’t only on your laptop.</p>
+</div></div>
+
+<div class="step"><div class="num">2</div><div>
+  <h3>Turn on the free human check</h3>
+  <p>At <b>dash.cloudflare.com</b> open <b>Turnstile</b> and add a widget for your shop’s address. In Render’s Environment add <code>TURNSTILE_SITE_KEY</code> and <code>TURNSTILE_SECRET_KEY</code>. Visitors then pass a quick check before checkout and before joining to bid.</p>
+</div></div>
+
+<div class="step"><div class="num">3</div><div>
+  <h3>Updating Outpost</h3>
+  <p>When a new version is released, make a backup first. On your fork on GitHub click <b>Sync fork → Update branch</b>. Render notices and redeploys on its own. Your data stays because it’s on the permanent disk.</p>
+</div></div>
+
+<details><summary>Restoring a backup</summary>
+  <p>The backup is a <code>.tar.gz</code> file that holds your database (<code>outpost.db</code>) and an <code>images</code> folder of photos. Double-clicking it on a Mac unpacks it.</p>
+  <p><b>On your own computer:</b> stop Outpost (<kbd>Ctrl</kbd> + <kbd>C</kbd>). With no <code>DATA_DIR</code> set, copy the unpacked <code>outpost.db</code> into Outpost’s folder as <code>pos.db</code>, and copy the photos into <code>public/images</code>. Start Outpost again.</p>
+  <p><b>On Render:</b> the permanent disk can only be changed from Render’s <b>Shell</b> tab, which is a more technical step, and I haven’t been able to test that route. If you ever need it, ask for help on the Outpost GitHub page, and please never post a backup file anywhere public; it contains your customers’ details.</p>
+</details>
+
+<h2 id="fix">When something goes wrong</h2>
+
+<details><summary>Render says “Deploy failed” or the shop won’t open</summary>
+  <p>Open your service in Render and click <b>Logs</b>. If you see “will not start on the internet with a missing or easy-to-guess ADMIN_PASSWORD,” set a longer <code>ADMIN_PASSWORD</code> in Environment and Save.</p>
+</details>
+
+<details><summary>Orders stay “pending” after a test payment</summary>
+  <p>The webhook isn’t connected. Check, in order: (1) the endpoint address in Stripe is exactly your shop’s address plus <code>/webhook</code>; (2) you chose <b>Snapshot</b>, not Thin; (3) both events are ticked; (4) <code>STRIPE_WEBHOOK_SECRET</code> is the <code>whsec_</code> from <i>that</i> endpoint in the <i>same mode</i> (test vs live); (5) you saved and the shop restarted. Stripe’s Webhooks page shows each delivery and its error.</p>
+</details>
+
+<details><summary>Payment links or QR codes open the wrong address</summary>
+  <p><code>BASE_URL</code> in Render’s Environment doesn’t match your shop’s real address. Fix it, save, wait for the restart.</p>
+</details>
+
+<details><summary>My products or photos disappeared after an update</summary>
+  <p>The permanent disk isn’t being used. In Render’s Environment make sure <code>DATA_DIR</code> is <code>/var/data</code>, and in the service’s <b>Disks</b> section confirm the disk is mounted at <code>/var/data</code>. Restore your latest backup.</p>
+</details>
+
+<details><summary>I forgot my staff password</summary>
+  <p>It’s the <code>ADMIN_PASSWORD</code> in Render’s Environment. Change it there, Save, and use the new one.</p>
+</details>
+
+<details><summary>The first visit after a quiet time is slow</summary>
+  <p>Paid Render services stay awake, so this shouldn’t happen. If it does, check you’re on the paid plan.</p>
+</details>
+
+<h2 id="legal">Terms, privacy and being honest with buyers</h2>
+<ul>
+  <li><b>Terms and privacy.</b> The <code>docs</code> folder has a <b>Terms of Sale</b> and a <b>Privacy Notice</b> template. Edit the [bracketed] parts, then paste them on a page on your own website and link them from your shop. These are starting points, not legal advice. Have someone qualified look at them, especially if you sell in the EU, UK or California.</li>
+  <li><b>Sales tax.</b> Outpost applies one flat rate. Whether you must collect tax, and how much, depends on where you and your buyers are. Check with your state or country’s tax office or an accountant.</li>
+  <li><b>“Made by hand.”</b> Outpost can’t check how anything was made, and no software can. The project’s promise is a community norm: it’s built for people who make their own work. Your “made by hand” statement, process notes and verified reviews are how you earn trust. If you sell something that isn’t handmade, say so plainly.</li>
+  <li><b>What Outpost does to protect buyers.</b> Your refund policy is saved on every order; you can’t quietly change it afterward. Reviews can only come from paid orders, and hidden reviews are counted publicly. Late orders are flagged to you.</li>
+</ul>
+
+<footer>
+  <p>Outpost is free software under the MIT license (see <code>LICENSE</code>). It comes with no warranty, and you are responsible for your shop, your payments and your legal obligations. Hosting and Stripe prices and screens change; if a step here doesn’t match what you see, trust what’s on screen and the companies’ own help pages (render.com/docs, docs.stripe.com).</p>
+</footer>
+
+</div>
+<script>
+document.querySelectorAll('pre').forEach(function (pre) {
+  var b = document.createElement('button'); b.textContent = 'Copy';
+  b.onclick = function () {
+    var t = pre.innerText.replace(/^Copy\s*/, '').replace(/\s*Copy$/, '');
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, done); else done();
+  };
+  pre.appendChild(b);
+});
+</script>
+</body>
+</html>

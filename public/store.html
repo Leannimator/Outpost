@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<div class="shop-app">
+  <aside class="shop-side">
+    <div class="shop-brand">
+      <a class="wordmark" id="sn" data-brand="name" href="store.html">Outpost</a>
+      <nav><a href="store.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg><span>Shop</span></a><a href="auction.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6-3 3-6-6 3-3z"/><path d="M11 7l-6 6 3 3 6-6"/><path d="M4 20h9"/></svg><span>Auctions</span></a></nav>
+    </div>
+    <div class="cart shopcart">
+      <div class="cart-head"><h2 id="ctitle">Your cart</h2><div class="spacer"></div><button class="link-btn" id="clear">Clear</button></div>
+      <div class="cart-items" id="citems"></div>
+      <div id="sums"></div>
+      <div class="codebox" id="codebox" hidden>
+        <div class="coderow"><input class="input" id="code" placeholder="Discount code" autocomplete="off" maxlength="40"><button class="btn" id="apply" type="button">Apply</button></div>
+        <div class="codemsg small" id="codemsg"></div>
+      </div>
+      <div class="hp" aria-hidden="true"><label>Leave this empty <input id="website" name="website" tabindex="-1" autocomplete="off"></label></div>
+      <div id="captcha" hidden></div>
+      <button class="btn btn-primary btn-block" id="checkout" disabled>Checkout</button>
+      <p class="hint center">Secure payment by card on the next page. Shipping address is collected there.</p>
+      <div id="status"></div>
+      <p class="hint" id="policy"></p>
+    </div>
+    <img class="side-art" data-brand="mascot" alt="" hidden>
+  </aside>
+  <main class="shop-content">
+    <a class="wordmark mobhead" data-brand="name" href="store.html">Outpost</a>
+    <div id="brk"></div>
+    <section class="handmade" id="handmade" hidden></section>
+    <a class="ratingline" id="ratingline" href="reviews.html" hidden></a>
+    <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
+      <input class="input" id="q" placeholder="Search the shop…"></div>
+    <div class="chips" id="cats"></div>
+    <div class="pgrid" id="grid"></div>
+  </main>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pic = (url, name) => url ? `<img class="pic" src="${esc(url)}" alt="">` : `<div class="pic ph">${esc((name || '?').charAt(0).toUpperCase())}</div>`;
+  const loadedAt = Date.now();
+  let products = [], rate = 0, q = '', cat = 'All', resting = false, settings = {}, maxQty = 10;
+  let code = '', quote = null, captchaToken = '', captchaId = null;
+  const cart = new Map();   // key "id" or "id:variantId" -> quantity
+  const keyOf = (id, vid, cv) => id + ':' + (vid || 0) + (cv && cv.some(Boolean) ? ':' + encodeURIComponent(JSON.stringify(cv)) : '');
+  const look = (key) => {
+    const parts = String(key).split(':'), id = Number(parts[0]), vid = Number(parts[1] || 0);
+    let cv = []; try { if (parts[2]) cv = JSON.parse(decodeURIComponent(parts[2])); } catch {}
+    const p = products.find((x) => x.id === id), v = vid && p ? p.variants.find((x) => x.id === vid) : null;
+    return { p, v, id, vid: vid || 0, cv, price: v ? v.price_cents : p.price_cents, stock: v ? v.stock : p.stock };
+  };
+  const priceText = (p) => { if (!p.variants.length) return fmt(p.price_cents); const ps = p.variants.map((v) => v.price_cents), lo = Math.min(...ps); return Math.max(...ps) > lo ? 'From ' + fmt(lo) : fmt(lo); };
+
+  const tagFor = (p) => {
+    if (p.stock < 1) return { cls: 'sold', text: 'Sold out' };
+    if (p.badge) return { cls: 'seller', text: ({ new: 'New', last_chance: 'Last chance', discontinued: 'Discontinued', staff_pick: 'Staff pick' })[p.badge] || p.badge };
+    if (p.stock <= 3) return { cls: 'low', text: `Only ${p.stock} left` };
+    return null;
+  };
+
+  const stars = (n) => `<span class="stars" aria-label="${n} out of 5">${'★'.repeat(Math.round(n))}<span class="off">${'★'.repeat(5 - Math.round(n))}</span></span>`;
+  function paintReviews(rv) {
+    if (!rv || !rv.on || !rv.count) return;
+    $('ratingline').hidden = false;
+    $('ratingline').innerHTML = `${stars(rv.avg)} <b>${rv.avg.toFixed(1)}</b> <span>· ${rv.count} verified review${rv.count === 1 ? '' : 's'}</span>`;
+  }
+  fetch('/api/reviews').then((r) => r.json()).then(paintReviews).catch(() => {});
+
+  Promise.all([fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json())]).then(([s, p]) => {
+    settings = s; rate = Number(s.tax_rate) || 0; maxQty = s.max_qty === undefined ? 10 : Number(s.max_qty);
+    resting = !!s.break_on;
+    if (resting) {
+      document.querySelector('.shop-content').classList.add('is-resting');
+      const back = s.break_until ? ` Back on ${esc(new Date(s.break_until + 'T12:00:00').toLocaleDateString([], { month: 'long', day: 'numeric' }))}.` : '';
+      $('brk').innerHTML = `<div class="resting-banner"><h2>This seller is away from the outpost</h2><p>${esc(s.break_message)}${back}</p></div>`;
+      $('checkout').textContent = 'Not taking orders right now';
+    }
+    const rp = s.refund_policy;
+    const bits = [];
+    if (Number(s.ship_days) > 0) bits.push(`<b>Shipping.</b> Usually ships within ${Number(s.ship_days)} day${Number(s.ship_days) === 1 ? '' : 's'}.`);
+    if (rp && rp.text) bits.push(`<b>Returns &amp; refunds.</b> ${esc(rp.text)}`);
+    $('policy').innerHTML = bits.join('<br>');
+    if (s.handmade_statement) { $('handmade').hidden = false; $('handmade').innerHTML = `<h2>Made by hand</h2><p>${esc(s.handmade_statement)}</p>`; }
+    OutpostBrand.apply(s); document.title = s.store_name + ' — Shop';
+    products = p; paintCats(); paintGrid(); paintCart();
+    if (s.captcha_site_key && !resting) loadCaptcha(s.captcha_site_key);
+  });
+
+  function loadCaptcha(key) {
+    window.__tsReady = () => {
+      $('captcha').hidden = false;
+      captchaId = window.turnstile.render('#captcha', { sitekey: key, callback: (t) => { captchaToken = t; }, 'expired-callback': () => { captchaToken = ''; } });
+    };
+    const sc = document.createElement('script');
+    sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__tsReady&render=explicit';
+    sc.async = true; document.head.appendChild(sc);
+  }
+
+  const cats = () => ['All', ...new Set(products.map((p) => p.category).filter(Boolean))];
+  function paintCats() { const c = cats(); $('cats').innerHTML = c.length > 1 ? c.map((x) => `<button class="chip${x === cat ? ' on' : ''}" data-c="${esc(x)}">${esc(x)}</button>`).join('') : ''; }
+  function paintGrid() {
+    const n = q.trim().toLowerCase();
+    const list = products.filter((p) => (cat === 'All' || p.category === cat) && (!n || [p.name, p.category, p.description, p.tags.join(' '), ...p.variants.map((v) => v.name)].join(' ').toLowerCase().includes(n)));
+    $('grid').innerHTML = list.map((p) => {
+      const t = tagFor(p);
+      return `<button class="pcard${p.stock < 1 ? ' is-sold' : ''}" data-id="${p.id}" ${p.stock < 1 ? 'aria-disabled="true"' : ''}>
+      <div class="picwrap">${pic(p.image_url, p.name)}${t ? `<span class="ptag ptag-${t.cls}">${esc(t.text)}</span>` : ''}</div>
+      <div class="nm">${esc(p.name)}</div><div class="pr">${priceText(p)}</div>
+      <div class="st">${p.variants.length ? `${p.variants.length} options` : esc(p.description).slice(0, 60)}</div><span class="pdetail" role="link" tabindex="0" data-d="${p.id}">Details</span></button>`;
+    }).join('') || `<div class="empty" style="grid-column:1/-1">${products.length ? 'No matches' : 'Nothing for sale right now. Check back soon!'}</div>`;
+  }
+  const body = () => ({ items: [...cart].map(([k, qty]) => { const l = look(k); return { id: l.id, variant: l.vid || undefined, custom: l.cv.length ? l.cv : undefined, qty }; }), code });
+  let qseq = 0;
+  async function refreshQuote() {
+    if (!cart.size) { quote = null; return paintSums(); }
+    const my = ++qseq;
+    try {
+      const r = await fetch('/api/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body()) });
+      const d = await r.json();
+      if (my !== qseq) return;
+      if (!r.ok) { quote = null; $('codemsg').innerHTML = `<span class="err-text">${esc(d.error || 'That code did not work')}</span>`; if (code) { code = ''; } }
+      else { quote = d; $('codemsg').innerHTML = d.discount_cents ? `<span class="ok-text">Code ${esc(d.discount_code)} applied</span>` : ''; }
+    } catch { quote = null; }
+    paintSums();
+  }
+  function paintSums() {
+    let sub = 0;
+    for (const [key, k] of cart) sub += look(key).price * k;
+    const q2 = quote || { subtotal_cents: sub, discount_cents: 0, tax_cents: Math.round(sub * rate / 100), total_cents: sub + Math.round(sub * rate / 100) };
+    $('sums').innerHTML = `<div class="sum"><span>Subtotal</span><span>${fmt(q2.subtotal_cents)}</span></div>` +
+      (q2.discount_cents ? `<div class="sum disc"><span>Discount</span><span>−${fmt(q2.discount_cents)}</span></div>` : '') +
+      (rate > 0 ? `<div class="sum"><span>Tax (${rate}%)</span><span>${fmt(q2.tax_cents)}</span></div>` : '') +
+      `<div class="sum total"><span>Total</span><span>${fmt(q2.total_cents)}</span></div>`;
+  }
+  function paintCart() {
+    const n = [...cart.values()].reduce((a, b) => a + b, 0);
+    $('ctitle').textContent = n ? `Your cart (${n})` : 'Your cart';
+    $('citems').innerHTML = cart.size ? [...cart].map(([key, k]) => {
+      const l = look(key), p = l.p;
+      return `<div class="citem">${p.image_url ? `<img class="thumb" src="${esc(p.image_url)}" alt="">` : `<div class="thumb ph">${esc(p.name.charAt(0))}</div>`}
+        <div><div class="nm">${esc(p.name)}</div>${l.v ? `<div class="small"><b>${esc(l.v.name)}</b></div>` : ''}${(p.custom_fields || []).map((f, i) => l.cv[i] ? `<div class="small muted">${esc(f.label)}: ${esc(l.cv[i])}</div>` : '').join('')}<div class="muted small">${fmt(l.price)}</div>
+        <div class="stepper"><button data-d="${key}" aria-label="Fewer">−</button><span>${k}</span><button data-u="${key}" aria-label="More">+</button></div></div>
+        <div><b>${fmt(l.price * k)}</b></div></div>`;
+    }).join('') : '<div class="empty">Your cart is empty</div>';
+    $('codebox').hidden = !cart.size || resting;
+    $('checkout').disabled = !cart.size || resting;
+    paintSums(); refreshQuote();
+  }
+  const add = (key) => {
+    if (resting) return;
+    const l = look(key);
+    const k = (cart.get(key) || 0) + 1;
+    const cap = maxQty > 0 ? Math.min(l.stock, maxQty) : l.stock;
+    if (k <= cap) { cart.set(key, k); $('status').innerHTML = ''; paintCart(); }
+    else if (maxQty > 0 && k > maxQty && l.stock >= k) $('status').innerHTML = `<div class="msg err">Limit of ${maxQty} per item per order.</div>`;
+  };
+  $('q').oninput = (e) => { q = e.target.value; paintGrid(); };
+  $('cats').onclick = (e) => { const b = e.target.closest('[data-c]'); if (b) { cat = b.dataset.c; paintCats(); paintGrid(); } };
+  function showDetails(id) {
+    const p = products.find((x) => x.id === id); if (!p) return;
+    const back = document.createElement('div'); back.className = 'modal-back';
+    const imgs = (p.images && p.images.length ? p.images : []);
+    back.innerHTML = `<div class="modal" style="max-width:560px;text-align:left">
+      ${imgs.length ? `<img class="bigpic" id="dmain" src="${esc(imgs[0])}" alt="">${imgs.length > 1 ? `<div class="thumbs">${imgs.map((u, i) => `<div class="t${i === 0 ? ' on' : ''}" data-i="${i}"><img src="${esc(u)}" alt=""></div>`).join('')}</div>` : ''}` : ''}
+      <h2 style="margin-top:12px">${esc(p.name)}</h2><div><b id="dprice">${priceText(p)}</b><span id="dstock">${p.stock < 1 ? ' · Sold out' : !p.variants.length && p.stock <= 3 ? ` · Only ${p.stock} left` : ''}</span></div>
+      ${p.description ? `<p>${esc(p.description)}</p>` : ''}
+      ${p.variants.length ? `<div class="optpick" id="dopts" role="radiogroup" aria-label="Choose an option"><div class="small muted" style="margin-bottom:6px">Choose ${/^[aeiou]/i.test(p.option_label || 'option') ? 'an' : 'a'} ${esc((p.option_label || 'option').toLowerCase())}</div>${p.variants.map((v) => `<button type="button" class="optbtn${v.stock < 1 ? ' is-sold' : ''}" role="radio" aria-checked="false" data-v="${v.id}" ${v.stock < 1 ? 'disabled' : ''}><span>${esc(v.name)}</span><span class="small">${v.stock < 1 ? 'Sold out' : fmt(v.price_cents)}</span></button>`).join('')}</div>` : ''}
+      ${(p.custom_fields || []).length ? `<div class="custq" id="dcust">${p.custom_fields.map((f, i) => `<label class="small" for="cf${i}"><b>${esc(f.label)}</b>${f.required ? '' : ' <span class="muted">(optional)</span>'}</label><input class="input" id="cf${i}" maxlength="200" data-i="${i}" autocomplete="off" ${f.required ? 'required' : ''}>`).join('')}</div>` : ''}
+      ${p.process ? `<div class="made"><b>How it’s made</b><br>${esc(p.process)}</div>` : ''}
+      <div class="row mt"><button class="btn btn-primary" id="dadd" ${p.stock < 1 || resting || p.variants.length ? 'disabled' : ''}>${resting ? 'Not taking orders right now' : p.stock < 1 ? 'Sold out' : p.variants.length ? 'Choose ' + (/^[aeiou]/i.test(p.option_label || 'option') ? 'an ' : 'a ') + (p.option_label || 'option').toLowerCase() : 'Add to cart'}</button><button class="btn btn-ghost" id="dclose">Close</button></div></div>`;
+    document.body.appendChild(back);
+    back.onclick = (e) => { if (e.target === back) back.remove(); const t = e.target.closest('.t'); if (t) { $('dmain').src = imgs[Number(t.dataset.i)]; back.querySelectorAll('.t').forEach((x) => x.classList.toggle('on', x === t)); } };
+    back.querySelector('#dclose').onclick = () => back.remove();
+    let chosen = 0;
+    const optsBox = back.querySelector('#dopts');
+    if (optsBox) optsBox.onclick = (e) => {
+      const b = e.target.closest('.optbtn'); if (!b || b.disabled) return;
+      chosen = Number(b.dataset.v);
+      optsBox.querySelectorAll('.optbtn').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on ? 'true' : 'false'); });
+      const v = p.variants.find((x) => x.id === chosen);
+      back.querySelector('#dprice').textContent = fmt(v.price_cents);
+      back.querySelector('#dstock').textContent = v.stock <= 3 ? ` · Only ${v.stock} left` : '';
+      ready();
+    };
+    const cvals = () => (p.custom_fields || []).map((f, i) => (back.querySelector('#cf' + i).value || '').trim());
+    function ready() {
+      const btn = back.querySelector('#dadd');
+      const missing = (p.custom_fields || []).some((f, i) => f.required && !cvals()[i]);
+      const need = p.variants.length && !chosen;
+      btn.disabled = resting || p.stock < 1 || need || missing;
+      btn.textContent = resting ? 'Not taking orders right now' : p.stock < 1 ? 'Sold out' : need ? 'Choose ' + (/^[aeiou]/i.test(p.option_label || 'option') ? 'an ' : 'a ') + (p.option_label || 'option').toLowerCase() : missing ? 'Fill in the box' + ((p.custom_fields || []).filter((f, i) => f.required && !cvals()[i]).length > 1 ? 'es' : '') + ' above' : 'Add to cart';
+    }
+    const cbox = back.querySelector('#dcust'); if (cbox) { cbox.oninput = ready; ready(); }
+    back.querySelector('#dadd').onclick = () => { add(keyOf(id, chosen, cvals())); back.remove(); };
+  }
+  $('grid').onclick = (e) => {
+    const d = e.target.closest('.pdetail'); if (d) { e.stopPropagation(); return showDetails(Number(d.dataset.d)); }
+    const b = e.target.closest('.pcard'); if (!b || b.classList.contains('is-sold')) return;
+    const pid = Number(b.dataset.id), pr = products.find((x) => x.id === pid);
+    if (pr.variants.length || (pr.custom_fields || []).length) showDetails(pid); else add(keyOf(pid, 0));
+  };
+  $('grid').onkeydown = (e) => { const d = e.target.closest('.pdetail'); if (d && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); showDetails(Number(d.dataset.d)); } };
+  $('citems').onclick = (e) => {
+    const d = e.target.closest('[data-d]'), u = e.target.closest('[data-u]');
+    if (d) { const key = d.dataset.d, k = cart.get(key) - 1; k < 1 ? cart.delete(key) : cart.set(key, k); paintCart(); }
+    if (u) add(u.dataset.u);
+  };
+  $('clear').onclick = () => { cart.clear(); code = ''; $('code').value = ''; $('codemsg').innerHTML = ''; paintCart(); };
+  $('apply').onclick = () => { code = $('code').value.trim(); if (!code) { $('codemsg').innerHTML = ''; } refreshQuote(); };
+  $('code').onkeydown = (e) => { if (e.key === 'Enter') $('apply').click(); };
+  $('checkout').onclick = async () => {
+    $('checkout').disabled = true;
+    try {
+      const r = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body(), started: loadedAt, website: $('website').value, captcha: captchaToken }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Checkout failed');
+      location.href = d.url;
+    } catch (e) {
+      $('status').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('checkout').disabled = false;
+      if (captchaId !== null && window.turnstile) { window.turnstile.reset(captchaId); captchaToken = ''; }
+    }
+  };
+})();
+</script>
+</body>
+</html>

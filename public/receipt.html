@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Receipt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<div class="receipt" id="r"><p class="center muted">Loading receipt…</p></div>
+<p class="center noprint"><button class="btn" id="print" hidden>Print</button></p>
+<div class="extras noprint" id="extra"></div>
+<script>
+(() => {
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const p = new URLSearchParams(location.search);
+  const stars = (n) => `<span class="stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(5 - n)}</span></span>`;
+  function extras(o) {
+    const box = document.getElementById('extra'); let html = '';
+    const q = `/api/receipt/${encodeURIComponent(p.get('order'))}`, k = encodeURIComponent(p.get('k') || '');
+    if (o.needs_shipping) html += `<div class="card xcard" id="addr"><h2>Where should we ship it?</h2><p class="muted small">Your card was charged automatically, so the seller needs your shipping address.</p>
+      <div class="hp" aria-hidden="true"><input id="a-web" tabindex="-1" autocomplete="off"></div>
+      <label class="field"><span class="label">Full name</span><input class="input" id="a-name" autocomplete="name"></label>
+      <label class="field"><span class="label">Street address</span><input class="input" id="a-l1" autocomplete="address-line1"></label>
+      <label class="field"><span class="label">Apartment, suite (optional)</span><input class="input" id="a-l2" autocomplete="address-line2"></label>
+      <div class="grid2"><label class="field"><span class="label">City</span><input class="input" id="a-city" autocomplete="address-level2"></label>
+        <label class="field"><span class="label">State</span><input class="input" id="a-state" autocomplete="address-level1"></label>
+        <label class="field"><span class="label">ZIP / postal code</span><input class="input" id="a-zip" autocomplete="postal-code"></label>
+        <label class="field"><span class="label">Country</span><input class="input" id="a-country" value="US" autocomplete="country"></label></div>
+      <div id="a-msg"></div><button class="btn btn-primary btn-block" id="a-go">Send address</button></div>`;
+    if (o.reviews_on) {
+      if (o.review) html += `<div class="card xcard"><h2>Your review</h2><div>${stars(o.review.rating)} <span class="vp">✓ Verified purchase</span></div>${o.review.body ? `<p>${esc(o.review.body)}</p>` : ''}${o.review.reply ? `<div class="rvreply"><b>Reply from the seller</b><br>${esc(o.review.reply)}</div>` : ''}${o.can_review ? '<p class="muted small">You can edit your review for 14 days.</p>' : ''}</div>`;
+      if (o.can_review) html += `<div class="card xcard" id="rvform"><h2>${o.review ? 'Edit your review' : 'How was your order?'}</h2><p class="muted small">Your review is labeled “Verified purchase” because it comes from this receipt. Only your first name and last initial are shown.</p>
+        <div class="starpick" id="sp" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-n="${n}" aria-label="${n} star${n === 1 ? '' : 's'}">★</button>`).join('')}</div>
+        <div class="hp" aria-hidden="true"><input id="r-web" tabindex="-1" autocomplete="off"></div>
+        <label class="field"><span class="label">Tell others about it (optional)</span><textarea class="input" id="r-body" rows="4" maxlength="1000">${o.review ? esc(o.review.body) : ''}</textarea></label>
+        <div id="r-msg"></div><button class="btn btn-primary btn-block" id="r-go">${o.review ? 'Save changes' : 'Post review'}</button></div>`;
+      else if (o.review_wait) html += `<div class="card xcard"><h2>Reviews</h2><p class="muted">You’ll be able to leave a review once your order has shipped. Come back to this page then.</p></div>`;
+    }
+    box.innerHTML = html;
+    const go = document.getElementById('a-go');
+    if (go) go.onclick = async () => {
+      const v = (id) => document.getElementById(id).value;
+      try {
+        const r = await fetch(`${q}/shipping?k=${k}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: v('a-name'), line1: v('a-l1'), line2: v('a-l2'), city: v('a-city'), state: v('a-state'), postal_code: v('a-zip'), country: v('a-country'), website: v('a-web') }) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not save');
+        document.getElementById('addr').innerHTML = '<h2>Thank you!</h2><p>The seller has your address and will ship your order.</p>';
+      } catch (e) { document.getElementById('a-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+    let rating = o.review ? o.review.rating : 0;
+    const sp = document.getElementById('sp');
+    const paintSp = () => sp && sp.querySelectorAll('button').forEach((b) => b.classList.toggle('on', Number(b.dataset.n) <= rating));
+    if (sp) { paintSp(); sp.onclick = (e) => { const b = e.target.closest('[data-n]'); if (b) { rating = Number(b.dataset.n); paintSp(); } }; }
+    const rg = document.getElementById('r-go');
+    if (rg) rg.onclick = async () => {
+      if (!rating) return (document.getElementById('r-msg').innerHTML = '<div class="msg err">Tap a star rating first</div>');
+      try {
+        const r = await fetch(`${q}/review?k=${k}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating, body: document.getElementById('r-body').value, website: document.getElementById('r-web').value }) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not post');
+        extras({ ...o, review: d.review, can_review: d.can_review, review_wait: false });
+        document.getElementById('extra').insertAdjacentHTML('afterbegin', '<div class="msg">Thank you! Your review is up.</div>');
+      } catch (e) { document.getElementById('r-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+  }
+  fetch(`/api/receipt/${encodeURIComponent(p.get('order'))}?k=${encodeURIComponent(p.get('k') || '')}`)
+    .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error); return d; })
+    .then((o) => {
+      const when = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+      document.title = `Receipt #${o.id}`;
+      const FUL = { packed: 'Packed and getting ready to ship', shipped: 'Shipped', delivered: 'Delivered' };
+      const ship = o.fulfillment ? `<p class="center small"><b>${FUL[o.fulfillment] || ''}</b>${o.tracking_number ? `<br>${o.carrier ? esc(o.carrier) + ' · ' : ''}Tracking: ${esc(o.tracking_number)}` : ''}</p><hr>` : '';
+      document.getElementById('r').innerHTML = `
+        <h1>${esc(o.store_name)}</h1>
+        <p class="center muted small">Receipt #${o.id} · ${esc(when)}</p><hr>
+        ${o.items.map((i) => `<div class="line"><span>${i.quantity > 1 ? i.quantity + ' × ' : ''}${esc(i.name)}${(i.custom || []).map((c) => `<br><small class="muted">${esc(c.label)}: ${esc(c.value)}</small>`).join('')}</span><span>${fmt(i.unit_price_cents * i.quantity)}</span></div>`).join('')}<hr>
+        <div class="line"><span>Subtotal</span><span>${fmt(o.subtotal_cents)}</span></div>
+        ${o.discount_cents > 0 ? `<div class="line"><span>Discount${o.discount_code ? ' (' + esc(o.discount_code) + ')' : ''}</span><span>−${fmt(o.discount_cents)}</span></div>` : ''}
+        ${o.tax_cents > 0 ? `<div class="line"><span>Tax</span><span>${fmt(o.tax_cents)}</span></div>` : ''}
+        <div class="line"><b>Total</b><b>${fmt(o.total_cents)}</b></div>
+        ${o.refunded_cents > 0 ? `<div class="line"><span>Refunded</span><span>−${fmt(o.refunded_cents)}</span></div>` : ''}<hr>
+        ${ship}
+        <p class="center small muted">Paid by ${esc(o.payment_method)}${o.status === 'paid' ? '' : ' · ' + esc(o.status)}<br>Thanks for supporting independent artists!</p>
+        ${o.refund_policy ? `<p class="small muted" style="margin-top:14px"><b>Returns &amp; refunds.</b> ${esc(o.refund_policy)}</p>` : ''}`;
+      const b = document.getElementById('print'); b.hidden = false; b.onclick = () => window.print();
+      extras(o);
+    })
+    .catch(() => { document.getElementById('r').innerHTML = '<p class="center">Receipt not found.</p>'; });
+})();
+</script>
+</body>
+</html>

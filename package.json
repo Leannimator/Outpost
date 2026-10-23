@@ -1,0 +1,20 @@
+{
+  "name": "outpost",
+  "version": "2.0.0",
+  "description": "Outpost: self-hosted point of sale, online shop and auctions for independent artists (payments via Stripe)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4",
+    "stripe": "^17.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

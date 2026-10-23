@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thank you</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<header class="shop-head">
+  <a class="wordmark" id="sn" data-brand="name" href="store.html">Outpost</a>
+  <nav><a href="store.html">Shop</a><a href="auction.html">Auctions</a></nav>
+</header>
+<main class="shop-main">
+  <div class="done card" style="padding:34px">
+    <img class="art" data-brand="sold" alt="" hidden>
+    <h2 id="h">Thank you!</h2>
+    <p class="muted" id="msg">Confirming your payment…</p>
+    <div class="row"><a class="btn btn-dark" href="store.html">Back to the shop</a><a class="btn" id="rcpt" hidden target="_blank" rel="noopener">View receipt</a></div>
+  </div>
+</main>
+<script>
+(() => {
+  const p = new URLSearchParams(location.search), id = p.get('order'), k = p.get('k');
+  const $ = (i) => document.getElementById(i);
+  fetch('/api/settings').then((r) => r.json()).then((s) => { OutpostBrand.apply(s); }).catch(() => {});
+  let tries = 0;
+  async function check() {
+    try {
+      const o = await (await fetch('/api/order-status/' + encodeURIComponent(id))).json();
+      if (o.status === 'paid') {
+        $('h').textContent = "That's a wrap!";
+        $('msg').textContent = 'Payment received for order #' + o.id + '. Stripe will email you a receipt.';
+        const FUL = { packed: 'Your order is packed and getting ready to ship.', shipped: 'Your order has shipped. Tracking is on your receipt.', delivered: 'Your order was delivered.' };
+        if (o.fulfillment && FUL[o.fulfillment]) $('msg').textContent += ' ' + FUL[o.fulfillment];
+        else if (k) $('msg').textContent += ' Your receipt shows the returns policy and, once shipped, tracking.';
+        if (k) fetch('/api/receipt/' + encodeURIComponent(id) + '?k=' + encodeURIComponent(k)).then((r) => r.json()).then((rc) => { if (rc.needs_shipping) { $('msg').textContent += ' One more step: please add your shipping address from your receipt.'; $('rcpt').textContent = 'Add shipping address'; $('rcpt').classList.add('btn-primary'); } else if (rc.review_wait) { $('msg').textContent += ' When it ships, you can leave a review from your receipt.'; } }).catch(() => {});
+        if (k) { const a = $('rcpt'); a.href = '/receipt.html?order=' + encodeURIComponent(id) + '&k=' + encodeURIComponent(k); a.hidden = false; }
+        return;
+      }
+    } catch { /* retry */ }
+    if (++tries < 15) setTimeout(check, 2000);
+    else $('msg').textContent = 'Your payment is still processing. You’ll get an email receipt once it clears.';
+  }
+  if (id) check(); else $('msg').textContent = '';
+})();
+</script>
+</body>
+</html>
