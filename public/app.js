@@ -1151,55 +1151,48 @@
     settings = cur;
     const base = st.base_url;
     const rp = cur.refund_policy || { preset: '', days: 14, custom: '', text: '' };
-    const pol = cur.policy || {};
+    let pol = cur.policy || {};
+    let soc = cur.social || {};
     let ship = JSON.parse(JSON.stringify(cur.shipping || { on: false, regions: [], free_over_cents: 0 }));
     const card = (title, inner) => `<div class="card"><h2 style="font-size:22px;margin-bottom:14px">${title}</h2>${inner}</div>`;
     view().innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
       <div class="settings-col">
         <div style="display:grid;gap:18px;min-width:0">
-          ${card('Your shop', `
-            <label class="field"><span class="label">Shop name (shown on receipts)</span><input class="input" id="sname" value="${esc(cur.store_name)}"></label>
-            <label class="field"><span class="label">Sales tax rate (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}">
-              <div class="hint">Always added to register (in-person) sales. Use 0 for no tax. Check your local rules.</div></label>
-            <label class="field"><span class="label">Online orders: how is tax worked out?</span><select class="input" id="staxm"><option value="flat"${cur.tax_mode === 'stripe' ? '' : ' selected'}>My rate above, for buyers in the states I list</option><option value="stripe"${cur.tax_mode === 'stripe' ? ' selected' : ''}>Let Stripe work it out (Stripe Tax)</option></select>
-              <div class="hint">Stripe Tax finds the exact rate for each address and costs about 0.5% per sale where you’re registered. Turn it on in your Stripe dashboard first.</div></label>
-            <label class="field" id="staxstw"><span class="label">Charge tax to buyers in these states</span><input class="input" id="staxst" maxlength="60" placeholder="WA" value="${esc(cur.tax_states || '')}"><div class="hint">Use state codes with commas, like <b>WA</b> or <b>WA, OR</b>. Leave blank to charge everyone. Which states you must collect in depends on where you’ve passed their sales limits. Ask an accountant if you’re not sure.</div></label>
-            <div class="grid2">
-              <label class="field"><span class="label">Low-stock alert at</span><input class="input" id="slow" inputmode="numeric" value="${esc(cur.low_stock)}"><div class="hint">Shows “Low” on Products and Reports.</div></label>
-              <label class="field"><span class="label">Max per item, per order</span><input class="input" id="sqty" inputmode="numeric" value="${esc(cur.max_qty)}"><div class="hint">Stops bulk buying. 0 means no limit.</div></label>
-            </div>
-            <h3 style="font-size:18px;margin:18px 0 4px">Away from the outpost</h3>
-            <label class="check"><input type="checkbox" id="sbreak" ${cur.break_manual ? 'checked' : ''}> <span>Pause sales</span></label>
+          <h2 class="sgroup">Your shop</h2>
+          ${card('Basics', `
+            <label class="field"><span class="label">Shop name</span><input class="input" id="sname" value="${esc(cur.store_name)}"></label>
+            <label class="field"><span class="label">Contact email</span><input class="input" id="smail" type="email" inputmode="email" placeholder="hello@yourshop.com" value="${esc(pol.contact_email || (cur.social || {}).email || '')}"><div class="hint">Customers use this to reach you. It appears on your About, Privacy and Terms pages.</div></label>
+            <label class="check"><input type="checkbox" id="sbreak" ${cur.break_manual ? 'checked' : ''}> <span><b>Pause sales</b> while I’m away</span></label>
             <label class="field" style="margin-top:10px"><span class="label">Message for visitors</span><textarea class="input" id="sbmsg" rows="2" maxlength="200" placeholder="${esc(DEFAULT_AWAY)}">${esc(cur.break_message === DEFAULT_AWAY ? '' : cur.break_message)}</textarea></label>
-            <div class="grid2">
-              <label class="field"><span class="label">Pause starts (optional)</span><input class="input" type="date" id="sfrom" value="${esc(cur.break_from || '')}"></label>
-              <label class="field"><span class="label">Back on (optional)</span><input class="input" type="date" id="suntil" value="${esc(cur.break_until || '')}"></label>
-            </div>
-            <div class="hint">While sales are paused, visitors can look around but can't check out. Fill in dates to schedule it, and your “back on” date shows in the shop. Your register still works, and auctions already running keep going.</div>
-            <button class="btn btn-primary mt" id="ssave">Save settings</button><div id="smsg"></div>`)}
+            <details class="more"><summary>Schedule it for certain dates</summary>
+              <div class="grid2" style="margin-top:10px">
+                <label class="field"><span class="label">Pause starts</span><input class="input" type="date" id="sfrom" value="${esc(cur.break_from || '')}"></label>
+                <label class="field"><span class="label">Back on</span><input class="input" type="date" id="suntil" value="${esc(cur.break_until || '')}"></label>
+              </div></details>
+            <div class="hint">While paused, visitors can look around but can’t check out. Your register still works, and auctions already running keep going.</div>
+            <button class="btn btn-primary mt" id="ssave">Save</button><div id="smsg"></div>`)}
           ${card('About your shop', `
             <label class="field"><span class="label">Tell shoppers about yourself and your shop</span><textarea class="input" id="about" rows="6" maxlength="2000" placeholder="Hi, I’m Sam. I make linocut prints and ceramics in a small studio in Portland…">${esc(cur.about_text || '')}</textarea>
-              <div class="hint">Shown on an “About” page in your shop’s menu. Leave blank and no About page appears. Use a blank line to start a new paragraph.</div></label>
+              <div class="hint">Shown on your About page. Use a blank line to start a new paragraph.</div></label>
+            <label class="field"><span class="label">Your “made by hand” promise</span><textarea class="input" id="hand" rows="3" maxlength="600" placeholder="Everything in this shop is designed and made by me, by hand, in my studio. I never use AI-generated images or print-on-demand.">${esc(cur.handmade_statement || '')}</textarea>
+              <div class="hint">Shown at the bottom of your shop. Leave it blank to show nothing.</div></label>
             <div class="label" style="margin-top:6px">Your links (all optional)</div>
-            <div class="hint" style="margin:0 0 8px">Paste the full address from your browser, like https://instagram.com/yourname. Leave any you don’t use empty.</div>
-            <div class="sgrid">${[['website', 'Website'], ['instagram', 'Instagram'], ['tiktok', 'TikTok'], ['facebook', 'Facebook'], ['youtube', 'YouTube'], ['pinterest', 'Pinterest'], ['bluesky', 'Bluesky'], ['threads', 'Threads'], ['email', 'Public email']].map(([k, l]) => `<label class="field" style="margin:0"><span class="label small">${l}</span><input class="input" data-soc="${k}" ${k === 'email' ? 'type="email"' : 'inputmode="url"'} autocomplete="off" placeholder="${k === 'email' ? 'hello@yourshop.com' : 'https://'}" value="${esc((cur.social || {})[k] || '')}"></label>`).join('')}</div>
+            <div class="hint" style="margin:0 0 8px">Paste the full address from your browser, like https://instagram.com/yourname.</div>
+            <div class="sgrid">${[['website', 'Website'], ['instagram', 'Instagram'], ['tiktok', 'TikTok'], ['facebook', 'Facebook'], ['youtube', 'YouTube'], ['pinterest', 'Pinterest'], ['bluesky', 'Bluesky'], ['threads', 'Threads']].map(([k, l]) => `<label class="field" style="margin:0"><span class="label small">${l}</span><input class="input" data-soc="${k}" inputmode="url" autocomplete="off" placeholder="https://" value="${esc((cur.social || {})[k] || '')}"></label>`).join('')}</div>
             <button class="btn btn-primary mt" id="asave">Save</button><div id="amsg"></div>`)}
-          ${card('Trust and reviews', `
-            <label class="field"><span class="label">Your “made by hand” statement</span><textarea class="input" id="hand" rows="3" maxlength="600" placeholder="Everything in this shop is designed and made by me, by hand, in my studio. I never use AI-generated images or print-on-demand.">${esc(cur.handmade_statement || '')}</textarea>
-              <div class="hint">Shown at the bottom of your shop. It’s your public promise to buyers. Leave it blank to show nothing.</div></label>
-            <label class="field"><span class="label">I usually ship within (days)</span><input class="input" id="shipd" inputmode="numeric" value="${esc(cur.ship_days || 0)}">
-              <div class="hint">Shown to buyers. Orders still unshipped after this many days are flagged for you. 0 turns it off.</div></label>
-            <div class="hint">Only people with a real paid order can review, once per order, with a “Verified purchase” label. You can reply to any review and hide abusive ones. Shoppers see how many are hidden.</div>
-            <button class="btn btn-primary mt" id="tsave">Save</button><div id="tmsg"></div>`)}
-          ${card('Refund policy', `
-            <label class="field"><span class="label">What is your policy?</span><select class="input" id="rpre">
-              ${[['', 'Not set (nothing shown)'], ['final', 'All sales final'], ['days', 'Refunds within a number of days'], ['exchange', 'Exchanges or store credit only'], ['custom', 'Write my own']].map(([k, l]) => `<option value="${k}"${rp.preset === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-            <label class="field" id="rdaysw"><span class="label">Number of days</span><input class="input" id="rdays" inputmode="numeric" value="${esc(rp.days)}"></label>
-            <label class="field" id="rtextw"><span class="label">Your policy, in your words</span><textarea class="input" id="rtext" rows="3" maxlength="500">${esc(rp.custom)}</textarea></label>
-            <div class="hint">Shown to buyers at checkout and on their receipt. Buyers are never charged a fee by Outpost. You do refunds yourself from Orders → Manage.</div>
-            <div class="msg" id="rprev" style="margin-top:8px"></div>
-            <button class="btn btn-primary mt" id="rsave">Save policy</button><div id="rmsg"></div>`)}
+          <h2 class="sgroup">Selling</h2>
+          ${card('Sales tax', `
+            <label class="field"><span class="label">At the register (in person)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint">Tax rate in %, whatever your town or event charges. Use 0 for none.</div></label>
+            <div class="label">Online orders</div>
+            <div id="taxopts" style="margin-top:6px">
+              <label class="opt"><input type="radio" name="taxm" value="stripe"><span><b>Stripe works it out</b> <span class="tag">Easiest</span><br><span class="muted small">Finds the right tax for each buyer’s address. Costs about 0.5% per sale, only where you’re registered. Turn on Stripe Tax in your Stripe dashboard first.</span></span></label>
+              <label class="opt"><input type="radio" name="taxm" value="flat"><span><b>My own rate</b><br><span class="muted small">Charge the register rate above to buyers who live in:</span>
+                <input class="input" id="staxst" maxlength="60" placeholder="WA" style="margin-top:6px" value="${esc(cur.tax_states || '')}"><span class="muted small">State codes, like WA or WA, OR.</span></span></label>
+              <label class="opt"><input type="radio" name="taxm" value="none"><span><b>No tax online</b></span></label>
+            </div>
+            <div class="hint">Not sure what you owe? Ask an accountant. Which states you must collect in depends on your sales there.</div>
+            <button class="btn btn-primary mt" id="taxsave">Save</button><div id="taxmsg"></div>`)}
           ${card('Shipping', `
             <label class="check"><input type="checkbox" id="shon" ${ship.on ? 'checked' : ''}> <span>Charge for shipping online</span></label>
             <p class="muted small" style="margin:6px 0 12px">Buyers enter their address in the checkout, and the shipping fee for their region is added. A buyer outside every region below can’t check out.</p>
@@ -1210,17 +1203,22 @@
               <button class="btn btn-ghost" type="button" data-addreg="CA">Canada</button>
               <button class="btn btn-ghost" type="button" data-addreg="custom">Other region</button></div>
             <label class="field"><span class="label">Free shipping when the order is over (optional)</span><input class="input" id="shfree" inputmode="decimal" placeholder="75.00" value="${ship.free_over_cents ? (ship.free_over_cents / 100).toFixed(2) : ''}"><div class="hint">Leave blank for no free shipping. Counted after any discount code.</div></label>
+            <label class="field"><span class="label">I usually ship within (days)</span><input class="input" id="shipd" inputmode="numeric" value="${esc(cur.ship_days || 0)}"><div class="hint">Shown to buyers. Orders still unshipped after this long are flagged for you. 0 turns it off.</div></label>
             <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="shsave">Save</button></div><div id="shmsg"></div>`)}
-          ${card('Policies', `
-            <p class="muted small" style="margin:0 0 12px">Outpost writes a Privacy Policy and Terms of Service for your shop from the answers below, at <b>${esc(base)}/privacy.html</b> and <b>${esc(base)}/terms.html</b>. Stripe asks for both. They link from the bottom of your shop and links page.</p>
-            <label class="field"><span class="label">Contact email for customers</span><input class="input" id="pmail" type="email" inputmode="email" placeholder="hello@yourshop.com" value="${esc(pol.contact_email || '')}"><div class="hint">Shown on both pages so people can reach you about orders and their data.</div></label>
-            <label class="field"><span class="label">Where do you ship?</span><select class="input" id="preg">${[['', 'Don’t say'], ['us', 'Within the United States'], ['usca', 'United States and Canada'], ['world', 'Worldwide']].map(([k, l]) => `<option value="${k}"${pol.ship_regions === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-            <label class="field"><span class="label">Anything else about shipping (optional)</span><textarea class="input" id="pship" rows="2" maxlength="400" placeholder="Orders over $75 ship free. Tracking is emailed once your order is on its way.">${esc(pol.ship_note || '')}</textarea><div class="hint">Your “I usually ship within” days and your refund policy above are included automatically.</div></label>
-            <label class="field"><span class="label">Which state or country’s laws apply? (optional)</span><input class="input" id="plaw" maxlength="80" placeholder="Washington State, USA" value="${esc(pol.governing_law || '')}"></label>
-            <label class="field"><span class="label">Extra for your Privacy Policy (optional)</span><textarea class="input" id="ppriv" rows="3" maxlength="1500">${esc(pol.privacy_extra || '')}</textarea></label>
-            <label class="field"><span class="label">Extra for your Terms (optional)</span><textarea class="input" id="pterm" rows="3" maxlength="1500" placeholder="Custom orders, commissions, workshop cancellations…">${esc(pol.terms_extra || '')}</textarea></label>
-            <div class="msg" style="margin-top:4px">These are plain-language starting points, not legal advice. Read them and change anything that doesn’t match how you run your shop.</div>
-            <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="polsave">Save</button><a class="btn btn-ghost" href="privacy.html" target="_blank" rel="noopener">View privacy ↗</a><a class="btn btn-ghost" href="terms.html" target="_blank" rel="noopener">View terms ↗</a></div><div id="polmsg"></div>`)}
+          ${card('Refunds', `
+            <label class="field"><span class="label">What is your policy?</span><select class="input" id="rpre">
+              ${[['', 'Not set (nothing shown)'], ['final', 'All sales final'], ['days', 'Refunds within a number of days'], ['exchange', 'Exchanges or store credit only'], ['custom', 'Write my own']].map(([k, l]) => `<option value="${k}"${rp.preset === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+            <label class="field" id="rdaysw"><span class="label">Number of days</span><input class="input" id="rdays" inputmode="numeric" value="${esc(rp.days)}"></label>
+            <label class="field" id="rtextw"><span class="label">Your policy, in your words</span><textarea class="input" id="rtext" rows="3" maxlength="500">${esc(rp.custom)}</textarea></label>
+            <div class="hint">Shown to buyers at checkout and on their receipt. Buyers are never charged a fee by Outpost. You do refunds yourself from Orders → Manage.</div>
+            <div class="msg" id="rprev" style="margin-top:8px"></div>
+            <button class="btn btn-primary mt" id="rsave">Save policy</button><div id="rmsg"></div>`)}
+          ${card('Stock and order limits', `
+            <div class="grid2">
+              <label class="field"><span class="label">Low-stock alert at</span><input class="input" id="slow" inputmode="numeric" value="${esc(cur.low_stock)}"><div class="hint">Shows “Low” on Products and Reports.</div></label>
+              <label class="field"><span class="label">Max per item, per order</span><input class="input" id="sqty" inputmode="numeric" value="${esc(cur.max_qty)}"><div class="hint">Stops bulk buying. 0 means no limit.</div></label>
+            </div>
+            <button class="btn btn-primary mt" id="stsave">Save</button><div id="stmsg"></div>`)}
           ${card('Discount codes', `
             <div id="dlist"></div>
             <div class="label" style="margin-top:14px">New code</div>
@@ -1238,6 +1236,17 @@
             <label class="check"><input type="checkbox" id="bcard" ${cur.bid_card_manual ? 'checked' : ''} ${cur.stripe_ready ? '' : 'disabled'}> <span>Require a card to bid, and charge the winner automatically</span></label>
             <div class="hint">${cur.stripe_ready ? 'Bidders save a card with Stripe before their first bid. Nothing is charged unless they win. When a lot ends, the winning bid (plus tax) is charged once. If a charge fails, you’ll see why and can send the usual payment link. Winners then add their shipping address from their receipt.' : 'This needs your Stripe keys first, because cards are saved by Stripe. See the setup guide.'}</div>
             <button class="btn btn-primary mt" id="bsave" ${cur.stripe_ready ? '' : 'disabled'}>Save</button><div id="bmsg2"></div>`)}
+          <h2 class="sgroup">Legal pages</h2>
+          ${card('Privacy and Terms', `
+            <p class="muted small" style="margin:0 0 12px">Outpost writes these for you from your other settings, at <b>${esc(base)}/privacy.html</b> and <b>${esc(base)}/terms.html</b>. Stripe asks for both. They link from the bottom of your shop. Nothing to fill in unless you want to add something.</p>
+            <div class="msg" style="margin:0 0 10px">Plain-language starting points, not legal advice. Give them a read.</div>
+            <details class="more"><summary>Add your own touches (optional)</summary>
+              <label class="field" style="margin-top:10px"><span class="label">Which state or country’s laws apply?</span><input class="input" id="plaw" maxlength="80" placeholder="Washington State, USA" value="${esc(pol.governing_law || '')}"></label>
+              <label class="field"><span class="label">Extra shipping notes</span><textarea class="input" id="pship" rows="2" maxlength="400" placeholder="Tracking is emailed once your order is on its way.">${esc(pol.ship_note || '')}</textarea></label>
+              <label class="field"><span class="label">Extra for your Privacy Policy</span><textarea class="input" id="ppriv" rows="3" maxlength="1500">${esc(pol.privacy_extra || '')}</textarea></label>
+              <label class="field"><span class="label">Extra for your Terms</span><textarea class="input" id="pterm" rows="3" maxlength="1500" placeholder="Custom orders, commissions, workshop cancellations…">${esc(pol.terms_extra || '')}</textarea></label>
+            </details>
+            <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="polsave">Save</button><a class="btn btn-ghost" href="privacy.html" target="_blank" rel="noopener">View privacy ↗</a><a class="btn btn-ghost" href="terms.html" target="_blank" rel="noopener">View terms ↗</a></div><div id="polmsg"></div>`)}
         </div>
         <div style="display:grid;gap:18px;min-width:0">${lookCard()}
           ${card('Protection from bots and scammers', `
@@ -1261,24 +1270,51 @@
         </div>
       </div>`;
     wireLook();
-    { const tm = $('#staxm'), tw = $('#staxstw'); const sync = () => { tw.hidden = tm.value === 'stripe'; }; tm.onchange = sync; sync(); }
+    {
+      // Online tax: three plain choices. An old "my rate" setup with no rate and no states reads as "no tax".
+      const mode0 = cur.tax_mode === 'stripe' ? 'stripe' : cur.tax_mode === 'none' || (!Number(cur.tax_rate) && !cur.tax_states) ? 'none' : 'flat';
+      const opts = document.querySelectorAll('#taxopts input[name=taxm]');
+      const sync = () => opts.forEach((r) => { r.closest('.opt').classList.toggle('on', r.checked); const st = r.closest('.opt').querySelector('#staxst'); if (st) st.disabled = !r.checked; });
+      opts.forEach((r) => { r.checked = r.value === mode0; r.onchange = sync; });
+      sync();
+    }
 
-    // --- shop + pause ---
+    // --- shop name, contact email, pause ---
     $('#ssave').onclick = async () => {
       try {
-        const r = await put('/api/admin/settings', { store_name: $('#sname').value, tax_rate: $('#srate').value, tax_mode: $('#staxm').value, tax_states: $('#staxst').value, break_on: $('#sbreak').checked, break_message: $('#sbmsg').value,
-          break_from: $('#sfrom').value, break_until: $('#suntil').value, low_stock: $('#slow').value, max_qty: $('#sqty').value });
-        settings = { ...settings, ...r };
+        const email = $('#smail').value.trim();
+        const r = await put('/api/admin/settings', { store_name: $('#sname').value, break_on: $('#sbreak').checked, break_message: $('#sbmsg').value, break_from: $('#sfrom').value, break_until: $('#suntil').value,
+          policy: { ...pol, contact_email: email }, social: { ...soc, email } });
+        settings = { ...settings, ...r }; if (r.policy) pol = r.policy; if (r.social) soc = r.social;
         paintBrand();
         $('#smsg').innerHTML = '<div class="msg">Saved.</div>';
       } catch (e) { $('#smsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
+    // --- sales tax ---
+    $('#taxsave').onclick = async () => {
+      try {
+        const m = (document.querySelector('#taxopts input[name=taxm]:checked') || {}).value || 'none';
+        if (m === 'flat' && !$('#staxst').value.trim()) throw new Error('Type the state your buyers pay tax in, like WA. Or pick one of the other two choices.');
+        const r = await put('/api/admin/settings', { tax_rate: $('#srate').value, tax_mode: m, ...(m === 'flat' ? { tax_states: $('#staxst').value } : {}) });
+        settings = { ...settings, ...r };
+        $('#taxmsg').innerHTML = '<div class="msg">Saved.' + (m === 'stripe' ? ' Remember to turn on Stripe Tax in your Stripe dashboard, or checkout will show an error.' : '') + '</div>';
+      } catch (e) { $('#taxmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+
+    // --- stock ---
+    $('#stsave').onclick = async () => {
+      try {
+        const r = await put('/api/admin/settings', { low_stock: $('#slow').value, max_qty: $('#sqty').value });
+        settings = { ...settings, ...r }; $('#stmsg').innerHTML = '<div class="msg">Saved.</div>';
+      } catch (e) { $('#stmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+
     $('#asave').onclick = async () => {
       const social = {}; document.querySelectorAll('[data-soc]').forEach((i) => { social[i.dataset.soc] = i.value.trim(); });
       try {
-        const r = await put('/api/admin/settings', { about_text: $('#about').value, social });
-        settings = { ...settings, ...r }; $('#amsg').innerHTML = '<div class="msg">Saved. Your About page is in the shop menu.</div>';
+        const r = await put('/api/admin/settings', { about_text: $('#about').value, handmade_statement: $('#hand').value, social: { ...soc, ...social } });
+        settings = { ...settings, ...r }; if (r.social) soc = r.social; $('#amsg').innerHTML = '<div class="msg">Saved. Your About page is in the shop menu.</div>';
         document.querySelectorAll('[data-soc]').forEach((i) => { i.value = (r.social || {})[i.dataset.soc] || ''; });
       } catch (e) { $('#amsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
@@ -1303,7 +1339,7 @@
       try {
         const fr = $('#shfree').value.trim(); const free = fr === '' ? 0 : toCents(fr);
         if (Number.isNaN(free) || free < 0) throw new Error('Free-shipping amount should be a number like 75.00');
-        const r = await put('/api/admin/settings', { shipping: { on: $('#shon').checked, regions: ship.regions, free_over_cents: free } });
+        const r = await put('/api/admin/settings', { shipping: { on: $('#shon').checked, regions: ship.regions, free_over_cents: free }, ship_days: $('#shipd').value });
         settings = { ...settings, ...r }; if (r.shipping) { ship = JSON.parse(JSON.stringify(r.shipping)); paintShip(); }
         $('#shmsg').innerHTML = '<div class="msg">Saved. Checkout now uses these shipping prices.</div>';
       } catch (e) { $('#shmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
@@ -1311,18 +1347,11 @@
 
     $('#polsave').onclick = async () => {
       try {
-        const r = await put('/api/admin/settings', { policy: { contact_email: $('#pmail').value, ship_regions: $('#preg').value, ship_note: $('#pship').value, governing_law: $('#plaw').value, privacy_extra: $('#ppriv').value, terms_extra: $('#pterm').value } });
-        settings = { ...settings, ...r }; $('#polmsg').innerHTML = '<div class="msg">Saved. Your Privacy and Terms pages are up to date.</div>';
+        const r = await put('/api/admin/settings', { policy: { ...pol, ship_note: $('#pship').value, governing_law: $('#plaw').value, privacy_extra: $('#ppriv').value, terms_extra: $('#pterm').value } });
+        settings = { ...settings, ...r }; if (r.policy) pol = r.policy; $('#polmsg').innerHTML = '<div class="msg">Saved. Your Privacy and Terms pages are up to date.</div>';
       } catch (e) { $('#polmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
-    // --- trust & reviews ---
-    $('#tsave').onclick = async () => {
-      try {
-        const r = await put('/api/admin/settings', { handmade_statement: $('#hand').value, ship_days: $('#shipd').value });
-        settings = { ...settings, ...r }; $('#tmsg').innerHTML = '<div class="msg">Saved.</div>';
-      } catch (e) { $('#tmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
-    };
     $('#bsave').onclick = async () => {
       try {
         const r = await put('/api/admin/settings', { bid_card_required: $('#bcard').checked });

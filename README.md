@@ -35,7 +35,7 @@ Set `ADMIN_PASSWORD` (and your Stripe **test** keys when you're ready for card p
 | `/` | Staff app (password protected): **Sell**, **Auctions**, **Products**, **Orders**, **Settings** |
 | `/store.html` | Public shop with search, categories and checkout |
 | `/links` | Link-in-bio page (links, events, optional email signup) |
-| `/privacy`, `/terms` | Privacy Policy and Terms of Service, written from your Settings → Policies |
+| `/privacy`, `/terms` | Privacy Policy and Terms of Service, written from your Settings |
 | `/auction.html` | Public auction lots; `/auction.html?lot=3` is the live bidding screen |
 | `/receipt.html?order=…&k=…` | Printable receipt (the link is private to each order) |
 
