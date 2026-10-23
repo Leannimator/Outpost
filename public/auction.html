@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="/theme.css">
 <script src="/theme.js"></script>
+<script src="address.js"></script>
 </head>
 <body>
 <div class="shop-app">
@@ -51,9 +52,9 @@
   const stage = $('#stage');
   let offset = 0, timers = [];
 
-  let siteKey = '', cardRequired = false, shopName = 'the seller', cardInfo = null;
+  let siteKey = '', cardRequired = false, needsAddr = false, shopName = 'the seller', cardInfo = null;
   const loadedAt = Date.now();
-  fetch('/api/settings').then((r) => r.json()).then((s) => { siteKey = s.captcha_site_key || ''; cardRequired = !!s.bid_card_required; shopName = s.store_name || shopName; OutpostBrand.apply(s); }).catch(() => {});
+  fetch('/api/settings').then((r) => r.json()).then((s) => { siteKey = s.captcha_site_key || ''; cardRequired = !!s.bid_card_required; needsAddr = !!s.needs_address; shopName = s.store_name || shopName; OutpostBrand.apply(s); }).catch(() => {});
   const headers = () => (bidder ? { 'x-bidder-token': bidder.token } : {});
   const bk = isStaff() ? '<a href="/">← Back to Outpost</a>' : `<a href="auction.html">← All lots</a>`;
   const pic = (url, name, cls) => url ? `<img class="${cls}" src="${esc(url)}" alt="">` : `<div class="${cls} ph">${esc((name || '?').charAt(0).toUpperCase())}</div>`;
@@ -207,6 +208,7 @@
         <p class="muted small">We’ll use your email to send you your payment link if you win.</p>
         <label class="field"><span class="label">Your name</span><input class="input" id="bn" autocomplete="name"></label>
         <label class="field"><span class="label">Email</span><input class="input" id="be" type="email" autocomplete="email"></label>
+        ${needsAddr ? `<p class="muted small" style="margin:6px 0 4px">Where should it be sent if you win? Shipping and tax are worked out from this address.</p><div id="baddr">${OutpostAddress.html({})}</div>` : ''}
         <div class="hp" aria-hidden="true"><label>Leave this empty <input id="bw" tabindex="-1" autocomplete="off"></label></div>
         <div id="bcap"></div>
         <p class="hint">${cardRequired ? 'Next you’ll save a card with Stripe. You’re only charged if you win.' : 'By bidding you agree to pay if you win.'}</p>
@@ -220,9 +222,10 @@
         else { window.__tsReady = mount; const sc = document.createElement('script'); sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__tsReady&render=explicit'; sc.async = true; document.head.appendChild(sc); }
       }
       $('#bno', back).onclick = () => back.remove();
+      if (needsAddr) OutpostAddress.wire($('#baddr', back));
       $('#bgo', back).onclick = async () => {
         try {
-          const r = await fetch('/api/bidders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#bn', back).value, email: $('#be', back).value, started: loadedAt, website: $('#bw', back).value, captcha: capToken }) });
+          const r = await fetch('/api/bidders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#bn', back).value, email: $('#be', back).value, ...(needsAddr ? { address: OutpostAddress.read($('#baddr', back)) } : {}), started: loadedAt, website: $('#bw', back).value, captcha: capToken }) });
           const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not sign up');
           bidder = { token: d.token, name: d.name }; ls.set('outpost_bidder', JSON.stringify(bidder));
           back.remove(); then();
@@ -230,11 +233,30 @@
       };
     }
 
+    function addressModal(then) {
+      const back = document.createElement('div'); back.className = 'modal-back';
+      back.innerHTML = `<div class="modal" style="text-align:left"><h2>Add your delivery address</h2>
+        <p class="muted small">So ${esc(shopName)} can work out shipping and tax if you win. Nothing is charged now.</p>
+        <div id="aaddr">${OutpostAddress.html({})}</div><div id="aerr"></div>
+        <button class="btn btn-primary btn-block" id="ago">Save and continue</button><button class="btn btn-ghost btn-block mt" id="ano">Not now</button></div>`;
+      document.body.appendChild(back);
+      OutpostAddress.wire($('#aaddr', back));
+      $('#ano', back).onclick = () => back.remove();
+      $('#ago', back).onclick = async () => {
+        $('#ago', back).disabled = true;
+        try {
+          const r = await fetch('/api/bidders/address', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify({ address: OutpostAddress.read($('#aaddr', back)) }) });
+          const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not save');
+          back.remove(); then();
+        } catch (e) { $('#aerr', back).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#ago', back).disabled = false; }
+      };
+    }
+
     function cardModal() {
       const back = document.createElement('div'); back.className = 'modal-back';
       back.innerHTML = `<div class="modal" style="text-align:left"><h2>Add a card to bid</h2>
         <p>${esc(shopName)} asks bidders to save a card before bidding. This keeps auctions fair for everyone.</p>
-        <p class="muted small"><b>You are not charged now.</b> If you win a lot you bid on, ${esc(shopName)} charges this card once for your winning bid plus any sales tax. Your card details go straight to Stripe. This shop never sees them.</p>
+        <p class="muted small"><b>You are not charged now.</b> If you win a lot you bid on, ${esc(shopName)} charges this card once for your winning bid plus shipping and any sales tax. Your card details go straight to Stripe. This shop never sees them.</p>
         <div id="cerr"></div><button class="btn btn-primary btn-block" id="cgo">Add a card with Stripe</button><button class="btn btn-ghost btn-block mt" id="cno">Not now</button></div>`;
       document.body.appendChild(back);
       $('#cno', back).onclick = () => back.remove();
@@ -256,6 +278,7 @@
         const d = await r.json();
         if (r.status === 401) { bidder = null; ls.set('outpost_bidder', 'null'); busy = false; return signUp(() => placeBid(cents)); }
         if (r.status === 402 && d.need_card) { busy = false; return cardModal(); }
+        if (r.status === 428 && d.need_address) { busy = false; return addressModal(() => placeBid(cents)); }
         if (!r.ok) throw new Error(d.error || 'Bid failed');
         a = d; offset = a.serverNow - Date.now(); paint(); loadMine();
       } catch (e) { const m = $('#bmsg'); if (m) m.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }

@@ -198,6 +198,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS subscribers (
   created_at INTEGER NOT NULL,
   unsubscribed INTEGER NOT NULL DEFAULT 0
 )`);
+addCol('bidders', 'address_json', 'TEXT');
 addCol('bidders', 'stripe_customer_id', 'TEXT');
 addCol('bidders', 'stripe_payment_method', 'TEXT');
 addCol('bidders', 'card_brand', 'TEXT');
