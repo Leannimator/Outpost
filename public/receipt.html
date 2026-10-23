@@ -81,6 +81,7 @@
         ${o.items.map((i) => `<div class="line"><span>${i.quantity > 1 ? i.quantity + ' × ' : ''}${esc(i.name)}${(i.custom || []).map((c) => `<br><small class="muted">${esc(c.label)}: ${esc(c.value)}</small>`).join('')}</span><span>${fmt(i.unit_price_cents * i.quantity)}</span></div>`).join('')}<hr>
         <div class="line"><span>Subtotal</span><span>${fmt(o.subtotal_cents)}</span></div>
         ${o.discount_cents > 0 ? `<div class="line"><span>Discount${o.discount_code ? ' (' + esc(o.discount_code) + ')' : ''}</span><span>−${fmt(o.discount_cents)}</span></div>` : ''}
+        ${o.shipping_cents > 0 ? `<div class="line"><span>Shipping</span><span>${fmt(o.shipping_cents)}</span></div>` : ''}
         ${o.tax_cents > 0 ? `<div class="line"><span>Tax</span><span>${fmt(o.tax_cents)}</span></div>` : ''}
         <div class="line"><b>Total</b><b>${fmt(o.total_cents)}</b></div>
         ${o.refunded_cents > 0 ? `<div class="line"><span>Refunded</span><span>−${fmt(o.refunded_cents)}</span></div>` : ''}<hr>

@@ -34,7 +34,7 @@
     OutpostBrand.apply(s); document.title = 'About — ' + s.store_name;
     const links = Object.entries(s.social || {}).filter(([k]) => LABEL[k]);
     $('page').innerHTML = `<h1>About ${esc(s.store_name)}</h1>
-      ${s.about_text ? s.about_text.split(/\n\s*\n/).map((p) => `<p class="abouttext">${esc(p).replace(/\n/g, '<br>')}</p>`).join('') : '<p class="muted">This shop hasn’t added a description yet.</p>'}
+      ${s.about_text ? s.about_text.split(/\n\s*\n/).map((p) => `<p class="abouttext">${esc(p).replace(/\n/g, '<br>')}</p>`).join('') : '<p class="muted">This shop hasn’t filled in its About page yet. Check back soon!</p>'}
       ${s.handmade_statement ? `<div class="made"><b>Made by hand</b><br>${esc(s.handmade_statement)}</div>` : ''}
       ${links.length ? `<h2 class="aboutfind">Find us</h2><div class="sociallist">${links.map(([k, v]) => `<a class="social" href="${esc(k === 'email' ? 'mailto:' + v : v)}" ${k === 'email' ? '' : 'target="_blank" rel="noopener noreferrer me"'}>${LABEL[k]}</a>`).join('')}</div>` : ''}`;
   }).catch(() => { $('page').innerHTML = '<p>Couldn’t load this page. Please try again.</p>'; });

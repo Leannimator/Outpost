@@ -178,7 +178,92 @@ function refundPolicy() {
   return { preset, days, custom, text };
 }
 const shipDays = () => { const n = parseInt(getSetting('ship_days', '0'), 10); return Number.isFinite(n) && n >= 0 ? n : 0; };
-const reviewsOn = () => getSetting('reviews_on', '1') === '1';
+const reviewsOn = () => true; /* reviews are always on: verified buyers only, and hidden ones are counted publicly */
+// ---------- shipping, tax by address, links, policies ----------
+const US_STATES = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
+const CA_PROVINCES = new Set('AB BC MB NB NL NS NT NU ON PE QC SK YT'.split(' '));
+const codeList = (s) => String(s || '').toUpperCase().split(/[\s,]+/).filter(Boolean);
+const taxMode = () => (getSetting('tax_mode', 'flat') === 'stripe' ? 'stripe' : 'flat');
+const taxStates = () => codeList(getSetting('tax_states', ''));
+const shippingCfg = () => {
+  try {
+    const o = JSON.parse(getSetting('shipping_json', ''));
+    if (o && typeof o === 'object' && Array.isArray(o.regions)) return { on: !!o.on, regions: o.regions, free_over_cents: Math.max(0, parseInt(o.free_over_cents, 10) || 0) };
+  } catch { /* none saved */ }
+  return { on: false, regions: [], free_over_cents: 0 };
+};
+// Online checkout asks for an address first whenever shipping or tax depends on where the buyer is.
+const needsAddress = () => shippingCfg().on || taxMode() === 'stripe' || taxStates().length > 0;
+
+function cleanAddress(a) {
+  a = a && typeof a === 'object' ? a : {};
+  const f = (k, n) => String(a[k] == null ? '' : a[k]).trim().slice(0, n);
+  const country = a.country === 'CA' ? 'CA' : 'US';
+  const out = { email: f('email', 200), name: f('name', 100), country, line1: f('line1', 120), line2: f('line2', 120), city: f('city', 80), state: f('state', 2).toUpperCase(), zip: f('zip', 10).toUpperCase() };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(out.email)) throw new HttpError(400, 'Please enter a valid email address.');
+  if (!out.name) throw new HttpError(400, 'Please enter your name.');
+  if (!out.line1 || !out.city) throw new HttpError(400, 'Please fill in your address and city.');
+  if (!(country === 'CA' ? CA_PROVINCES : US_STATES).has(out.state)) throw new HttpError(400, 'Please choose your ' + (country === 'CA' ? 'province' : 'state') + '.');
+  if (country === 'US' ? !/^\d{5}(-\d{4})?$/.test(out.zip) : !/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/.test(out.zip)) throw new HttpError(400, 'That ' + (country === 'CA' ? 'postal code' : 'ZIP code') + ' doesn’t look right.');
+  return out;
+}
+function shippingFor(addr, net) {
+  const cfg = shippingCfg();
+  if (!cfg.on) return { cents: 0, label: '' };
+  const inList = (r) => codeList(r.states).includes(addr.state);
+  const reg = cfg.regions.find((r) => r.country === addr.country && codeList(r.states).length && inList(r)) || cfg.regions.find((r) => r.country === addr.country && !codeList(r.states).length);
+  if (!reg) throw new HttpError(400, 'Sorry, I don’t ship to ' + (addr.country === 'CA' ? 'Canada' : addr.state) + ' yet.');
+  if (cfg.free_over_cents && net >= cfg.free_over_cents) return { cents: 0, label: '(free over $' + (cfg.free_over_cents / 100).toFixed(cfg.free_over_cents % 100 ? 2 : 0) + ')' };
+  return { cents: reg.cents, label: '(' + reg.name + ')' };
+}
+function taxFor(addr, net) {
+  if (taxMode() === 'stripe') return { cents: 0, label: '' };   // Stripe works it out on the payment page
+  const states = taxStates();
+  if (addr.country === 'US' && (!states.length || states.includes(addr.state))) return { cents: Math.round((net * taxRate()) / 100), label: '(' + taxRate() + '%)' };
+  return { cents: 0, label: '(none for this address)' };
+}
+const linksAll = () => { try { const a = JSON.parse(getSetting('links_json', '[]')); return Array.isArray(a) ? a : []; } catch { return []; } };
+const policyObj = () => { try { const o = JSON.parse(getSetting('policy_json', '{}')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
+const SHOP_PAGES = ['store.html', 'auction.html', 'about.html', 'reviews.html'];
+function cleanLinks(inp) {
+  if (!Array.isArray(inp) || inp.length > 40) throw new HttpError(400, 'Too many links');
+  return inp.map((l) => {
+    l = l && typeof l === 'object' ? l : {};
+    const kind = ['link', 'event', 'shop'].includes(l.kind) ? l.kind : 'link';
+    const title = String(l.title || '').trim().slice(0, 80);
+    if (!title) throw new HttpError(400, 'Every link needs a title');
+    let url = String(l.url || '').trim().slice(0, 500);
+    if (kind === 'shop') { if (!SHOP_PAGES.includes(url)) url = 'store.html'; }
+    else if (url) {
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      let u; try { u = new URL(url); } catch { throw new HttpError(400, 'That web address doesn’t look right: ' + url); }
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new HttpError(400, 'Web addresses must start with http or https');
+    } else if (kind === 'link') throw new HttpError(400, 'Add a web address for “' + title + '”');
+    return { kind, title, url, note: String(l.note || '').trim().slice(0, 100), date: kind === 'event' && DATE_RE.test(l.date || '') ? l.date : '', place: kind === 'event' ? String(l.place || '').trim().slice(0, 80) : '', hidden: !!l.hidden };
+  });
+}
+function cleanPolicy(q) {
+  q = q && typeof q === 'object' ? q : {};
+  const t = (k, n) => String(q[k] || '').trim().slice(0, n);
+  return { contact_email: t('contact_email', 120), ship_regions: ['us', 'usca', 'world'].includes(q.ship_regions) ? q.ship_regions : '', ship_note: t('ship_note', 400), governing_law: t('governing_law', 80), privacy_extra: t('privacy_extra', 1500), terms_extra: t('terms_extra', 1500), updated: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) };
+}
+function cleanShipping(b) {
+  b = b && typeof b === 'object' ? b : {};
+  const regions = (Array.isArray(b.regions) ? b.regions : []).slice(0, 12).map((r, i) => {
+    r = r && typeof r === 'object' ? r : {};
+    const name = String(r.name || '').trim().slice(0, 40);
+    if (!name) throw new HttpError(400, 'Every shipping region needs a name');
+    const cents = Math.round(Number(r.cents));
+    if (!(cents >= 0 && cents <= 100000)) throw new HttpError(400, 'Shipping for “' + name + '” should be between $0 and $1,000');
+    const country = r.country === 'CA' ? 'CA' : 'US';
+    const st = codeList(r.states);
+    const valid = country === 'CA' ? CA_PROVINCES : US_STATES;
+    if (st.some((x) => !valid.has(x))) throw new HttpError(400, 'Use two-letter ' + (country === 'CA' ? 'province' : 'state') + ' codes for “' + name + '”, like AK, HI');
+    return { id: String(r.id || 'r' + i).slice(0, 20), name, country, states: st.join(', '), cents };
+  });
+  if (b.on && !regions.length) throw new HttpError(400, 'Add at least one shipping region, or turn shipping off');
+  return { on: !!b.on, regions, free_over_cents: Math.max(0, Math.min(10000000, Math.round(Number(b.free_over_cents) || 0))) };
+}
 const bidCardOn = () => !!stripe && getSetting('bid_card_required', '') === '1';
 const handmadeText = () => getSetting('handmade_statement', '');
 const SOCIALS = ['website', 'instagram', 'tiktok', 'facebook', 'youtube', 'pinterest', 'bluesky', 'threads', 'email'];
@@ -423,8 +508,17 @@ function priceCart(rawItems, code, opts = {}) {
   }
   const disc = findDiscount(code, subtotal);
   const discount = disc ? disc.amount : 0;
-  const tax = calcTax(subtotal - discount);
-  return { lines, subtotal, discount, discount_code: disc ? disc.code : null, tax, total: subtotal - discount + tax };
+  const net = subtotal - discount;
+  let tax = calcTax(net), shipping = 0, shipping_label = '', tax_label = '', address = null;
+  if (opts.online && needsAddress()) {
+    tax = 0;   // not known until we have an address
+    if (opts.address) {
+      address = cleanAddress(opts.address);
+      const sh = shippingFor(address, net); shipping = sh.cents; shipping_label = sh.label;
+      const tx = taxFor(address, net); tax = tx.cents; tax_label = tx.label;
+    }
+  }
+  return { lines, subtotal, discount, discount_code: disc ? disc.code : null, tax, tax_label, shipping, shipping_label, address, total: net + shipping + tax };
 }
 
 const insertOrder = db.prepare(
@@ -466,7 +560,7 @@ function fulfillOrder(orderId, extra = {}) {
     }
     db.prepare(
       `UPDATE orders SET status='paid', customer_email=COALESCE(?, customer_email),
-       shipping_json=COALESCE(?, shipping_json), stripe_payment_intent=COALESCE(?, stripe_payment_intent) WHERE id=?`
+       shipping_json=COALESCE(shipping_json, ?), stripe_payment_intent=COALESCE(?, stripe_payment_intent) WHERE id=?`
     ).run(extra.email || null, extra.shipping ? JSON.stringify(extra.shipping) : null, extra.payment_intent || null, orderId);
     if (order.discount_code) db.prepare('UPDATE discounts SET uses = uses + 1 WHERE code = ?').run(order.discount_code);
   })();
@@ -483,6 +577,14 @@ async function createStripeSession(orderId, priced, { collectShipping = false, c
     quantity: l.quantity,
     price_data: { currency: CURRENCY, unit_amount: l.unit_price_cents, product_data: { name: l.name, ...(l.custom && l.custom.length ? { description: l.custom.map((c) => `${c.label}: ${c.value}`).join('; ').slice(0, 480) } : {}) } },
   }));
+  const autoTax = !!priced.address && taxMode() === 'stripe';
+  if (autoTax) line_items.forEach((li) => { li.price_data.tax_behavior = 'exclusive'; });
+  if (priced.shipping > 0) {
+    line_items.push({
+      quantity: 1,
+      price_data: { currency: CURRENCY, unit_amount: priced.shipping, product_data: { name: 'Shipping', ...(autoTax ? { tax_code: 'txcd_92010001' } : {}) }, ...(autoTax ? { tax_behavior: 'exclusive' } : {}) },
+    });
+  }
   if (priced.tax > 0) {
     line_items.push({
       quantity: 1,
@@ -506,6 +608,18 @@ async function createStripeSession(orderId, priced, { collectShipping = false, c
   };
   if (discounts) params.discounts = discounts;
   if (collectShipping) params.shipping_address_collection = { allowed_countries: ['US', 'CA'] };
+  if (priced.address) {
+    const a = priced.address;
+    const shipTo = { name: a.name, address: { line1: a.line1, line2: a.line2 || undefined, city: a.city, state: a.state, postal_code: a.zip, country: a.country } };
+    if (autoTax) {
+      // Stripe Tax needs to know where the buyer is: give it a customer that already has the address.
+      const cust = await stripe.customers.create({ email: a.email, name: a.name, address: shipTo.address, shipping: shipTo }).catch((e) => { failOrder(); throw e; });
+      params.customer = cust.id;
+      params.automatic_tax = { enabled: true };
+    } else {
+      params.customer_email = a.email;
+    }
+  }
   let session;
   try {
     session = await stripe.checkout.sessions.create(params);
@@ -552,6 +666,10 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
   } else if (event.type === 'checkout.session.completed' && orderId && s.payment_status === 'paid') {
     const addr = s.shipping_details || s.collected_information?.shipping_details || null;
     fulfillOrder(orderId, { email: s.customer_details?.email, shipping: addr, payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null });
+    if (s.automatic_tax && s.automatic_tax.enabled && s.total_details && Number.isInteger(s.amount_total)) {
+      // Stripe Tax worked out the tax: record the real amounts on the order.
+      db.prepare("UPDATE orders SET tax_cents=?, total_cents=? WHERE id=? AND channel='online'").run(s.total_details.amount_tax || 0, s.amount_total, orderId);
+    }
   } else if (event.type === 'checkout.session.expired' && orderId) {
     // Auction orders stay pending: the winner can come back to the same payment link and start a fresh page.
     db.prepare(`UPDATE orders SET status='canceled' WHERE id=? AND status='pending' AND channel != 'auction'`).run(orderId);
@@ -560,6 +678,9 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
 });
 
 app.use(express.json());
+// Short, shareable addresses: yourshop.com/links goes in your Instagram bio.
+const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html' };
+for (const [route, file] of Object.entries(CLEAN_PAGES)) app.get(route, (req, res) => res.sendFile(path.join(__dirname, 'public', file)));
 app.get('/theme.css', (req, res) => {
   res.set('Content-Type', 'text/css; charset=utf-8');
   res.set('Cache-Control', 'no-cache');
@@ -614,6 +735,8 @@ const settingsPayload = () => ({
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
   handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: socialLinks(), ship_days: shipDays(), reviews_on: reviewsOn(),
   bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '') === '1', stripe_ready: !!stripe,
+  links: linksAll().filter((l) => !l.hidden).map(({ hidden, ...l }) => l), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1',
+  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_states: taxStates().join(', '),
   ...brandSettings(),
 });
 app.get('/api/settings', (req, res) => { res.json(settingsPayload()); });
@@ -626,12 +749,12 @@ app.get('/api/products', (req, res) => {
 // Price a cart (with an optional discount code) without creating anything.
 function quoteWithCodeGuard(req) {
   if (req.body.code && rlCount('code:' + req.ip, 10 * 60e3) >= 10) { logSecurity('code_guessing', req); throw new HttpError(429, 'Too many code attempts. Try again in a few minutes.'); }
-  try { return priceCart(req.body.items, req.body.code, { limits: true }); }
+  try { return priceCart(req.body.items, req.body.code, { limits: true, online: true, address: req.body.address }); }
   catch (e) { if (req.body.code && e instanceof HttpError && /discount code/.test(e.message)) rlAdd('code:' + req.ip); throw e; }
 }
 app.post('/api/quote', h(async (req, res) => {
   const p = quoteWithCodeGuard(req);
-  res.json({ subtotal_cents: p.subtotal, discount_cents: p.discount, discount_code: p.discount_code, tax_cents: p.tax, total_cents: p.total });
+  res.json({ subtotal_cents: p.subtotal, discount_cents: p.discount, discount_code: p.discount_code, tax_cents: p.tax, tax_label: p.tax_label, shipping_cents: p.shipping, shipping_label: p.shipping_label, total_cents: p.total });
 }));
 
 // Online checkout -> Stripe-hosted page (card data never touches your server)
@@ -641,10 +764,17 @@ app.post('/api/checkout', h(async (req, res) => {
   if (rlCount('co1:' + req.ip, 60e3) >= 3 || rlCount('co2:' + req.ip, 3600e3) >= 12 || rlCount('coall', 3600e3) >= 150) {
     logSecurity('checkout_rate', req); throw new HttpError(429, 'Too many checkout attempts. Please wait a few minutes and try again.');
   }
+  if (needsAddress() && !req.body.address) throw new HttpError(400, 'Please enter your delivery address first.');
   const priced = quoteWithCodeGuard(req);
   rlAdd('co1:' + req.ip); rlAdd('co2:' + req.ip); rlAdd('coall');
   const orderId = createOrder('online', 'card', 'pending', priced);
-  const session = await createStripeSession(orderId, priced, { collectShipping: true });
+  const a = priced.address;
+  if (a) {
+    // The address was entered in Outpost's own checkout and Stripe never asks again, so shipping and tax can't be changed on the payment page.
+    db.prepare('UPDATE orders SET shipping_cents=?, shipping_json=?, customer_email=?, tax_state=? WHERE id=?').run(
+      priced.shipping, JSON.stringify({ name: a.name, address: { line1: a.line1, line2: a.line2, city: a.city, state: a.state, postal_code: a.zip, country: a.country } }), a.email, a.state, orderId);
+  }
+  const session = await createStripeSession(orderId, priced, { collectShipping: !a });
   res.json({ url: session.url });
 }));
 
@@ -759,7 +889,7 @@ app.get('/api/receipt/:id', (req, res) => {
   const items = db.prepare('SELECT name, unit_price_cents, quantity, custom_json FROM order_items WHERE order_id=?').all(o.id).map((i) => ({ name: i.name, unit_price_cents: i.unit_price_cents, quantity: i.quantity, custom: parseCustom(i) }));
   res.json({
     id: o.id, created_at: o.created_at, channel: o.channel, payment_method: o.payment_method,
-    status: o.status, subtotal_cents: o.subtotal_cents, tax_cents: o.tax_cents, total_cents: o.total_cents,
+    status: o.status, subtotal_cents: o.subtotal_cents, shipping_cents: o.shipping_cents || 0, tax_cents: o.tax_cents, total_cents: o.total_cents,
     tax_rate: o.subtotal_cents - o.discount_cents > 0 ? (o.tax_cents / (o.subtotal_cents - o.discount_cents)) * 100 : 0,
     discount_cents: o.discount_cents, discount_code: o.discount_code,
     fulfillment: o.fulfillment, tracking_number: o.tracking_number, carrier: o.carrier, shipped_at: o.shipped_at,
@@ -793,7 +923,18 @@ app.get('/api/admin/status', requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
+  const { links, links_intro, mailing_list_on, policy, shipping, tax_mode, tax_states, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
+  if (links !== undefined) setSetting('links_json', JSON.stringify(cleanLinks(links)));
+  if (links_intro !== undefined) setSetting('links_intro', String(links_intro).trim().slice(0, 200));
+  if (mailing_list_on !== undefined) setSetting('mailing_list_on', mailing_list_on ? '1' : '');
+  if (policy !== undefined) setSetting('policy_json', JSON.stringify(cleanPolicy(policy)));
+  if (shipping !== undefined) setSetting('shipping_json', JSON.stringify(cleanShipping(shipping)));
+  if (tax_mode !== undefined) setSetting('tax_mode', tax_mode === 'stripe' ? 'stripe' : 'flat');
+  if (tax_states !== undefined) {
+    const st = codeList(tax_states);
+    if (st.some((x) => !US_STATES.has(x))) throw new HttpError(400, 'Use two-letter state codes, like WA or WA, OR');
+    setSetting('tax_states', st.join(', '));
+  }
   if (tax_rate !== undefined) {
     const n = Number(tax_rate);
     if (!Number.isFinite(n) || n < 0 || n > 30) throw new HttpError(400, 'Tax rate must be between 0 and 30');
@@ -863,7 +1004,6 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
     if (!Number.isInteger(n) || n < 0 || n > 90) throw new HttpError(400, 'Shipping time must be 0 to 90 days (0 turns it off)');
     setSetting('ship_days', n);
   }
-  if (reviews_on !== undefined) setSetting('reviews_on', reviews_on ? '1' : '0');
   if (bid_card_required !== undefined) {
     if (bid_card_required && !stripe) throw new HttpError(400, 'Add your Stripe keys first. A card can only be saved through Stripe.');
     setSetting('bid_card_required', bid_card_required ? '1' : '');
@@ -871,8 +1011,44 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
   if (refund_text !== undefined) setSetting('refund_text', String(refund_text).trim().slice(0, 1500));
   if (break_on !== undefined) setSetting('break_on', break_on ? '1' : '');
   if (break_message !== undefined) setSetting('break_message', String(break_message).trim().slice(0, 200));
-  res.json({ ok: true, ...settingsPayload() });
+  res.json({ ok: true, ...settingsPayload(), links_all: linksAll() });
 }));
+
+app.get('/api/admin/links', requireAdmin, (req, res) => {
+  res.json({ links: linksAll(), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1' });
+});
+
+// ---------- email list (download as CSV and import into your own email service; Outpost sends no email) ----------
+const subscribeLimit = (req) => {
+  if (isBlocked('ip', req.ip)) { logSecurity('blocked_ip', req, 'subscribe'); throw new HttpError(403, GENERIC_REJECT); }
+  if (rlCount('sub1:' + req.ip, 3600e3) >= 8 || rlCount('suball', 3600e3) >= 300) { logSecurity('subscribe_rate', req); throw new HttpError(429, 'Too many tries. Please wait a bit and try again.'); }
+  rlAdd('sub1:' + req.ip); rlAdd('suball');
+};
+app.post('/api/subscribe', h(async (req, res) => {
+  if (getSetting('mailing_list_on', '') !== '1') throw new HttpError(404, 'The email list is not open right now.');
+  if (req.body.website) return res.json({ ok: true });   // honeypot: pretend it worked
+  subscribeLimit(req);
+  const email = String(req.body.email || '').trim().toLowerCase().slice(0, 200);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Please enter a valid email address');
+  if (req.body.consent !== true) throw new HttpError(400, 'Please tick the box so we know you want emails');
+  const source = String(req.body.source || 'links').replace(/[^a-z0-9_-]/gi, '').slice(0, 20) || 'links';
+  db.prepare('INSERT INTO subscribers (email, source, created_at, unsubscribed) VALUES (?,?,?,0) ON CONFLICT(email) DO UPDATE SET unsubscribed=0').run(email, source, Date.now());
+  res.json({ ok: true });
+}));
+app.get('/api/admin/subscribers', requireAdmin, (req, res) => {
+  res.json(db.prepare('SELECT id, email, source, created_at, unsubscribed FROM subscribers ORDER BY created_at DESC, id DESC').all());
+});
+app.get('/api/admin/subscribers.csv', requireAdmin, (req, res) => {
+  const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const rows = db.prepare('SELECT email, source, created_at, unsubscribed FROM subscribers ORDER BY created_at, id').all();
+  const lines = ['email,joined,source,status'].concat(rows.map((r) => [q(r.email), new Date(r.created_at).toISOString().slice(0, 10), q(r.source), r.unsubscribed ? 'unsubscribed' : 'subscribed'].join(',')));
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.send(lines.join('\n') + '\n');
+});
+app.delete('/api/admin/subscribers/:id', requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM subscribers WHERE id=?').run(Number(req.params.id) || 0);
+  res.json({ ok: true });
+});
 
 app.get('/api/admin/products', requireAdmin, (req, res) => {
   res.json(db.prepare('SELECT * FROM products ORDER BY name').all().map((p) => shapeProduct(p, true)));
@@ -1202,11 +1378,11 @@ app.get('/api/admin/customers', requireAdmin, (req, res) => {
 app.get('/api/admin/orders.csv', requireAdmin, (req, res) => {
   const q = (v) => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
   const rows = db.prepare("SELECT * FROM orders WHERE status IN ('paid','refunded') ORDER BY id").all();
-  const lines = [['Order', 'Date', 'Channel', 'Payment', 'Status', 'Subtotal', 'Discount', 'Discount code', 'Tax', 'Total', 'Refunded', 'Customer email', 'Fulfillment', 'Tracking', 'Items'].join(',')];
+  const lines = [['Order', 'Date', 'Channel', 'Payment', 'Status', 'Subtotal', 'Discount', 'Discount code', 'Shipping', 'Tax', 'Total', 'Refunded', 'Customer email', 'Fulfillment', 'Tracking', 'Items'].join(',')];
   for (const o of rows) {
     const items = db.prepare('SELECT name, quantity FROM order_items WHERE order_id=?').all(o.id).map((i) => `${i.quantity}x ${i.name}`).join('; ');
     const m = (c) => (c / 100).toFixed(2);
-    lines.push([o.id, o.created_at, o.channel, o.payment_method, o.status, m(o.subtotal_cents), m(o.discount_cents), o.discount_code, m(o.tax_cents), m(o.total_cents), m(o.refunded_cents), o.customer_email, o.fulfillment, o.tracking_number, items].map(q).join(','));
+    lines.push([o.id, o.created_at, o.channel, o.payment_method, o.status, m(o.subtotal_cents), m(o.discount_cents), o.discount_code, m(o.shipping_cents || 0), m(o.tax_cents), m(o.total_cents), m(o.refunded_cents), o.customer_email, o.fulfillment, o.tracking_number, items].map(q).join(','));
   }
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.send(lines.join('\n') + '\n');

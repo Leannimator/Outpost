@@ -58,6 +58,7 @@ body { overflow-wrap: anywhere; }
 <header>
   <h1>Outpost: start here</h1>
   <p class="lead">This guide takes you from “I downloaded it” to “my shop is online and I can take a payment.” No coding. Go one step at a time and don’t skip ahead.</p>
+<p class="note" style="margin:14px 0 0;padding:12px 14px;border:1px solid #e3d9c8;border-radius:12px;background:#fffaf0"><b>A note from the maker.</b> I built Outpost for my own shop, to the best of my ability. It isn’t perfect, and I can’t promise it’s free of bugs, security problems or legal gaps. It’s free to use, but <b>use it at your own risk.</b> You run your own shop, so you’re responsible for your payments, taxes, customers’ information and the laws where you live. I can’t give support or legal advice.</p>
 </header>
 
 <nav class="toc">
@@ -140,7 +141,7 @@ body { overflow-wrap: anywhere; }
 
 <div class="step"><div class="num">1</div><div>
   <h3>Make your own copy on GitHub</h3>
-  <p>Open the Outpost page on GitHub (<code>github.com/OWNER/outpost</code>) and click <b>Fork</b>, top right, then <b>Create fork</b>. That puts your own copy of Outpost in your GitHub account. You’re not changing anyone else’s.</p>
+  <p>Open the Outpost page on GitHub (<code>github.com/Leannimator/Outpost</code>) and click <b>Fork</b>, top right, then <b>Create fork</b>. That puts your own copy of Outpost in your GitHub account. You’re not changing anyone else’s.</p>
 </div></div>
 
 <div class="step"><div class="num">2</div><div>
@@ -227,7 +228,9 @@ body { overflow-wrap: anywhere; }
 <div class="step"><div class="num">1</div><div>
   <h3>Settings: the basics</h3>
   <ul>
-    <li><b>Your shop:</b> shop name (appears on receipts) and sales tax rate. Check your local rules for what to charge.</li>
+    <li><b>Your shop:</b> shop name (appears on receipts), your sales tax rate, and how online tax is worked out. Register (in-person) sales always use your rate. For online orders you can either charge your rate only to buyers in the states you list (for example <code>WA</code>), or turn on Stripe Tax so Stripe finds the exact rate for each address (about 0.5% per sale, only where you’re registered). Which states you must collect in depends on where you’ve passed their sales limits, so ask an accountant if you’re unsure.</li>
+    <li><b>Shipping:</b> add regions with a flat price each (for example United States $5, Alaska &amp; Hawaii $9, Canada $12), and optionally free shipping over an amount. At checkout buyers enter their address first, then see shipping and tax before paying. Anyone outside every region you list can’t check out.</li>
+    <li><b>Policies:</b> fill in your contact email and a few details. Outpost builds your <b>Privacy Policy</b> and <b>Terms of Service</b> pages for you (<code>/privacy</code> and <code>/terms</code>). Stripe asks for these two addresses.</li>
     <li><b>Refund policy:</b> pick one. Buyers see it at checkout and it’s saved with each order, so a later change doesn’t rewrite old promises.</li>
     <li><b>Trust and reviews:</b> write your “made by hand” statement, and set how many days you usually take to ship. Orders past that are flagged for you as <b>Running late</b>.</li>
     <li><b>Your look:</b> pick a preset palette or your own custom colors, set text colors (one color for everything, or separate colors for regular text, headings, links and button text), and add your own artwork. Colors that are too hard to read can’t be saved.</li>
@@ -245,6 +248,12 @@ body { overflow-wrap: anywhere; }
 </div></div>
 
 <div class="step"><div class="num">3</div><div>
+  <h3>Your links page and email list (optional)</h3>
+  <p><b>Links</b> in the staff menu builds a one-page “link in bio” for Instagram and other places: buttons to your other sites, upcoming events and markets, and shortcuts to your shop. It lives at <code>/links</code> on your address. Turn on the sign-up box there to collect an email list.</p>
+  <p><b>Customers → Email list</b> shows who signed up (only people who ticked the consent box). Press <b>Download CSV</b> and import the file into whichever email service you use. Outpost never sends email itself. To remove someone, use the Remove button next to their address, and remove them from your email service too.</p>
+</div></div>
+
+<div class="step"><div class="num">4</div><div>
   <h3>Look at your shop as a buyer</h3>
   <p>Open <code>/store.html</code> on your address in another window. Add something to the cart, check out with the test card, and look at your receipt.</p>
 </div></div>
@@ -340,11 +349,23 @@ body { overflow-wrap: anywhere; }
 
 <h2 id="legal">Terms, privacy and being honest with buyers</h2>
 <ul>
-  <li><b>Terms and privacy.</b> The <code>docs</code> folder has a <b>Terms of Sale</b> and a <b>Privacy Notice</b> template. Edit the [bracketed] parts, then paste them on a page on your own website and link them from your shop. These are starting points, not legal advice. Have someone qualified look at them, especially if you sell in the EU, UK or California.</li>
+  <li><b>Terms and privacy.</b> Outpost builds a <b>Privacy Policy</b> and <b>Terms of Service</b> page for you (at <code>/privacy.html</code> and <code>/terms.html</code>, linked from the bottom of every shop page). Fill in <b>Settings → Policies</b> and they update themselves. Stripe asks for these two web addresses when you set up payments. The wording is a plain-language starting point, not legal advice. Read it once, and have someone qualified look at it if you sell in the EU, UK or California.</li>
   <li><b>Sales tax.</b> Outpost applies one flat rate. Whether you must collect tax, and how much, depends on where you and your buyers are. Check with your state or country’s tax office or an accountant.</li>
   <li><b>“Made by hand.”</b> Outpost can’t check how anything was made, and no software can. The project’s promise is a community norm: it’s built for people who make their own work. Your “made by hand” statement, process notes and verified reviews are how you earn trust. If you sell something that isn’t handmade, say so plainly.</li>
   <li><b>What Outpost does to protect buyers.</b> Your refund policy is saved on every order; you can’t quietly change it afterward. Reviews can only come from paid orders, and hidden reviews are counted publicly. Late orders are flagged to you.</li>
 </ul>
+
+<h3 id="fyi-data">FYI: if someone asks you to delete their information</h3>
+<ul>
+  <li><b>You don’t have to panic or have it all figured out.</b> Someone emails you (the address in Settings → Policies) and asks what you have on them or asks you to delete it. Reply in plain words. Nobody expects a lawyer’s answer.</li>
+  <li><b>Email list:</b> open <b>Customers → Email list</b> and remove them. Done. If you already imported the list into another email service, remove them there too.</li>
+  <li><b>Orders:</b> most places require you to keep sales records for tax and accounting, often for several years. You can usually say no to deleting those, and explain why. Your privacy page already says so. Check how long your own country or state requires.</li>
+  <li><b>Card details:</b> you never have them. Stripe holds those, so a buyer who wants them gone asks Stripe.</li>
+  <li><b>Auctions and reviews:</b> bids and reviews are tied to orders, so they follow the same rule as orders. You can hide a review from the public if the person asks.</li>
+  <li><b>Reply promptly.</b> Laws in some places (the EU, UK and California) give people a deadline, often about a month. Answering honestly and quickly matters more than the exact wording.</li>
+  <li><b>Where to put this note:</b> keep a one-line copy of your answer somewhere handy so you can reuse it.</li>
+</ul>
+
 
 <footer>
   <p>Outpost is free software under the MIT license (see <code>LICENSE</code>). It comes with no warranty, and you are responsible for your shop, your payments and your legal obligations. Hosting and Stripe prices and screens change; if a step here doesn’t match what you see, trust what’s on screen and the companies’ own help pages (render.com/docs, docs.stripe.com).</p>

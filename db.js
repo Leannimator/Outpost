@@ -189,6 +189,15 @@ addCol('order_items', 'variant_id', 'INTEGER');
 addCol('order_items', 'custom_json', 'TEXT');
 addCol('products', 'option_label', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'custom_fields', "TEXT NOT NULL DEFAULT '[]'");
+addCol('orders', 'shipping_cents', 'INTEGER NOT NULL DEFAULT 0');
+addCol('orders', 'tax_state', "TEXT NOT NULL DEFAULT ''");
+db.exec(`CREATE TABLE IF NOT EXISTS subscribers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  source TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  unsubscribed INTEGER NOT NULL DEFAULT 0
+)`);
 addCol('bidders', 'stripe_customer_id', 'TEXT');
 addCol('bidders', 'stripe_payment_method', 'TEXT');
 addCol('bidders', 'card_brand', 'TEXT');

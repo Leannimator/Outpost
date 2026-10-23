@@ -29,7 +29,7 @@
       <div class="hp" aria-hidden="true"><label>Leave this empty <input id="website" name="website" tabindex="-1" autocomplete="off"></label></div>
       <div id="captcha" hidden></div>
       <button class="btn btn-primary btn-block" id="checkout" disabled>Checkout</button>
-      <p class="hint center">Secure payment by card on the next page. Shipping address is collected there.</p>
+      <p class="hint" id="chint">Secure payment by card on the next page. Shipping address is collected there.</p>
       <div id="status"></div>
       <p class="hint" id="policy"></p>
     </div>
@@ -74,8 +74,9 @@
 
   const stars = (n) => `<span class="stars" aria-label="${n} out of 5">${'★'.repeat(Math.round(n))}<span class="off">${'★'.repeat(5 - Math.round(n))}</span></span>`;
   function paintReviews(rv) {
-    if (!rv || !rv.on || !rv.count) return;
+    if (!rv || !rv.on) return;
     $('ratingline').hidden = false;
+    if (!rv.count) { $('ratingline').innerHTML = `${stars(0)} <span>· 0 reviews so far</span>`; return; }
     $('ratingline').innerHTML = `${stars(rv.avg)} <b>${rv.avg.toFixed(1)}</b> <span>· ${rv.count} verified review${rv.count === 1 ? '' : 's'}</span>`;
   }
   fetch('/api/reviews').then((r) => r.json()).then(paintReviews).catch(() => {});
@@ -137,14 +138,17 @@
     } catch { quote = null; }
     paintSums();
   }
+  const needsAddress = () => !!(settings.shipping && settings.shipping.on) || settings.tax_mode === 'stripe' || !!settings.tax_states;
   function paintSums() {
     let sub = 0;
     for (const [key, k] of cart) sub += look(key).price * k;
-    const q2 = quote || { subtotal_cents: sub, discount_cents: 0, tax_cents: Math.round(sub * rate / 100), total_cents: sub + Math.round(sub * rate / 100) };
+    const later = needsAddress();
+    const tx = Math.round(sub * rate / 100);
+    const q2 = quote || { subtotal_cents: sub, discount_cents: 0, tax_cents: later ? 0 : tx, total_cents: sub + (later ? 0 : tx) };
     $('sums').innerHTML = `<div class="sum"><span>Subtotal</span><span>${fmt(q2.subtotal_cents)}</span></div>` +
       (q2.discount_cents ? `<div class="sum disc"><span>Discount</span><span>−${fmt(q2.discount_cents)}</span></div>` : '') +
-      (rate > 0 ? `<div class="sum"><span>Tax (${rate}%)</span><span>${fmt(q2.tax_cents)}</span></div>` : '') +
-      `<div class="sum total"><span>Total</span><span>${fmt(q2.total_cents)}</span></div>`;
+      (later ? (cart.size ? '<p class="hint" style="margin:6px 0 0">Shipping and tax are worked out in the next step, from your address.</p>' : '')
+             : (rate > 0 ? `<div class="sum"><span>Tax (${rate}%)</span><span>${fmt(q2.tax_cents)}</span></div>` : '') + `<div class="sum total"><span>Total</span><span>${fmt(q2.total_cents)}</span></div>`);
   }
   function paintCart() {
     const n = [...cart.values()].reduce((a, b) => a + b, 0);
@@ -158,6 +162,7 @@
     }).join('') : '<div class="empty">Your cart is empty</div>';
     $('codebox').hidden = !cart.size || resting;
     $('checkout').disabled = !cart.size || resting;
+    $('chint').textContent = needsAddress() ? 'You’ll enter your address first, then pay securely by card.' : 'Secure payment by card on the next page. Shipping address is collected there.';
     paintSums(); refreshQuote();
   }
   const add = (key) => {
@@ -222,7 +227,111 @@
   $('clear').onclick = () => { cart.clear(); code = ''; $('code').value = ''; $('codemsg').innerHTML = ''; paintCart(); };
   $('apply').onclick = () => { code = $('code').value.trim(); if (!code) { $('codemsg').innerHTML = ''; } refreshQuote(); };
   $('code').onkeydown = (e) => { if (e.key === 'Enter') $('apply').click(); };
+  /* ---------- Multi-step checkout: delivery -> review -> pay ---------- */
+  const US = { AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',DC:'District of Columbia',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming' };
+  const CA = { AB:'Alberta',BC:'British Columbia',MB:'Manitoba',NB:'New Brunswick',NL:'Newfoundland and Labrador',NS:'Nova Scotia',NT:'Northwest Territories',NU:'Nunavut',ON:'Ontario',PE:'Prince Edward Island',QC:'Quebec',SK:'Saskatchewan',YT:'Yukon' };
+  let addr = { email: '', name: '', country: 'US', line1: '', line2: '', city: '', state: '', zip: '' };
+  try { const a = JSON.parse(sessionStorage.getItem('outpost-addr') || 'null'); if (a && typeof a === 'object') addr = { ...addr, ...a }; } catch {}
+  const saveAddr = () => { try { sessionStorage.setItem('outpost-addr', JSON.stringify(addr)); } catch {} };
+  let coq = null;
+
+  function closeCo() { const b = $('coback'); if (b) b.remove(); document.removeEventListener('keydown', coKey); $('checkout').disabled = !cart.size || resting; }
+  const coKey = (e) => { if (e.key === 'Escape') closeCo(); };
+  function shell(step) {
+    let b = $('coback');
+    if (!b) {
+      b = document.createElement('div'); b.className = 'modal-back'; b.id = 'coback';
+      b.innerHTML = '<div class="modal co" role="dialog" aria-modal="true" aria-labelledby="cotitle"><button class="co-x" id="cox" aria-label="Close">×</button><ol class="co-steps" id="costeps"></ol><div id="cobody"></div></div>';
+      document.body.appendChild(b);
+      b.onclick = (e) => { if (e.target === b) closeCo(); };
+      $('cox').onclick = closeCo; document.addEventListener('keydown', coKey);
+    }
+    $('costeps').innerHTML = ['Delivery', 'Review', 'Pay'].map((t, i) => `<li class="${i + 1 === step ? 'on' : i + 1 < step ? 'passed' : ''}"><span>${i + 1 < step ? '✓' : i + 1}</span>${t}</li>`).join('');
+  }
+  const opts = (map, cur) => '<option value="">Choose…</option>' + Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  function openCheckout() {
+    $('checkout').disabled = true; $('status').innerHTML = '';
+    stepDelivery('');
+  }
+  function stepDelivery(err) {
+    shell(1);
+    const regionWord = addr.country === 'CA' ? 'Province' : 'State';
+    $('cobody').innerHTML = `<h2 id="cotitle">Where should it go?</h2>
+      <p class="muted small" style="margin:0 0 14px">Shipping and tax are worked out from this address.</p>
+      <form id="coform" novalidate>
+        <label class="field"><span class="label">Email (for your receipt)</span><input class="input" name="email" type="email" inputmode="email" autocomplete="email" required maxlength="200" value="${esc(addr.email)}"></label>
+        <label class="field"><span class="label">Full name</span><input class="input" name="name" autocomplete="name" required maxlength="100" value="${esc(addr.name)}"></label>
+        <label class="field"><span class="label">Country</span><select class="input" name="country" autocomplete="country"><option value="US"${addr.country === 'US' ? ' selected' : ''}>United States</option><option value="CA"${addr.country === 'CA' ? ' selected' : ''}>Canada</option></select></label>
+        <label class="field"><span class="label">Address</span><input class="input" name="line1" autocomplete="address-line1" required maxlength="120" value="${esc(addr.line1)}"></label>
+        <label class="field"><span class="label">Apartment, suite, etc. (optional)</span><input class="input" name="line2" autocomplete="address-line2" maxlength="120" value="${esc(addr.line2)}"></label>
+        <div class="grid2">
+          <label class="field"><span class="label">City</span><input class="input" name="city" autocomplete="address-level2" required maxlength="80" value="${esc(addr.city)}"></label>
+          <label class="field"><span class="label" id="reglab">${regionWord}</span><select class="input" name="state" autocomplete="address-level1" required>${opts(addr.country === 'CA' ? CA : US, addr.state)}</select></label>
+        </div>
+        <label class="field"><span class="label" id="ziplab">${addr.country === 'CA' ? 'Postal code' : 'ZIP code'}</span><input class="input" name="zip" autocomplete="postal-code" required maxlength="10" value="${esc(addr.zip)}"></label>
+        <div id="coerr">${err ? `<div class="msg err">${esc(err)}</div>` : ''}</div>
+        <button class="btn btn-primary btn-block" id="cogo" type="submit">Continue to review</button>
+        <button class="link-btn co-back" type="button" id="cocancel">Back to cart</button>
+      </form>`;
+    const f = $('coform');
+    f.country.onchange = () => {
+      addr.country = f.country.value; f.state.innerHTML = opts(addr.country === 'CA' ? CA : US, '');
+      $('reglab').textContent = addr.country === 'CA' ? 'Province' : 'State'; $('ziplab').textContent = addr.country === 'CA' ? 'Postal code' : 'ZIP code';
+    };
+    $('cocancel').onclick = closeCo;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(f).entries());
+      addr = { email: (v.email || '').trim(), name: (v.name || '').trim(), country: v.country, line1: (v.line1 || '').trim(), line2: (v.line2 || '').trim(), city: (v.city || '').trim(), state: v.state, zip: (v.zip || '').trim().toUpperCase() };
+      const bad = !/^\S+@\S+\.\S+$/.test(addr.email) ? 'Please enter a valid email address.' : !addr.name ? 'Please enter your name.' : !addr.line1 || !addr.city ? 'Please fill in your address and city.' : !addr.state ? 'Please choose your ' + (addr.country === 'CA' ? 'province' : 'state') + '.'
+        : (addr.country === 'US' ? !/^\d{5}(-\d{4})?$/.test(addr.zip) : !/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/.test(addr.zip)) ? 'That ' + (addr.country === 'CA' ? 'postal code' : 'ZIP code') + ' doesn’t look right.' : '';
+      if (bad) { $('coerr').innerHTML = `<div class="msg err">${esc(bad)}</div>`; return; }
+      saveAddr(); $('cogo').disabled = true; $('cogo').textContent = 'Working it out…';
+      try {
+        const r = await fetch('/api/quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body(), address: addr }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Something went wrong. Please try again.');
+        coq = d; stepReview();
+      } catch (e2) { stepDelivery(e2.message); }
+    };
+    const first = f.querySelector('input:not([value]), input[value=""]'); if (first) first.focus();
+  }
+  function stepReview() {
+    shell(2);
+    const q2 = coq, stripeTax = settings.tax_mode === 'stripe';
+    const lines = [...cart].map(([key, k]) => { const l = look(key); return `<div class="co-line"><span>${esc(l.p.name)}${l.v ? ' (' + esc(l.v.name) + ')' : ''} <span class="muted">× ${k}</span></span><span>${fmt(l.price * k)}</span></div>`; }).join('');
+    $('cobody').innerHTML = `<h2 id="cotitle">Check your order</h2>
+      <div class="co-addr"><div><b>${esc(addr.name)}</b><br>${esc(addr.line1)}${addr.line2 ? ', ' + esc(addr.line2) : ''}<br>${esc(addr.city)}, ${esc(addr.state)} ${esc(addr.zip)}<br>${addr.country === 'CA' ? 'Canada' : 'United States'}<br><span class="muted">${esc(addr.email)}</span></div><button class="link-btn" id="coedit" type="button">Change</button></div>
+      <div class="co-sum">${lines}
+        <div class="co-line sep"><span>Subtotal</span><span>${fmt(q2.subtotal_cents)}</span></div>
+        ${q2.discount_cents ? `<div class="co-line disc"><span>Discount</span><span>−${fmt(q2.discount_cents)}</span></div>` : ''}
+        <div class="co-line"><span>Shipping <span class="muted">${esc(q2.shipping_label || '')}</span></span><span>${q2.shipping_cents ? fmt(q2.shipping_cents) : 'Free'}</span></div>
+        ${stripeTax ? '<div class="co-line"><span>Tax</span><span class="muted">worked out by Stripe on the next page</span></div>' : `<div class="co-line"><span>Tax <span class="muted">${esc(q2.tax_label || '')}</span></span><span>${fmt(q2.tax_cents)}</span></div>`}
+        <div class="co-line total"><span>${stripeTax ? 'Total before tax' : 'Total'}</span><span>${fmt(q2.total_cents)}</span></div>
+      </div>
+      <div id="coerr"></div>
+      <button class="btn btn-primary btn-block" id="copay" type="button">Pay securely with card</button>
+      <p class="hint" style="margin-top:8px">You’ll enter your card on Stripe’s secure page. Your address is already filled in, so it can’t be changed there.</p>
+      <button class="link-btn co-back" type="button" id="coback2">Back</button>`;
+    $('coedit').onclick = () => stepDelivery('');
+    $('coback2').onclick = () => stepDelivery('');
+    $('copay').onclick = async () => {
+      $('copay').disabled = true; $('copay').textContent = 'Opening secure payment…';
+      try {
+        const r = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body(), address: addr, started: loadedAt, website: $('website').value, captcha: captchaToken }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Checkout failed');
+        location.href = d.url;
+      } catch (e) {
+        $('coerr').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('copay').disabled = false; $('copay').textContent = 'Pay securely with card';
+        if (captchaId !== null && window.turnstile) { window.turnstile.reset(captchaId); captchaToken = ''; }
+      }
+    };
+  }
+
   $('checkout').onclick = async () => {
+    if (needsAddress()) return openCheckout();
     $('checkout').disabled = true;
     try {
       const r = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' },

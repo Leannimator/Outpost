@@ -244,10 +244,10 @@ tr:last-child td { border-bottom: 0; }
 
 /* ===== public shop: left column holds brand, cart and your art ===== */
 .shop-app { display: grid; grid-template-columns: clamp(250px, 28vw, 340px) minmax(0, 1fr); min-height: 100vh; }
-.shop-side { background: var(--cream-2); border-right: 1px solid var(--line); padding: 22px 18px; position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
-.shop-brand { display: flex; flex-direction: column; gap: 10px; padding: 4px 6px 0; }
-.shop-brand nav { display: flex; gap: 8px; }
-.shop-brand nav a { text-decoration: none; font-weight: 600; color: var(--ink); padding: 6px 12px; border-radius: 99px; }
+.shop-side { background: var(--cream-2); border-right: 1px solid var(--line); padding: 22px 18px; position: sticky; top: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.shop-brand { display: flex; flex-direction: column; gap: 10px; padding: 4px 6px 0; container-type: inline-size; flex-shrink: 0; }
+.shop-brand nav { display: flex; flex-wrap: nowrap; gap: 2px; min-width: 0; flex-shrink: 0; }
+.shop-brand nav a { text-decoration: none; font-weight: 600; color: var(--ink); padding: 6px clamp(6px, 1.6vw, 10px); border-radius: 99px; font-size: clamp(11px, 6.4cqw, 15px); white-space: nowrap; line-height: 1.2; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .shop-brand nav a.on { background: var(--rose); color: var(--rose-ink); }
 .shop-side .cart { position: static; }
 .shop-side .side-art { margin-top: auto; }
@@ -486,3 +486,28 @@ tr:last-child td { border-bottom: 0; }
 .nav a.ext { margin-top: 10px; border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; padding-top: 14px; }
 .nav a.ext span::after { content: ' ↗'; opacity: .55; }
 @media (max-width: 720px) { .main { padding: 20px 14px 60px; } .nav a.ext { margin-top: 4px; } .nav a.ext span::after { content: ''; } }
+
+.shopfoot{display:flex;gap:16px;flex-wrap:wrap;margin:36px 0 8px;padding-top:14px;border-top:1px solid var(--line);font-size:13px}
+.shopfoot a{color:var(--muted);text-decoration:none}.shopfoot a:hover{text-decoration:underline}
+.legal h1{margin-bottom:4px}.legal h2{font-size:20px;margin:22px 0 6px}.legal p,.legal li{line-height:1.6;overflow-wrap:anywhere}.legal ul{padding-left:20px;margin:6px 0}
+
+/* the left strips never scroll sideways */
+.side, .nav { overflow-x: hidden; max-width: 100%; }
+
+/* ===== multi-step checkout ===== */
+.modal.co { text-align: left; max-width: 520px; position: relative; padding: 24px 22px 22px; }
+.co-x { position: absolute; top: 10px; right: 12px; border: 0; background: transparent; font-size: 26px; line-height: 1; color: var(--muted); cursor: pointer; padding: 6px 10px; }
+.co h2 { font-size: 24px; margin: 4px 0 6px; }
+.co-steps { list-style: none; display: flex; gap: 6px; padding: 0; margin: 0 28px 14px 0; font-size: 13px; font-weight: 600; color: var(--muted); flex-wrap: wrap; }
+.co-steps li { display: flex; align-items: center; gap: 6px; padding-right: 8px; }
+.co-steps li span { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; background: var(--cream-2); font-size: 12px; }
+.co-steps li.on { color: var(--ink); } .co-steps li.on span { background: var(--rose); color: var(--rose-ink); }
+.co-steps li.passed span { background: var(--forest, #2f5d46); color: #fff; }
+.co .field { margin-bottom: 10px; } .co select.input { appearance: auto; }
+.co-back { display: block; margin: 12px auto 0; }
+.co-addr { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 8px 0 12px; overflow-wrap: anywhere; }
+.co-sum { border: 1px solid var(--line); border-radius: 14px; padding: 8px 14px; margin-bottom: 14px; }
+.co-line { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; } .co-line > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.co-line.sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; }
+.co-line.disc { color: var(--forest, #2f5d46); }
+.co-line.total { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; font-weight: 700; font-size: 18px; }

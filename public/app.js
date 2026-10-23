@@ -35,6 +35,7 @@
     search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
     customers: '<circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-3.5 3-5 5.5-5s5 1.5 5.5 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5M18 14.5c1.7.6 2.6 2 2.9 4.5"/>',
     reports: '<path d="M5 20V10M10 20V5M15 20v-8M20 20V8"/>',
+    links: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
     reviews: '<path d="M12 4l2.4 5 5.4.7-4 3.7 1 5.4L12 16.2 7.2 18.8l1-5.4-4-3.7 5.4-.7L12 4z"/>',
   };
   const BADGES = [['', 'No tag'], ['new', 'New'], ['last_chance', 'Last chance'], ['discontinued', 'Discontinued'], ['staff_pick', 'Staff pick']];
@@ -119,7 +120,7 @@
   }
 
   // ---------- shell + router ----------
-  const NAV = [['sell', 'Sell', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['reports', 'Reports', '#/reports'], ['settings', 'Settings', '#/settings']];
+  const NAV = [['sell', 'Sell', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['reports', 'Reports', '#/reports'], ['settings', 'Settings', '#/settings']];
 
   function paintResting() { const el = document.getElementById('resting'); if (el) el.hidden = !settings.break_on; }
   function paintBrand() { if (window.OutpostBrand) OutpostBrand.apply(settings); paintResting(); }
@@ -147,7 +148,7 @@
     [/^#\/sell$/, viewSell, 'sell'], [/^#\/products$/, viewProducts, 'products'],
     [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
-    [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'],
+    [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
     [/^#\/settings$/, viewSettings, 'settings'],
   ];
 
@@ -865,8 +866,11 @@
   // CUSTOMERS
   // =====================================================================
   async function viewCustomers() {
-    const list = await api('/api/admin/customers');
+    const [list, subs] = await Promise.all([api('/api/admin/customers'), api('/api/admin/subscribers')]);
     view().innerHTML = `<div class="topbar"><h1>Customers</h1></div><div id="cmsg"></div>
+      <div class="card" id="elist" style="margin-bottom:18px"><div class="row" style="flex-wrap:wrap;gap:10px;align-items:center"><div><h2 style="font-size:20px;margin:0">Email list</h2><div class="small muted"><b>${subs.filter((x) => !x.unsubscribed).length}</b> subscribed${subs.some((x) => x.unsubscribed) ? ` · ${subs.filter((x) => x.unsubscribed).length} unsubscribed` : ''}. Only people who ticked the box on your links page.</div></div><span class="spacer"></span><button class="btn btn-primary" id="edl" ${subs.length ? '' : 'disabled'}>Download CSV</button></div>
+        ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}${x.unsubscribed ? ' <span class="badge b-canceled">Unsubscribed</span>' : ''}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td><button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
+        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Outpost doesn’t send email itself.</div></div>
       <div class="search">${icon('search')}<input class="input" id="cq" placeholder="Search by name or email…"></div>
       <div class="card tbl-scroll"><table><thead><tr><th>Customer</th><th>Orders</th><th>Spent</th><th>Bids</th><th>Won</th><th>Last order</th><th></th></tr></thead><tbody id="crows"></tbody></table></div>
       <p class="hint">Built from your paid orders and auction bidders. Nothing is shared with anyone.</p>`;
@@ -880,6 +884,13 @@
         `<tr><td colspan="7" class="empty">${list.length ? 'No matches' : 'No customers yet.'}</td></tr>`;
     };
     $('#cq').oninput = paint;
+    if ($('#edl')) $('#edl').onclick = () => download('/api/admin/subscribers.csv', 'email-list.csv').catch((e) => { $('#cmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; });
+    if ($('#erows')) $('#erows').onclick = async (e) => {
+      const b = e.target.closest('[data-esub]'); if (!b) return;
+      if (!confirm('Remove this email from your list?')) return;
+      try { await api('/api/admin/subscribers/' + b.dataset.esub, { method: 'DELETE' }); toast('Removed'); viewCustomers(); }
+      catch (err) { $('#cmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+    };
     $('#crows').onclick = async (e) => {
       const b = e.target.closest('[data-block]'); if (!b) return;
       if (!confirm(`Block ${b.dataset.block}? They won’t be able to check out or bid, and any bids they have on open lots come off the board.`)) return;
@@ -887,6 +898,64 @@
       catch (err) { $('#cmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
     };
     paint();
+  }
+
+
+  // =====================================================================
+  // LINKS (link-in-bio page)
+  // =====================================================================
+  const SHOP_PAGES = [['store.html', 'My shop'], ['auction.html', 'Auctions'], ['about.html', 'About page'], ['reviews.html', 'Reviews']];
+  async function viewLinks() {
+    const [cur, st] = await Promise.all([api('/api/admin/links'), api('/api/admin/status')]);
+    let list = (cur.links || []).map((l) => ({ ...l }));
+    let uid = 1; list.forEach((l) => { l._k = uid++; });
+    const base = (st.base_url || location.origin).replace(/\/$/, '');
+    view().innerHTML = `<div class="topbar"><h1>Links</h1><button class="btn btn-primary" id="lsave">Save</button></div><div id="lmsg"></div>
+      <div class="settings-col"><div style="display:grid;gap:18px;min-width:0">
+        <div class="card"><h2 style="font-size:22px;margin-bottom:6px">Your links page</h2>
+          <p class="muted small" style="margin:0 0 10px">One page to put in your Instagram bio (or anywhere else) that points people to your shop, events, classes, anything.</p>
+          <div class="row" style="flex-wrap:wrap;gap:8px"><input class="input" id="lurl" readonly value="${esc(base + '/links')}" style="flex:1;min-width:200px"><button class="btn" id="lcopy">Copy</button><a class="btn btn-ghost" href="links.html" target="_blank" rel="noopener">Open ↗</a></div>
+          <label class="field" style="margin-top:14px"><span class="label">Short line under your name (optional)</span><input class="input" id="lintro" maxlength="160" placeholder="Linocut prints, ceramics and weekend workshops in Portland" value="${esc(cur.links_intro || '')}"></label>
+          <label class="check"><input type="checkbox" id="lmail" ${cur.mailing_list_on ? 'checked' : ''}> <span>Show an email signup box on this page</span></label>
+          <div class="hint">People who sign up are saved under Customers → Email list, and you can download them to use in any email service.</div></div>
+        <div class="card"><h2 style="font-size:22px;margin-bottom:6px">Buttons and events</h2>
+          <div id="llist"></div>
+          <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn" data-add="link">+ Add a link</button><button class="btn" data-add="event">+ Add an event</button><button class="btn" data-add="shop">+ Add a page from my shop</button></div>
+          <div class="hint">Links show as big buttons in the order below. Events show under “Coming up” with the nearest date first, and disappear on their own after the date has passed.</div></div>
+      </div></div>`;
+    const kindLabel = { link: 'Link', event: 'Event', shop: 'Shop page' };
+    const paint = () => {
+      $('#llist').innerHTML = list.length ? list.map((l, i) => `<div class="lcard" data-k="${l._k}" style="border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:10px;background:var(--cream-2)">
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center"><span class="badge b-live">${kindLabel[l.kind] || 'Link'}</span>${l.hidden ? '<span class="badge b-canceled">Hidden</span>' : ''}<span class="spacer"></span>
+          <button class="btn btn-sm btn-ghost" data-mv="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="btn btn-sm btn-ghost" data-mv="1" ${i === list.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+          <button class="btn btn-sm btn-ghost" data-hide>${l.hidden ? 'Show' : 'Hide'}</button><button class="btn btn-sm btn-ghost" data-del>Delete</button></div>
+        <label class="field" style="margin:10px 0 0"><span class="label small">${l.kind === 'event' ? 'Event name' : 'Button text'}</span><input class="input" data-f="title" maxlength="80" placeholder="${l.kind === 'event' ? 'Craft fair at Pier 6' : 'Spring pottery class'}" value="${esc(l.title)}"></label>
+        ${l.kind === 'shop' ? `<label class="field" style="margin:10px 0 0"><span class="label small">Goes to</span><select class="input" data-f="url">${SHOP_PAGES.map(([u, n]) => `<option value="${u}"${l.url === u ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`
+          : `<label class="field" style="margin:10px 0 0"><span class="label small">${l.kind === 'event' ? 'Web address for tickets or details (optional)' : 'Web address'}</span><input class="input" data-f="url" inputmode="url" autocomplete="off" placeholder="https://" value="${esc(l.url)}"></label>`}
+        ${l.kind === 'event' ? `<div class="grid2" style="margin-top:10px"><label class="field" style="margin:0"><span class="label small">Date</span><input class="input" type="date" data-f="date" value="${esc(l.date || '')}"></label><label class="field" style="margin:0"><span class="label small">Where</span><input class="input" data-f="place" maxlength="80" placeholder="Seattle Center" value="${esc(l.place || '')}"></label></div>` : ''}
+        <label class="field" style="margin:10px 0 0"><span class="label small">Small note under it (optional)</span><input class="input" data-f="note" maxlength="100" placeholder="${l.kind === 'event' ? '10am to 4pm, booth 12' : 'Starts March 4, 6 spots left'}" value="${esc(l.note || '')}"></label></div>`).join('') : '<p class="muted" style="margin:10px 0 0">Nothing here yet. Add your first link below.</p>';
+    };
+    paint();
+    const find = (el) => list.find((l) => l._k === Number(el.closest('[data-k]').dataset.k));
+    $('#llist').oninput = (e) => { const f = e.target.dataset.f; if (f) find(e.target)[f] = e.target.value; };
+    $('#llist').onclick = (e) => {
+      const card = e.target.closest('[data-k]'); if (!card) return;
+      const l = find(e.target), i = list.indexOf(l);
+      if (e.target.closest('[data-del]')) { list.splice(i, 1); paint(); }
+      else if (e.target.closest('[data-hide]')) { l.hidden = !l.hidden; paint(); }
+      else if (e.target.closest('[data-mv]')) { const j = i + Number(e.target.closest('[data-mv]').dataset.mv); if (j >= 0 && j < list.length) { [list[i], list[j]] = [list[j], list[i]]; paint(); } }
+    };
+    document.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => { const kind = b.dataset.add; list.push({ _k: uid++, kind, title: '', url: kind === 'shop' ? 'store.html' : '', note: '', date: '', place: '', hidden: false }); paint(); const t = document.querySelector('.lcard:last-child [data-f="title"]'); if (t) t.focus(); }; });
+    $('#lcopy').onclick = async () => { try { await navigator.clipboard.writeText($('#lurl').value); toast('Address copied'); } catch { $('#lurl').select(); } };
+    $('#lsave').onclick = async () => {
+      try {
+        const clean = list.map(({ _k, ...l }) => l);
+        const r = await put('/api/admin/settings', { links: clean, links_intro: $('#lintro').value, mailing_list_on: $('#lmail').checked });
+        settings = { ...settings, links: r.links, links_intro: r.links_intro, mailing_list_on: r.mailing_list_on };
+        list = (r.links_all || []).map((l) => ({ ...l, _k: uid++ })); paint();
+        $('#lmsg').innerHTML = '<div class="msg">Saved. Your links page is up to date.</div>'; window.scrollTo(0, 0);
+      } catch (e) { $('#lmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; window.scrollTo(0, 0); }
+    };
   }
 
   // =====================================================================
@@ -1082,6 +1151,8 @@
     settings = cur;
     const base = st.base_url;
     const rp = cur.refund_policy || { preset: '', days: 14, custom: '', text: '' };
+    const pol = cur.policy || {};
+    let ship = JSON.parse(JSON.stringify(cur.shipping || { on: false, regions: [], free_over_cents: 0 }));
     const card = (title, inner) => `<div class="card"><h2 style="font-size:22px;margin-bottom:14px">${title}</h2>${inner}</div>`;
     view().innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
@@ -1090,7 +1161,10 @@
           ${card('Your shop', `
             <label class="field"><span class="label">Shop name (shown on receipts)</span><input class="input" id="sname" value="${esc(cur.store_name)}"></label>
             <label class="field"><span class="label">Sales tax rate (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}">
-              <div class="hint">Added to register sales, online orders and auction wins. Use 0 for no tax. Check your local rules.</div></label>
+              <div class="hint">Always added to register (in-person) sales. Use 0 for no tax. Check your local rules.</div></label>
+            <label class="field"><span class="label">Online orders: how is tax worked out?</span><select class="input" id="staxm"><option value="flat"${cur.tax_mode === 'stripe' ? '' : ' selected'}>My rate above, for buyers in the states I list</option><option value="stripe"${cur.tax_mode === 'stripe' ? ' selected' : ''}>Let Stripe work it out (Stripe Tax)</option></select>
+              <div class="hint">Stripe Tax finds the exact rate for each address and costs about 0.5% per sale where you’re registered. Turn it on in your Stripe dashboard first.</div></label>
+            <label class="field" id="staxstw"><span class="label">Charge tax to buyers in these states</span><input class="input" id="staxst" maxlength="60" placeholder="WA" value="${esc(cur.tax_states || '')}"><div class="hint">Use state codes with commas, like <b>WA</b> or <b>WA, OR</b>. Leave blank to charge everyone. Which states you must collect in depends on where you’ve passed their sales limits. Ask an accountant if you’re not sure.</div></label>
             <div class="grid2">
               <label class="field"><span class="label">Low-stock alert at</span><input class="input" id="slow" inputmode="numeric" value="${esc(cur.low_stock)}"><div class="hint">Shows “Low” on Products and Reports.</div></label>
               <label class="field"><span class="label">Max per item, per order</span><input class="input" id="sqty" inputmode="numeric" value="${esc(cur.max_qty)}"><div class="hint">Stops bulk buying. 0 means no limit.</div></label>
@@ -1116,7 +1190,6 @@
               <div class="hint">Shown at the bottom of your shop. It’s your public promise to buyers. Leave it blank to show nothing.</div></label>
             <label class="field"><span class="label">I usually ship within (days)</span><input class="input" id="shipd" inputmode="numeric" value="${esc(cur.ship_days || 0)}">
               <div class="hint">Shown to buyers. Orders still unshipped after this many days are flagged for you. 0 turns it off.</div></label>
-            <label class="check"><input type="checkbox" id="revon" ${cur.reviews_on ? 'checked' : ''}> <span>Let verified buyers leave reviews</span></label>
             <div class="hint">Only people with a real paid order can review, once per order, with a “Verified purchase” label. You can reply to any review and hide abusive ones. Shoppers see how many are hidden.</div>
             <button class="btn btn-primary mt" id="tsave">Save</button><div id="tmsg"></div>`)}
           ${card('Refund policy', `
@@ -1127,6 +1200,27 @@
             <div class="hint">Shown to buyers at checkout and on their receipt. Buyers are never charged a fee by Outpost. You do refunds yourself from Orders → Manage.</div>
             <div class="msg" id="rprev" style="margin-top:8px"></div>
             <button class="btn btn-primary mt" id="rsave">Save policy</button><div id="rmsg"></div>`)}
+          ${card('Shipping', `
+            <label class="check"><input type="checkbox" id="shon" ${ship.on ? 'checked' : ''}> <span>Charge for shipping online</span></label>
+            <p class="muted small" style="margin:6px 0 12px">Buyers enter their address in the checkout, and the shipping fee for their region is added. A buyer outside every region below can’t check out.</p>
+            <div id="shiprows"></div>
+            <div class="row" style="flex-wrap:wrap;gap:8px;margin:8px 0 14px"><span class="muted small" style="align-self:center">Add:</span>
+              <button class="btn btn-ghost" type="button" data-addreg="US">United States</button>
+              <button class="btn btn-ghost" type="button" data-addreg="AKHI">Alaska &amp; Hawaii</button>
+              <button class="btn btn-ghost" type="button" data-addreg="CA">Canada</button>
+              <button class="btn btn-ghost" type="button" data-addreg="custom">Other region</button></div>
+            <label class="field"><span class="label">Free shipping when the order is over (optional)</span><input class="input" id="shfree" inputmode="decimal" placeholder="75.00" value="${ship.free_over_cents ? (ship.free_over_cents / 100).toFixed(2) : ''}"><div class="hint">Leave blank for no free shipping. Counted after any discount code.</div></label>
+            <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="shsave">Save</button></div><div id="shmsg"></div>`)}
+          ${card('Policies', `
+            <p class="muted small" style="margin:0 0 12px">Outpost writes a Privacy Policy and Terms of Service for your shop from the answers below, at <b>${esc(base)}/privacy.html</b> and <b>${esc(base)}/terms.html</b>. Stripe asks for both. They link from the bottom of your shop and links page.</p>
+            <label class="field"><span class="label">Contact email for customers</span><input class="input" id="pmail" type="email" inputmode="email" placeholder="hello@yourshop.com" value="${esc(pol.contact_email || '')}"><div class="hint">Shown on both pages so people can reach you about orders and their data.</div></label>
+            <label class="field"><span class="label">Where do you ship?</span><select class="input" id="preg">${[['', 'Don’t say'], ['us', 'Within the United States'], ['usca', 'United States and Canada'], ['world', 'Worldwide']].map(([k, l]) => `<option value="${k}"${pol.ship_regions === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+            <label class="field"><span class="label">Anything else about shipping (optional)</span><textarea class="input" id="pship" rows="2" maxlength="400" placeholder="Orders over $75 ship free. Tracking is emailed once your order is on its way.">${esc(pol.ship_note || '')}</textarea><div class="hint">Your “I usually ship within” days and your refund policy above are included automatically.</div></label>
+            <label class="field"><span class="label">Which state or country’s laws apply? (optional)</span><input class="input" id="plaw" maxlength="80" placeholder="Washington State, USA" value="${esc(pol.governing_law || '')}"></label>
+            <label class="field"><span class="label">Extra for your Privacy Policy (optional)</span><textarea class="input" id="ppriv" rows="3" maxlength="1500">${esc(pol.privacy_extra || '')}</textarea></label>
+            <label class="field"><span class="label">Extra for your Terms (optional)</span><textarea class="input" id="pterm" rows="3" maxlength="1500" placeholder="Custom orders, commissions, workshop cancellations…">${esc(pol.terms_extra || '')}</textarea></label>
+            <div class="msg" style="margin-top:4px">These are plain-language starting points, not legal advice. Read them and change anything that doesn’t match how you run your shop.</div>
+            <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="polsave">Save</button><a class="btn btn-ghost" href="privacy.html" target="_blank" rel="noopener">View privacy ↗</a><a class="btn btn-ghost" href="terms.html" target="_blank" rel="noopener">View terms ↗</a></div><div id="polmsg"></div>`)}
           ${card('Discount codes', `
             <div id="dlist"></div>
             <div class="label" style="margin-top:14px">New code</div>
@@ -1167,11 +1261,12 @@
         </div>
       </div>`;
     wireLook();
+    { const tm = $('#staxm'), tw = $('#staxstw'); const sync = () => { tw.hidden = tm.value === 'stripe'; }; tm.onchange = sync; sync(); }
 
     // --- shop + pause ---
     $('#ssave').onclick = async () => {
       try {
-        const r = await put('/api/admin/settings', { store_name: $('#sname').value, tax_rate: $('#srate').value, break_on: $('#sbreak').checked, break_message: $('#sbmsg').value,
+        const r = await put('/api/admin/settings', { store_name: $('#sname').value, tax_rate: $('#srate').value, tax_mode: $('#staxm').value, tax_states: $('#staxst').value, break_on: $('#sbreak').checked, break_message: $('#sbmsg').value,
           break_from: $('#sfrom').value, break_until: $('#suntil').value, low_stock: $('#slow').value, max_qty: $('#sqty').value });
         settings = { ...settings, ...r };
         paintBrand();
@@ -1188,10 +1283,43 @@
       } catch (e) { $('#amsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
+    // --- shipping ---
+    const SHIP_PRESET = { US: { name: 'United States', country: 'US', states: '' }, AKHI: { name: 'Alaska & Hawaii', country: 'US', states: 'AK, HI' }, CA: { name: 'Canada', country: 'CA', states: '' }, custom: { name: '', country: 'US', states: '' } };
+    const paintShip = () => {
+      $('#shiprows').innerHTML = ship.regions.length ? ship.regions.map((r, i) => `<div class="card" style="padding:12px;margin-bottom:8px;box-shadow:none" data-i="${i}">
+        <div class="grid2">
+          <label class="field"><span class="label">Region name</span><input class="input" data-f="name" maxlength="40" value="${esc(r.name)}"></label>
+          <label class="field"><span class="label">Price ($)</span><input class="input" data-f="price" inputmode="decimal" value="${(r.cents / 100).toFixed(2)}"></label>
+          <label class="field"><span class="label">Country</span><select class="input" data-f="country"><option value="US"${r.country === 'US' ? ' selected' : ''}>United States</option><option value="CA"${r.country === 'CA' ? ' selected' : ''}>Canada</option></select></label>
+          <label class="field"><span class="label">Only these states (optional)</span><input class="input" data-f="states" maxlength="80" placeholder="e.g. AK, HI" value="${esc(r.states)}"></label>
+        </div>
+        <button class="link-btn" type="button" data-del="${i}">Remove this region</button></div>`).join('') : '<p class="muted small">No regions yet. Add one below.</p>';
+      $('#shiprows').querySelectorAll('[data-f]').forEach((el) => { el.oninput = el.onchange = () => { const r = ship.regions[Number(el.closest('[data-i]').dataset.i)]; const f = el.dataset.f; if (f === 'price') r.cents = Number.isNaN(toCents(el.value)) ? 0 : toCents(el.value); else r[f] = el.value; }; });
+      $('#shiprows').querySelectorAll('[data-del]').forEach((b) => { b.onclick = () => { ship.regions.splice(Number(b.dataset.del), 1); paintShip(); }; });
+    };
+    document.querySelectorAll('[data-addreg]').forEach((b) => { b.onclick = () => { const p = SHIP_PRESET[b.dataset.addreg]; ship.regions.push({ id: 'n' + Date.now(), ...p, cents: p.country === 'CA' ? 1200 : p.states ? 900 : 500 }); paintShip(); }; });
+    paintShip();
+    $('#shsave').onclick = async () => {
+      try {
+        const fr = $('#shfree').value.trim(); const free = fr === '' ? 0 : toCents(fr);
+        if (Number.isNaN(free) || free < 0) throw new Error('Free-shipping amount should be a number like 75.00');
+        const r = await put('/api/admin/settings', { shipping: { on: $('#shon').checked, regions: ship.regions, free_over_cents: free } });
+        settings = { ...settings, ...r }; if (r.shipping) { ship = JSON.parse(JSON.stringify(r.shipping)); paintShip(); }
+        $('#shmsg').innerHTML = '<div class="msg">Saved. Checkout now uses these shipping prices.</div>';
+      } catch (e) { $('#shmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+
+    $('#polsave').onclick = async () => {
+      try {
+        const r = await put('/api/admin/settings', { policy: { contact_email: $('#pmail').value, ship_regions: $('#preg').value, ship_note: $('#pship').value, governing_law: $('#plaw').value, privacy_extra: $('#ppriv').value, terms_extra: $('#pterm').value } });
+        settings = { ...settings, ...r }; $('#polmsg').innerHTML = '<div class="msg">Saved. Your Privacy and Terms pages are up to date.</div>';
+      } catch (e) { $('#polmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+
     // --- trust & reviews ---
     $('#tsave').onclick = async () => {
       try {
-        const r = await put('/api/admin/settings', { handmade_statement: $('#hand').value, ship_days: $('#shipd').value, reviews_on: $('#revon').checked });
+        const r = await put('/api/admin/settings', { handmade_statement: $('#hand').value, ship_days: $('#shipd').value });
         settings = { ...settings, ...r }; $('#tmsg').innerHTML = '<div class="msg">Saved.</div>';
       } catch (e) { $('#tmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };

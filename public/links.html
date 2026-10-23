@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Links</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+<style>
+.lp{max-width:520px;margin:0 auto;padding:clamp(24px,6vw,56px) 20px 40px;text-align:center}
+.lp .wordmark{font-size:34px;display:inline-block;margin-bottom:6px}
+.lp .wordmark img.logo{max-height:64px}
+.lp .intro{margin:6px auto 22px;color:var(--muted);max-width:420px;overflow-wrap:anywhere}
+.lp .stack{display:grid;gap:12px;margin:0 0 26px}
+.lbtn{display:block;padding:15px 18px;border-radius:16px;background:var(--forest);color:var(--on-forest,#fff);font-weight:700;text-decoration:none;text-align:center;overflow-wrap:anywhere;transition:transform .12s ease}
+.lbtn:hover{transform:translateY(-1px)}
+.lbtn small{display:block;font-weight:500;opacity:.85;margin-top:2px}
+.lp h2{font-size:20px;margin:0 0 10px;text-align:left}
+.lp .events{display:grid;gap:10px;margin:0 0 26px;text-align:left}
+.ev{display:flex;gap:14px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:var(--card);text-decoration:none;color:inherit}
+.ev .when{flex:none;width:54px;text-align:center;border-radius:12px;background:var(--cream-2);padding:6px 0;line-height:1.1}
+.ev .when b{display:block;font-size:20px}
+.ev .when span{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.ev .what{min-width:0;overflow-wrap:anywhere}
+.ev .what small{display:block;color:var(--muted)}
+.join{border:1px solid var(--line);border-radius:16px;background:var(--card);padding:16px;text-align:left;margin:0 0 26px}
+.join .row2{display:flex;gap:8px;flex-wrap:wrap}
+.join .row2 .input{flex:1;min-width:180px}
+.join label.check{display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:13px;color:var(--muted)}
+.join .hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+.lp .sociallist{justify-content:center;margin:0 0 20px}
+.lpfoot{font-size:13px;color:var(--muted);display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.lpfoot a{color:inherit}
+</style>
+</head>
+<body data-page="links">
+<main class="lp" id="lp"><p class="muted">Loading…</p></main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const LABEL = { website: 'Website', instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook', youtube: 'YouTube', pinterest: 'Pinterest', bluesky: 'Bluesky', threads: 'Threads', email: 'Email' };
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const isExt = (u) => /^https?:\/\//i.test(u);
+  const href = (u) => esc(u);
+  const attrs = (u) => (isExt(u) ? ' target="_blank" rel="noopener noreferrer"' : '');
+
+  fetch('/api/settings').then((r) => r.json()).then((s) => {
+    OutpostBrand.apply(s); document.title = s.store_name + ' — Links';
+    const links = (s.links || []).filter((l) => !l.hidden);
+    const today = todayStr();
+    const events = links.filter((l) => l.kind === 'event' && (!l.date || l.date >= today)).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+    const buttons = links.filter((l) => l.kind !== 'event');
+    const soc = Object.entries(s.social || {}).filter(([k]) => LABEL[k]);
+    const evHtml = (e) => {
+      let when = '';
+      if (e.date) { const [y, m, d] = e.date.split('-').map(Number); when = `<div class="when"><b>${d}</b><span>${MON[m - 1]}</span></div>`; }
+      const inner = `${when}<div class="what"><b>${esc(e.title)}</b>${e.place ? `<small>${esc(e.place)}</small>` : ''}${e.note ? `<small>${esc(e.note)}</small>` : ''}</div>`;
+      return e.url ? `<a class="ev" href="${href(e.url)}"${attrs(e.url)}>${inner}</a>` : `<div class="ev">${inner}</div>`;
+    };
+    $('lp').innerHTML = `
+      <a class="wordmark" data-brand="name" href="store.html">${esc(s.store_name)}</a>
+      ${s.links_intro ? `<p class="intro">${esc(s.links_intro)}</p>` : ''}
+      ${buttons.length ? `<div class="stack">${buttons.map((l) => `<a class="lbtn" href="${href(l.url)}"${attrs(l.url)}>${esc(l.title)}${l.note ? `<small>${esc(l.note)}</small>` : ''}</a>`).join('')}</div>` : ''}
+      ${events.length ? `<h2>Coming up</h2><div class="events">${events.map(evHtml).join('')}</div>` : ''}
+      ${s.mailing_list_on ? `<form class="join" id="join"><h2 style="margin-bottom:4px">Stay in the loop</h2><p class="muted small" style="margin:0 0 10px">News about new work, events and sales. No spam.</p>
+        <div class="row2"><input class="input" id="jem" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required maxlength="200"><button class="btn btn-primary" id="jgo">Join</button></div>
+        <input class="hp" id="jhp" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <label class="check"><input type="checkbox" id="jok" required> <span>Yes, email me news from ${esc(s.store_name)}. I can unsubscribe any time.</span></label><div id="jmsg" style="margin-top:8px"></div></form>` : ''}
+      ${soc.length ? `<div class="sociallist">${soc.map(([k, v]) => `<a class="social" href="${esc(k === 'email' ? 'mailto:' + v : v)}" ${k === 'email' ? '' : 'target="_blank" rel="noopener noreferrer me"'}>${LABEL[k]}</a>`).join('')}</div>` : ''}
+      <div class="lpfoot"><a href="store.html">Visit the shop</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></div>`;
+    OutpostBrand.apply(s);
+    const f = $('join');
+    if (f) f.onsubmit = async (e) => {
+      e.preventDefault(); $('jgo').disabled = true; $('jmsg').innerHTML = '';
+      try {
+        const r = await fetch('/api/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('jem').value, consent: $('jok').checked, source: 'links', website: $('jhp').value }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Something went wrong. Please try again.');
+        f.innerHTML = '<h2 style="margin-bottom:4px">You’re on the list</h2><p class="muted" style="margin:0">Thank you! Watch your inbox for news from ' + esc(s.store_name) + '.</p>';
+      } catch (err) { $('jmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; $('jgo').disabled = false; }
+    };
+  }).catch(() => { $('lp').innerHTML = '<p>Couldn’t load this page. Please try again.</p>'; });
+})();
+</script>
+</body>
+</html>

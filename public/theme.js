@@ -91,7 +91,7 @@
           if (el.dataset.logo !== s.logo_url) { el.dataset.logo = s.logo_url; el.textContent = ''; const im = document.createElement('img'); im.className = 'logo'; im.alt = name; im.src = s.logo_url; el.appendChild(im); }
         } else { delete el.dataset.logo; el.textContent = name; }
       });
-      const hasAbout = !!(s.about_text || Object.keys(s.social || {}).length);
+      const hasAbout = true; /* About is always listed; the page explains when it's still empty */
       document.querySelectorAll('.shop-brand nav, header nav').forEach((nav) => {
         const cur = nav.querySelector('[data-about]');
         if (!hasAbout) { if (cur) cur.remove(); return; }
@@ -102,6 +102,12 @@
         a.innerHTML = (hasIcons ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg><span>About</span>' : 'About');
         nav.appendChild(a);
         if (a.className === 'on') nav.querySelectorAll('a.on').forEach((x) => { if (x !== a) x.classList.remove('on'); });
+      });
+      document.querySelectorAll('.shop-content').forEach((c) => {
+        if (c.querySelector('.shopfoot')) return;
+        const f = document.createElement('footer'); f.className = 'shopfoot';
+        f.innerHTML = '<a href="privacy.html">Privacy</a><a href="terms.html">Terms</a>' + ((s.links || []).length ? '<a href="links.html">Links</a>' : '');
+        c.appendChild(f);
       });
       ['mascot', 'sold'].forEach((k) => {
         document.querySelectorAll('img[data-brand="' + k + '"]').forEach((im) => {

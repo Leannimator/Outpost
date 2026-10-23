@@ -2,6 +2,8 @@
 
 A self-hosted point of sale for independent artists: an in-person **register**, an online **shop**, and **live auctions**, all sharing one inventory. Card payments run through Stripe, so card numbers never touch your server.
 
+> **A note from the maker.** I built Outpost for my own shop, to the best of my ability. It isn't perfect, and I can't promise it's free of bugs, security problems or legal gaps. It's free to use, but **use it at your own risk.** You run your own shop, so you're responsible for your payments, taxes, customers' information and the laws where you live. I'm not able to give support or legal advice.
+
 ## Start here
 
 **New to this? Open [`docs/guide.html`](docs/guide.html) in your browser.** It walks you step by step from download to a live shop, including payments, using Outpost day to day, backups, and fixes for common problems. No coding needed.
@@ -32,6 +34,8 @@ Set `ADMIN_PASSWORD` (and your Stripe **test** keys when you're ready for card p
 |---|---|
 | `/` | Staff app (password protected): **Sell**, **Auctions**, **Products**, **Orders**, **Settings** |
 | `/store.html` | Public shop with search, categories and checkout |
+| `/links` | Link-in-bio page (links, events, optional email signup) |
+| `/privacy`, `/terms` | Privacy Policy and Terms of Service, written from your Settings → Policies |
 | `/auction.html` | Public auction lots; `/auction.html?lot=3` is the live bidding screen |
 | `/receipt.html?order=…&k=…` | Printable receipt (the link is private to each order) |
 
@@ -54,6 +58,8 @@ Bidders are not email-verified, so anyone can type any email. Card-on-file, the 
 ## What's in the app
 
 - **Sell**: register with discount codes, cash / other / card (QR) payments.
+- **Checkout**: buyers enter their address first, then see shipping and tax before paying on Stripe. Set flat shipping prices by region (with optional free shipping over an amount) and choose how online tax is worked out in Settings.
+- **Links page and email list**: a link-in-bio page, plus an email signup whose list you download as a CSV and import into your own email service. Outpost sends no email.
 - **About page**: a description of your shop plus links to your website and social accounts, set in Settings.
 - **Option names and buyer questions**: name the option list (Size, Color…) and add up to 3 text boxes for buyers (engraving, name, gift note). Answers are saved on the order and shown on the receipt, in Orders, and in Stripe.
 - **Options and SKUs**: a product can have options (sizes, colors) with their own stock, optional price and SKU. Stock is tracked per option, refunds restock the right option, and a barcode scanner (or typing a SKU + Enter) adds items at the register. CSV import/export supports `sku` and `variants` (`Small:5;Medium:3:32.50`).
@@ -95,7 +101,7 @@ Orders are marked paid and stock is decremented only when Stripe confirms paymen
 - Serve over HTTPS and set `BASE_URL` to your real address (payment links and QR codes use it).
 - Use a long random `ADMIN_PASSWORD`; test end to end with Stripe test cards (`4242 4242 4242 4242`) before switching to live keys.
 - Back up regularly with Settings → Back up your shop → Download backup (one file with the database and photos).
-- Sales tax is a single flat rate (Settings). Shipping rates, refunds and a physical card reader (Stripe Terminal) are not built in yet.
+- Tax, shipping prices and refunds are set up in Settings. A physical card reader (Stripe Terminal) is not built in yet.
 
 ## Licence and legal
 
