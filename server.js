@@ -149,7 +149,13 @@ const taxRate = () => {
   const n = parseFloat(getSetting('tax_rate', '0'));
   return Number.isFinite(n) ? Math.min(Math.max(n, 0), 30) : 0;
 };
-const calcTax = (subtotal) => Math.round((subtotal * taxRate()) / 100);
+// Online orders can have their own rate; if none is set they use the in-person rate.
+const onlineTaxRate = () => {
+  const raw = getSetting('tax_rate_online', '');
+  const n = raw === '' ? NaN : parseFloat(raw);
+  return Number.isFinite(n) ? Math.min(Math.max(n, 0), 30) : taxRate();
+};
+const calcTax = (subtotal, online) => Math.round((subtotal * (online ? onlineTaxRate() : taxRate())) / 100);
 const storeName = () => getSetting('store_name', 'Outpost');
 const Theme = require('./public/theme.js');
 const themeSettings = () => ({ bg: getSetting('theme_bg', ''), accent: getSetting('theme_accent', ''), button: getSetting('theme_button', ''), mode: getSetting('theme_mode', ''), textmode: getSetting('theme_textmode', ''), text: getSetting('theme_text', ''), heading: getSetting('theme_heading', ''), link: getSetting('theme_link', ''), buttontext: getSetting('theme_buttontext', '') });
@@ -219,7 +225,7 @@ function shippingFor(addr, net) {
 function taxFor(addr, net) {
   if (taxMode() !== 'flat') return { cents: 0, label: '' };   // none, or Stripe works it out on the payment page
   const states = taxStates();
-  if (addr.country === 'US' && (!states.length || states.includes(addr.state))) return { cents: Math.round((net * taxRate()) / 100), label: '(' + taxRate() + '%)' };
+  if (addr.country === 'US' && (!states.length || states.includes(addr.state))) return { cents: Math.round((net * onlineTaxRate()) / 100), label: '(' + onlineTaxRate() + '%)' };
   return { cents: 0, label: '(none for this address)' };
 }
 const linksAll = () => { try { const a = JSON.parse(getSetting('links_json', '[]')); return Array.isArray(a) ? a : []; } catch { return []; } };
@@ -516,7 +522,7 @@ function priceCart(rawItems, code, opts = {}) {
   const disc = findDiscount(code, subtotal);
   const discount = disc ? disc.amount : 0;
   const net = subtotal - discount;
-  let tax = opts.online && taxMode() === 'none' ? 0 : calcTax(net), shipping = 0, shipping_label = '', tax_label = '', address = null;
+  let tax = opts.online ? (taxMode() === 'none' ? 0 : calcTax(net, true)) : calcTax(net), shipping = 0, shipping_label = '', tax_label = '', address = null;
   if (opts.online && needsAddress()) {
     tax = 0;   // not known until we have an address
     if (opts.address) {
@@ -737,7 +743,7 @@ app.post('/api/admin/upload', requireAdmin, express.raw({ type: 'image/*', limit
 
 // ---------- public API: settings, products, checkout, receipts ----------
 const settingsPayload = () => ({
-  store_name: storeName(), tax_rate: taxRate(), online_tax_rate: taxMode() === 'none' ? 0 : taxRate(), currency: CURRENCY,
+  store_name: storeName(), tax_rate: taxRate(), online_tax_rate: taxMode() === 'none' ? 0 : onlineTaxRate(), tax_rate_online: getSetting('tax_rate_online', ''), currency: CURRENCY,
   break_on: breakOn(), break_message: breakMessage(),
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
@@ -931,7 +937,7 @@ app.get('/api/admin/status', requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { links, links_intro, mailing_list_on, policy, shipping, tax_mode, tax_states, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
+  const { links, links_intro, mailing_list_on, policy, shipping, tax_mode, tax_states, tax_home, tax_rate_online, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
   if (links !== undefined) setSetting('links_json', JSON.stringify(cleanLinks(links)));
   if (links_intro !== undefined) setSetting('links_intro', String(links_intro).trim().slice(0, 200));
   if (mailing_list_on !== undefined) setSetting('mailing_list_on', mailing_list_on ? '1' : '');
@@ -948,6 +954,14 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
     const n = Number(tax_rate);
     if (!Number.isFinite(n) || n < 0 || n > 30) throw new HttpError(400, 'Tax rate must be between 0 and 30');
     setSetting('tax_rate', Math.round(n * 1000) / 1000);
+  }
+  if (tax_rate_online !== undefined) {
+    if (String(tax_rate_online).trim() === '') setSetting('tax_rate_online', '');
+    else {
+      const n = Number(tax_rate_online);
+      if (!Number.isFinite(n) || n < 0 || n > 30) throw new HttpError(400, 'Tax rate must be between 0 and 30');
+      setSetting('tax_rate_online', Math.round(n * 1000) / 1000);
+    }
   }
   if (store_name !== undefined) {
     const s = String(store_name).trim().slice(0, 60);
@@ -1501,7 +1515,7 @@ function settleAuction(auctionId) {
     }
     const subtotal = high.amount_cents;
     // Where the winner is decides shipping and tax. Without an address we charge neither (and don't auto-charge) rather than guess.
-    let addr = null, shipping = 0, tax = needsAddress() || taxMode() === 'none' ? 0 : calcTax(subtotal);
+    let addr = null, shipping = 0, tax = needsAddress() || taxMode() === 'none' ? 0 : calcTax(subtotal, true);
     if (needsAddress()) {
       const bd = db.prepare('SELECT address_json FROM bidders WHERE id=?').get(high.bidder_id);
       try { addr = bd && bd.address_json ? JSON.parse(bd.address_json) : null; } catch { addr = null; }

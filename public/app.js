@@ -120,7 +120,7 @@
   }
 
   // ---------- shell + router ----------
-  const NAV = [['sell', 'Sell', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['reports', 'Reports', '#/reports'], ['settings', 'Settings', '#/settings']];
+  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['reports', 'Reports', '#/reports'], ['settings', 'Settings', '#/settings']];
 
   function paintResting() { const el = document.getElementById('resting'); if (el) el.hidden = !settings.break_on; }
   function paintBrand() { if (window.OutpostBrand) OutpostBrand.apply(settings); paintResting(); }
@@ -193,7 +193,8 @@
     let code = '', quote = null, qseq = 0;
 
     view().innerHTML = `
-      <div class="topbar"><h1>Sell</h1><div class="spacer"></div><div class="muted small" id="clock"></div></div>
+      <div class="topbar"><h1>In-person sales</h1><div class="spacer"></div><div class="muted small" id="clock"></div></div>
+      <p class="muted small" style="margin:-6px 0 14px">For markets, events and anyone standing in front of you. No shipping here. Online orders come through your shop and show up in Orders.</p>
       <div class="sell">
         <div>
           <div class="search">${icon('search')}<input class="input" id="q" placeholder="Search, or scan a barcode / type a SKU and press Enter" autocomplete="off"></div>
@@ -1186,16 +1187,21 @@
             <div class="sgrid">${[['website', 'Website'], ['instagram', 'Instagram'], ['tiktok', 'TikTok'], ['facebook', 'Facebook'], ['youtube', 'YouTube'], ['pinterest', 'Pinterest'], ['bluesky', 'Bluesky'], ['threads', 'Threads']].map(([k, l]) => `<label class="field" style="margin:0"><span class="label small">${l}</span><input class="input" data-soc="${k}" inputmode="url" autocomplete="off" placeholder="https://" value="${esc((cur.social || {})[k] || '')}"></label>`).join('')}</div>
             <button class="btn btn-primary mt" id="asave">Save</button><div id="amsg"></div>`)}
           <h2 class="sgroup">Selling</h2>
-          ${card('Sales tax', `
-            <label class="field"><span class="label">Your state</span><select class="input" id="shome"><option value="">Choose your state…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${(cur.tax_home || String(cur.tax_states || '').split(/[\s,]+/)[0]) === c ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
-            <label class="field"><span class="label">Tax rate at the register (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint" id="srhint">Picking your state fills in its base rate. Your city or county may add a bit more, so check a receipt from your area and adjust it. Use 0 for none.</div></label>
-            <div class="label">Online orders</div>
-            <div id="taxopts" style="margin-top:6px">
+          ${card('Sales tax: in person', `
+            <p class="muted small" style="margin:0 0 12px">Used at the register, for markets and events. Charged on every in-person sale.</p>
+            <label class="field"><span class="label">Where are you selling?</span><select class="input" id="shome"><option value="">Choose a state to fill in its rate…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${(cur.tax_home || String(cur.tax_states || '').split(/[\s,]+/)[0]) === c ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field"><span class="label">Tax rate (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint" id="srhint">Picking a state fills in its base rate. Your city or county may add a bit more, so check a receipt from your area and adjust it. Heading to an event in another state? Change this before you go. Use 0 for none.</div></label>
+            <button class="btn btn-primary mt" id="taxsave">Save</button><div id="taxmsg"></div>`)}
+          ${card('Sales tax: online orders', `
+            <p class="muted small" style="margin:0 0 12px">Used for orders from your shop and auctions. Buyers enter their address at checkout.</p>
+            <div id="taxopts">
               <label class="opt"><input type="radio" name="taxm" value="stripe"><span><b>Stripe works it out</b> <span class="tag">Easiest</span><br><span class="muted small">Finds the right tax for each buyer’s address, in every state you’re registered in. Costs about 0.5% per sale. Turn on Stripe Tax in your Stripe dashboard first.</span></span></label>
-              <label class="opt"><input type="radio" name="taxm" value="flat"><span><b>My own rate</b><br><span class="muted small">Charge the rate above to buyers who live in your state. Everyone else pays no tax.</span></span></label>
+              <label class="opt"><input type="radio" name="taxm" value="flat"><span><b>My own rate</b><br><span class="muted small">Charged to buyers who live in the state below. Everyone else pays no tax.</span>
+                <span class="grid2" style="margin-top:8px"><select class="input" id="ohome"><option value="">Choose a state…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${(String(cur.tax_states || '').split(/[\s,]+/)[0] || cur.tax_home) === c ? ' selected' : ''}>${n}</option>`).join('')}</select>
+                <input class="input" id="orate" inputmode="decimal" aria-label="Online tax rate (%)" placeholder="Rate %" value="${esc(cur.tax_rate_online !== '' && cur.tax_rate_online != null ? cur.tax_rate_online : cur.tax_rate)}"></span></span></label>
             </div>
             <div class="hint">Not sure what you owe? Ask an accountant. Which states you must collect in depends on your sales there.</div>
-            <button class="btn btn-primary mt" id="taxsave">Save</button><div id="taxmsg"></div>`)}
+            <button class="btn btn-primary mt" id="otaxsave">Save</button><div id="otaxmsg"></div>`)}
           ${card('Shipping', `
             <label class="check"><input type="checkbox" id="shon" ${ship.on ? 'checked' : ''}> <span>Charge for shipping online</span></label>
             <p class="muted small" style="margin:6px 0 12px">Buyers enter their address in the checkout, and the shipping fee for their region is added. A buyer outside every region below can’t check out.</p>
@@ -1274,12 +1280,12 @@
       </div>`;
     wireLook();
     {
-      // Online tax: two plain choices.
       const opts = document.querySelectorAll('#taxopts input[name=taxm]');
-      const sync = () => opts.forEach((r) => r.closest('.opt').classList.toggle('on', r.checked));
+      const sync = () => opts.forEach((r) => { r.closest('.opt').classList.toggle('on', r.checked); r.closest('.opt').querySelectorAll('select,input:not([type=radio])').forEach((x) => { x.disabled = !r.checked; }); });
       opts.forEach((r) => { r.checked = r.value === (cur.tax_mode === 'stripe' ? 'stripe' : 'flat'); r.onchange = sync; });
       sync();
-      $('#shome').onchange = () => { const t = STATE_TAX[$('#shome').value]; if (t) { $('#srate').value = t[1]; $('#srhint').textContent = t[0] + '’s base rate is ' + t[1] + '%. Your city or county may add a bit more, so check a receipt from your area and adjust it.'; } };
+      const fill = (sel, rate, hint) => () => { const t = STATE_TAX[$(sel).value]; if (t) { $(rate).value = t[1]; if (hint) $(hint).textContent = t[0] + '’s base rate is ' + t[1] + '%. Your city or county may add a bit more, so check a receipt from your area and adjust it.'; } };
+      $('#shome').onchange = fill('#shome', '#srate', '#srhint'); $('#ohome').onchange = fill('#ohome', '#orate');
     }
 
     // --- shop name, contact email, pause ---
@@ -1297,12 +1303,19 @@
     // --- sales tax ---
     $('#taxsave').onclick = async () => {
       try {
-        const m = (document.querySelector('#taxopts input[name=taxm]:checked') || {}).value || 'flat', home = $('#shome').value;
-        if (!home) throw new Error('Choose your state first.');
-        const r = await put('/api/admin/settings', { tax_rate: $('#srate').value, tax_mode: m, tax_home: home, tax_states: home });
+        const r = await put('/api/admin/settings', { tax_rate: $('#srate').value, tax_home: $('#shome').value });
         settings = { ...settings, ...r };
-        $('#taxmsg').innerHTML = '<div class="msg">Saved.' + (m === 'stripe' ? ' Remember to turn on Stripe Tax in your Stripe dashboard, or checkout will show an error.' : '') + '</div>';
+        $('#taxmsg').innerHTML = '<div class="msg">Saved. The register now charges ' + esc($('#srate').value || '0') + '%.</div>';
       } catch (e) { $('#taxmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+    $('#otaxsave').onclick = async () => {
+      try {
+        const m = (document.querySelector('#taxopts input[name=taxm]:checked') || {}).value || 'flat', home = $('#ohome').value;
+        if (m === 'flat' && !home) throw new Error('Choose the state your buyers pay tax in, or pick “Stripe works it out.”');
+        const r = await put('/api/admin/settings', m === 'flat' ? { tax_mode: 'flat', tax_states: home, tax_rate_online: $('#orate').value } : { tax_mode: 'stripe' });
+        settings = { ...settings, ...r };
+        $('#otaxmsg').innerHTML = '<div class="msg">Saved.' + (m === 'stripe' ? ' Remember to turn on Stripe Tax in your Stripe dashboard, or checkout will show an error.' : '') + '</div>';
+      } catch (e) { $('#otaxmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
     // --- stock ---

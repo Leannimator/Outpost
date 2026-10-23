@@ -223,14 +223,15 @@ body { overflow-wrap: anywhere; }
 </div></div>
 
 <h2 id="setup">Part 4: Set up your shop</h2>
-<p>Everything below is in the staff app. The left menu has Sell, Auctions, Products, Orders, Customers, Reviews, Reports and Settings.</p>
+<p>Everything below is in the staff app. The left menu has In person, Auctions, Products, Orders, Customers, Reviews, Reports and Settings.</p>
 
 <div class="step"><div class="num">1</div><div>
   <h3>Settings: the basics</h3>
   <ul>
     <li><b>Your shop:</b> your shop name, one contact email (used on your About, Privacy and Terms pages), and a <b>Pause sales</b> switch for when you’re away.</li>
     <li><b>About your shop:</b> a few lines about you, your “made by hand” promise, and your social links.</li>
-    <li><b>Sales tax:</b> type your register tax rate (what your town or event charges). For online orders pick one of three: <b>Stripe works it out</b> (Stripe finds the right tax for each address, about 0.5% per sale, only where you’re registered), <b>My own rate</b> (your register rate, charged to buyers in the states you list, like <code>WA</code>), or <b>No tax online</b>. Ask an accountant if you’re unsure what you owe.</li>
+    <li><b>Sales tax: in person</b> is for markets and events. Pick your state to fill in its base rate, then adjust it to match your city (your receipt from that area shows the real number). Change it before you head to an event in another state.</li>
+    <li><b>Sales tax: online orders</b> is separate. Pick <b>Stripe works it out</b> (Stripe finds the right tax for each address, about 0.5% per sale, only where you’re registered) or <b>My own rate</b> (a state and a rate, charged to buyers in that state). Ask an accountant if you’re unsure what you owe.</li>
     <li><b>Shipping:</b> add regions with a flat price each (for example United States $5, Alaska &amp; Hawaii $9, Canada $12), optionally free shipping over an amount, and how many days you usually take to ship (orders past that are flagged <b>Running late</b>). At checkout buyers enter their address first, then see shipping and tax before paying. Anyone outside every region you list can’t check out. Auction bidders give their address when they join, so a winner’s shipping and tax work the same way.</li>
     <li><b>Refunds:</b> pick one. Buyers see it at checkout and it’s saved with each order, so a later change doesn’t rewrite old promises.</li>
     <li><b>Privacy and Terms:</b> nothing to fill in. Outpost writes both pages from your other settings (<code>/privacy</code> and <code>/terms</code>), and Stripe asks for these two addresses. You can add your own touches if you like.</li>
@@ -261,7 +262,7 @@ body { overflow-wrap: anywhere; }
 
 <h2 id="use">Part 5: Using Outpost day to day</h2>
 
-<details open><summary>Selling in person (Sell)</summary>
+<details open><summary>Selling in person (In person)</summary>
   <p>Tap products to add them to the cart. Choose <b>Cash</b>, <b>Other</b> or <b>Card</b>. For card, a QR code appears; your customer scans it with their phone and pays on Stripe’s page. Discount codes can be typed at the register.</p>
 </details>
 
