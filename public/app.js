@@ -1146,6 +1146,9 @@
   const EVENT_LABELS = { honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes' };
   const evLabel = (k) => EVENT_LABELS[k] || String(k).replace(/_/g, ' ');
 
+  // State base sales-tax rates (Tax Foundation, 2026). Local add-ons aren't included, so the field stays editable.
+  const STATE_TAX = {AL:['Alabama',4],AK:['Alaska',0],AZ:['Arizona',5.6],AR:['Arkansas',6.5],CA:['California',7.25],CO:['Colorado',2.9],CT:['Connecticut',6.35],DE:['Delaware',0],DC:['District of Columbia',6],FL:['Florida',6],GA:['Georgia',4],HI:['Hawaii',4],ID:['Idaho',6],IL:['Illinois',6.25],IN:['Indiana',7],IA:['Iowa',6],KS:['Kansas',6.5],KY:['Kentucky',6],LA:['Louisiana',5],ME:['Maine',5.5],MD:['Maryland',6],MA:['Massachusetts',6.25],MI:['Michigan',6],MN:['Minnesota',6.88],MS:['Mississippi',7],MO:['Missouri',4.23],MT:['Montana',0],NE:['Nebraska',5.5],NV:['Nevada',6.85],NH:['New Hampshire',0],NJ:['New Jersey',6.63],NM:['New Mexico',4.88],NY:['New York',4],NC:['North Carolina',4.75],ND:['North Dakota',5],OH:['Ohio',5.75],OK:['Oklahoma',4.5],OR:['Oregon',0],PA:['Pennsylvania',6],RI:['Rhode Island',7],SC:['South Carolina',6],SD:['South Dakota',4.2],TN:['Tennessee',7],TX:['Texas',6.25],UT:['Utah',6.1],VT:['Vermont',6],VA:['Virginia',5.3],WA:['Washington',6.5],WV:['West Virginia',6],WI:['Wisconsin',5],WY:['Wyoming',4]};
+
   async function viewSettings() {
     const [st, cur, discounts, sec] = await Promise.all([api('/api/admin/status'), fetch('/api/settings').then((r) => r.json()), api('/api/admin/discounts'), api('/api/admin/security')]);
     settings = cur;
@@ -1172,6 +1175,7 @@
               </div></details>
             <div class="hint">While paused, visitors can look around but can’t check out. Your register still works, and auctions already running keep going.</div>
             <button class="btn btn-primary mt" id="ssave">Save</button><div id="smsg"></div>`)}
+          ${lookCard()}
           ${card('About your shop', `
             <label class="field"><span class="label">Tell shoppers about yourself and your shop</span><textarea class="input" id="about" rows="6" maxlength="2000" placeholder="Hi, I’m Sam. I make linocut prints and ceramics in a small studio in Portland…">${esc(cur.about_text || '')}</textarea>
               <div class="hint">Shown on your About page. Use a blank line to start a new paragraph.</div></label>
@@ -1183,13 +1187,12 @@
             <button class="btn btn-primary mt" id="asave">Save</button><div id="amsg"></div>`)}
           <h2 class="sgroup">Selling</h2>
           ${card('Sales tax', `
-            <label class="field"><span class="label">At the register (in person)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint">Tax rate in %, whatever your town or event charges. Use 0 for none.</div></label>
+            <label class="field"><span class="label">Your state</span><select class="input" id="shome"><option value="">Choose your state…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${(cur.tax_home || String(cur.tax_states || '').split(/[\s,]+/)[0]) === c ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field"><span class="label">Tax rate at the register (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint" id="srhint">Picking your state fills in its base rate. Your city or county may add a bit more, so check a receipt from your area and adjust it. Use 0 for none.</div></label>
             <div class="label">Online orders</div>
             <div id="taxopts" style="margin-top:6px">
-              <label class="opt"><input type="radio" name="taxm" value="stripe"><span><b>Stripe works it out</b> <span class="tag">Easiest</span><br><span class="muted small">Finds the right tax for each buyer’s address. Costs about 0.5% per sale, only where you’re registered. Turn on Stripe Tax in your Stripe dashboard first.</span></span></label>
-              <label class="opt"><input type="radio" name="taxm" value="flat"><span><b>My own rate</b><br><span class="muted small">Charge the register rate above to buyers who live in:</span>
-                <input class="input" id="staxst" maxlength="60" placeholder="WA" style="margin-top:6px" value="${esc(cur.tax_states || '')}"><span class="muted small">State codes, like WA or WA, OR.</span></span></label>
-              <label class="opt"><input type="radio" name="taxm" value="none"><span><b>No tax online</b></span></label>
+              <label class="opt"><input type="radio" name="taxm" value="stripe"><span><b>Stripe works it out</b> <span class="tag">Easiest</span><br><span class="muted small">Finds the right tax for each buyer’s address, in every state you’re registered in. Costs about 0.5% per sale. Turn on Stripe Tax in your Stripe dashboard first.</span></span></label>
+              <label class="opt"><input type="radio" name="taxm" value="flat"><span><b>My own rate</b><br><span class="muted small">Charge the rate above to buyers who live in your state. Everyone else pays no tax.</span></span></label>
             </div>
             <div class="hint">Not sure what you owe? Ask an accountant. Which states you must collect in depends on your sales there.</div>
             <button class="btn btn-primary mt" id="taxsave">Save</button><div id="taxmsg"></div>`)}
@@ -1248,7 +1251,7 @@
             </details>
             <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="polsave">Save</button><a class="btn btn-ghost" href="privacy.html" target="_blank" rel="noopener">View privacy ↗</a><a class="btn btn-ghost" href="terms.html" target="_blank" rel="noopener">View terms ↗</a></div><div id="polmsg"></div>`)}
         </div>
-        <div style="display:grid;gap:18px;min-width:0">${lookCard()}
+        <div style="display:grid;gap:18px;min-width:0">
           ${card('Protection from bots and scammers', `
             <div id="prot"></div>
             <h3 style="font-size:18px;margin:18px 0 6px">Blocked people</h3>
@@ -1271,12 +1274,12 @@
       </div>`;
     wireLook();
     {
-      // Online tax: three plain choices. An old "my rate" setup with no rate and no states reads as "no tax".
-      const mode0 = cur.tax_mode === 'stripe' ? 'stripe' : cur.tax_mode === 'none' || (!Number(cur.tax_rate) && !cur.tax_states) ? 'none' : 'flat';
+      // Online tax: two plain choices.
       const opts = document.querySelectorAll('#taxopts input[name=taxm]');
-      const sync = () => opts.forEach((r) => { r.closest('.opt').classList.toggle('on', r.checked); const st = r.closest('.opt').querySelector('#staxst'); if (st) st.disabled = !r.checked; });
-      opts.forEach((r) => { r.checked = r.value === mode0; r.onchange = sync; });
+      const sync = () => opts.forEach((r) => r.closest('.opt').classList.toggle('on', r.checked));
+      opts.forEach((r) => { r.checked = r.value === (cur.tax_mode === 'stripe' ? 'stripe' : 'flat'); r.onchange = sync; });
       sync();
+      $('#shome').onchange = () => { const t = STATE_TAX[$('#shome').value]; if (t) { $('#srate').value = t[1]; $('#srhint').textContent = t[0] + '’s base rate is ' + t[1] + '%. Your city or county may add a bit more, so check a receipt from your area and adjust it.'; } };
     }
 
     // --- shop name, contact email, pause ---
@@ -1284,7 +1287,7 @@
       try {
         const email = $('#smail').value.trim();
         const r = await put('/api/admin/settings', { store_name: $('#sname').value, break_on: $('#sbreak').checked, break_message: $('#sbmsg').value, break_from: $('#sfrom').value, break_until: $('#suntil').value,
-          policy: { ...pol, contact_email: email }, social: { ...soc, email } });
+          ...(email !== (pol.contact_email || '') ? { policy: { ...pol, contact_email: email } } : {}), social: { ...soc, email } });
         settings = { ...settings, ...r }; if (r.policy) pol = r.policy; if (r.social) soc = r.social;
         paintBrand();
         $('#smsg').innerHTML = '<div class="msg">Saved.</div>';
@@ -1294,9 +1297,9 @@
     // --- sales tax ---
     $('#taxsave').onclick = async () => {
       try {
-        const m = (document.querySelector('#taxopts input[name=taxm]:checked') || {}).value || 'none';
-        if (m === 'flat' && !$('#staxst').value.trim()) throw new Error('Type the state your buyers pay tax in, like WA. Or pick one of the other two choices.');
-        const r = await put('/api/admin/settings', { tax_rate: $('#srate').value, tax_mode: m, ...(m === 'flat' ? { tax_states: $('#staxst').value } : {}) });
+        const m = (document.querySelector('#taxopts input[name=taxm]:checked') || {}).value || 'flat', home = $('#shome').value;
+        if (!home) throw new Error('Choose your state first.');
+        const r = await put('/api/admin/settings', { tax_rate: $('#srate').value, tax_mode: m, tax_home: home, tax_states: home });
         settings = { ...settings, ...r };
         $('#taxmsg').innerHTML = '<div class="msg">Saved.' + (m === 'stripe' ? ' Remember to turn on Stripe Tax in your Stripe dashboard, or checkout will show an error.' : '') + '</div>';
       } catch (e) { $('#taxmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }

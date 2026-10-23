@@ -271,7 +271,7 @@ function cleanShipping(b) {
   if (b.on && !regions.length) throw new HttpError(400, 'Add at least one shipping region, or turn shipping off');
   return { on: !!b.on, regions, free_over_cents: Math.max(0, Math.min(10000000, Math.round(Number(b.free_over_cents) || 0))) };
 }
-const bidCardOn = () => !!stripe && getSetting('bid_card_required', '') === '1';
+const bidCardOn = () => !!stripe && getSetting('bid_card_required', '1') === '1';   // on unless the seller turns it off
 const handmadeText = () => getSetting('handmade_statement', '');
 const SOCIALS = ['website', 'instagram', 'tiktok', 'facebook', 'youtube', 'pinterest', 'bluesky', 'threads', 'email'];
 const socialLinks = () => { try { const o = JSON.parse(getSetting('social_json', '{}')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
@@ -742,9 +742,9 @@ const settingsPayload = () => ({
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
   handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: socialLinks(), ship_days: shipDays(), reviews_on: reviewsOn(),
-  bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '') === '1', stripe_ready: !!stripe,
+  bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '1') === '1', stripe_ready: !!stripe,
   links: linksAll().filter((l) => !l.hidden).map(({ hidden, ...l }) => l), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1',
-  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_states: taxStates().join(', '), needs_address: needsAddress(),
+  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_states: taxStates().join(', '), tax_home: getSetting('tax_home', ''), needs_address: needsAddress(),
   ...brandSettings(),
 });
 app.get('/api/settings', (req, res) => { res.json(settingsPayload()); });
@@ -931,13 +931,14 @@ app.get('/api/admin/status', requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { links, links_intro, mailing_list_on, policy, shipping, tax_mode, tax_states, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
+  const { links, links_intro, mailing_list_on, policy, shipping, tax_mode, tax_states, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
   if (links !== undefined) setSetting('links_json', JSON.stringify(cleanLinks(links)));
   if (links_intro !== undefined) setSetting('links_intro', String(links_intro).trim().slice(0, 200));
   if (mailing_list_on !== undefined) setSetting('mailing_list_on', mailing_list_on ? '1' : '');
   if (policy !== undefined) setSetting('policy_json', JSON.stringify(cleanPolicy(policy)));
   if (shipping !== undefined) setSetting('shipping_json', JSON.stringify(cleanShipping(shipping)));
   if (tax_mode !== undefined) setSetting('tax_mode', tax_mode === 'stripe' ? 'stripe' : tax_mode === 'none' ? 'none' : 'flat');
+  if (tax_home !== undefined) setSetting('tax_home', US_STATES.has(String(tax_home).toUpperCase()) ? String(tax_home).toUpperCase() : '');
   if (tax_states !== undefined) {
     const st = codeList(tax_states);
     if (st.some((x) => !US_STATES.has(x))) throw new HttpError(400, 'Use two-letter state codes, like WA or WA, OR');
