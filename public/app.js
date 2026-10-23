@@ -194,7 +194,7 @@
 
     view().innerHTML = `
       <div class="topbar"><h1>In-person sales</h1><div class="spacer"></div><div class="muted small" id="clock"></div></div>
-      <p class="muted small" style="margin:-6px 0 14px">For markets, events and anyone standing in front of you. No shipping here. Online orders come through your shop and show up in Orders.</p>
+      <p class="muted small" style="margin-top:-6px;margin-bottom:14px">For markets, events and anyone standing in front of you. No shipping here. Online orders come through your shop and show up in Orders.</p>
       <div class="sell">
         <div>
           <div class="search">${icon('search')}<input class="input" id="q" placeholder="Search, or scan a barcode / type a SKU and press Enter" autocomplete="off"></div>
