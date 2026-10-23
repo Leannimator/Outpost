@@ -598,6 +598,7 @@ async function createStripeSession(orderId, priced, { collectShipping = false, c
   }
   const params = {
     mode: 'payment',
+    payment_method_types: ['card'],   // card only (Apple Pay and Google Pay are cards): these pay instantly, so no delayed-payment webhooks are needed
     line_items,
     metadata: { order_id: String(orderId) },
     client_reference_id: String(orderId),
