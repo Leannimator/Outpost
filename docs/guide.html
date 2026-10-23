@@ -223,16 +223,18 @@ body { overflow-wrap: anywhere; }
 </div></div>
 
 <h2 id="setup">Part 4: Set up your shop</h2>
-<p>Everything below is in the staff app. The left menu has Sell, Auctions, Products, Orders, Customers, Reviews, Reports and Settings.</p>
+<p>Everything below is in the staff app. The left menu has In person, Auctions, Products, Orders, Customers, Reviews, Reports and Settings.</p>
 
 <div class="step"><div class="num">1</div><div>
   <h3>Settings: the basics</h3>
   <ul>
-    <li><b>Your shop:</b> shop name (appears on receipts), your sales tax rate, and how online tax is worked out. Register (in-person) sales always use your rate. For online orders you can either charge your rate only to buyers in the states you list (for example <code>WA</code>), or turn on Stripe Tax so Stripe finds the exact rate for each address (about 0.5% per sale, only where you’re registered). Which states you must collect in depends on where you’ve passed their sales limits, so ask an accountant if you’re unsure.</li>
-    <li><b>Shipping:</b> add regions with a flat price each (for example United States $5, Alaska &amp; Hawaii $9, Canada $12), and optionally free shipping over an amount. At checkout buyers enter their address first, then see shipping and tax before paying. Anyone outside every region you list can’t check out. Auction bidders give their delivery address when they join, so a winner’s shipping and tax are worked out the same way.</li>
-    <li><b>Policies:</b> fill in your contact email and a few details. Outpost builds your <b>Privacy Policy</b> and <b>Terms of Service</b> pages for you (<code>/privacy</code> and <code>/terms</code>). Stripe asks for these two addresses.</li>
-    <li><b>Refund policy:</b> pick one. Buyers see it at checkout and it’s saved with each order, so a later change doesn’t rewrite old promises.</li>
-    <li><b>Trust and reviews:</b> write your “made by hand” statement, and set how many days you usually take to ship. Orders past that are flagged for you as <b>Running late</b>.</li>
+    <li><b>Your shop:</b> your shop name, one contact email (used on your About, Privacy and Terms pages), and a <b>Pause sales</b> switch for when you’re away.</li>
+    <li><b>About your shop:</b> a few lines about you, your “made by hand” promise, and your social links.</li>
+    <li><b>Sales tax: in person</b> is for markets and events. Pick your state to fill in its base rate, then adjust it to match your city (your receipt from that area shows the real number). Change it before you head to an event in another state.</li>
+    <li><b>Sales tax: online orders</b> is handled by <b>Stripe Tax</b>, so there’s no rate to set. Stripe works out the right tax from each buyer’s address (about 0.5% per sale, only in states where you’re registered). <b>You have to switch it on yourself:</b> in your Stripe dashboard open <b>Tax</b>, press <b>Get started</b>, add your business address, and add the states you’re registered in. Until it’s on, online checkout shows an error. Settings tells you whether Stripe says it’s on. Ask an accountant where you need to register.</li>
+    <li><b>Shipping:</b> add regions with a flat price each (for example United States $5, Alaska &amp; Hawaii $9, Canada $12), optionally free shipping over an amount, and how many days you usually take to ship (orders past that are flagged <b>Running late</b>). At checkout buyers enter their address first, then see shipping and tax before paying. Anyone outside every region you list can’t check out. Auction bidders give their address when they join, so a winner’s shipping and tax work the same way.</li>
+    <li><b>Refunds:</b> pick one. Buyers see it at checkout and it’s saved with each order, so a later change doesn’t rewrite old promises.</li>
+    <li><b>Privacy and Terms:</b> nothing to fill in. Outpost writes both pages from your other settings (<code>/privacy</code> and <code>/terms</code>), and Stripe asks for these two addresses. You can add a few touches, or press <b>Write your own</b> to replace a page with your own text (<b>Start from Outpost’s version</b> gives you something to edit).</li>
     <li><b>Your look:</b> pick a preset palette or your own custom colors, set text colors (one color for everything, or separate colors for regular text, headings, links and button text), and add your own artwork. Colors that are too hard to read can’t be saved.</li>
   </ul>
 </div></div>
@@ -260,7 +262,7 @@ body { overflow-wrap: anywhere; }
 
 <h2 id="use">Part 5: Using Outpost day to day</h2>
 
-<details open><summary>Selling in person (Sell)</summary>
+<details open><summary>Selling in person (In person)</summary>
   <p>Tap products to add them to the cart. Choose <b>Cash</b>, <b>Other</b> or <b>Card</b>. For card, a QR code appears; your customer scans it with their phone and pays on Stripe’s page. Discount codes can be typed at the register.</p>
 </details>
 
@@ -357,7 +359,7 @@ body { overflow-wrap: anywhere; }
 
 <h3 id="fyi-data">FYI: if someone asks you to delete their information</h3>
 <ul>
-  <li><b>You don’t have to panic or have it all figured out.</b> Someone emails you (the address in Settings → Policies) and asks what you have on them or asks you to delete it. Reply in plain words. Nobody expects a lawyer’s answer.</li>
+  <li><b>You don’t have to panic or have it all figured out.</b> Someone emails you (your contact email in Settings → Your shop) and asks what you have on them or asks you to delete it. Reply in plain words. Nobody expects a lawyer’s answer.</li>
   <li><b>Email list:</b> open <b>Customers → Email list</b> and remove them. Done. If you already imported the list into another email service, remove them there too.</li>
   <li><b>Orders:</b> most places require you to keep sales records for tax and accounting, often for several years. You can usually say no to deleting those, and explain why. Your privacy page already says so. Check how long your own country or state requires.</li>
   <li><b>Card details:</b> you never have them. Stripe holds those, so a buyer who wants them gone asks Stripe.</li>

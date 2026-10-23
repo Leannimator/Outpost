@@ -82,7 +82,7 @@
   fetch('/api/reviews').then((r) => r.json()).then(paintReviews).catch(() => {});
 
   Promise.all([fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json())]).then(([s, p]) => {
-    settings = s; rate = Number(s.tax_rate) || 0; maxQty = s.max_qty === undefined ? 10 : Number(s.max_qty);
+    settings = s; rate = Number(s.online_tax_rate === undefined ? s.tax_rate : s.online_tax_rate) || 0; maxQty = s.max_qty === undefined ? 10 : Number(s.max_qty);
     resting = !!s.break_on;
     if (resting) {
       document.querySelector('.shop-content').classList.add('is-resting');
@@ -138,7 +138,7 @@
     } catch { quote = null; }
     paintSums();
   }
-  const needsAddress = () => !!(settings.shipping && settings.shipping.on) || settings.tax_mode === 'stripe' || !!settings.tax_states;
+  const needsAddress = () => !!(settings.shipping && settings.shipping.on) || settings.needs_address === true;
   function paintSums() {
     let sub = 0;
     for (const [key, k] of cart) sub += look(key).price * k;

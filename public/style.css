@@ -511,3 +511,12 @@ tr:last-child td { border-bottom: 0; }
 .co-line.sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; }
 .co-line.disc { color: var(--forest, #2f5d46); }
 .co-line.total { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; font-weight: 700; font-size: 18px; }
+
+/* Settings: group headings, radio options, collapsible extras */
+.sgroup{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:10px 0 -6px;font-family:inherit;font-weight:600}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;cursor:pointer;background:var(--card)}
+.opt.on{border-color:var(--forest);box-shadow:0 0 0 1px var(--forest)}
+.opt input[type=radio]{margin-top:4px;flex:none}
+.opt .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;background:var(--rose);color:var(--rose-ink);vertical-align:middle}
+details.more{margin:10px 0}
+details.more summary{cursor:pointer;color:var(--forest);font-weight:600}

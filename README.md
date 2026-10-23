@@ -32,10 +32,10 @@ Set `ADMIN_PASSWORD` (and your Stripe **test** keys when you're ready for card p
 
 | URL | What it is |
 |---|---|
-| `/` | Staff app (password protected): **Sell**, **Auctions**, **Products**, **Orders**, **Settings** |
+| `/` | Staff app (password protected): **In person**, **Auctions**, **Products**, **Orders**, **Settings** |
 | `/store.html` | Public shop with search, categories and checkout |
 | `/links` | Link-in-bio page (links, events, optional email signup) |
-| `/privacy`, `/terms` | Privacy Policy and Terms of Service, written from your Settings → Policies |
+| `/privacy`, `/terms` | Privacy Policy and Terms of Service, written from your Settings |
 | `/auction.html` | Public auction lots; `/auction.html?lot=3` is the live bidding screen |
 | `/receipt.html?order=…&k=…` | Printable receipt (the link is private to each order) |
 
@@ -57,7 +57,7 @@ Bidders are not email-verified, so anyone can type any email. Card-on-file, the 
 
 ## What's in the app
 
-- **Sell**: register with discount codes, cash / other / card (QR) payments.
+- **In person**: register with discount codes, cash / other / card (QR) payments.
 - **Checkout**: buyers enter their address first, then see shipping and tax before paying on Stripe. Set flat shipping prices by region (with optional free shipping over an amount) and choose how online tax is worked out in Settings.
 - **Links page and email list**: a link-in-bio page, plus an email signup whose list you download as a CSV and import into your own email service. Outpost sends no email.
 - **About page**: a description of your shop plus links to your website and social accounts, set in Settings.

@@ -12,7 +12,19 @@
     return '';
   }
 
+  // The seller's own text: blank line = new paragraph, "## " starts a heading, "- " starts a bullet.
+  function own(title, s, p, text) {
+    const blocks = String(text || '').split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean).map((b) => {
+      if (/^##\s/.test(b)) return `<h2>${esc(b.replace(/^##\s+/, ''))}</h2>`;
+      const lines = b.split('\n');
+      if (lines.every((l) => /^-\s/.test(l.trim()))) return '<ul>' + lines.map((l) => `<li>${esc(l.trim().replace(/^-\s+/, ''))}</li>`).join('') + '</ul>';
+      return `<p>${esc(b).replace(/\n/g, '<br>')}</p>`;
+    }).join('');
+    return `<h1>${title}</h1><p class="muted">${esc(s.store_name)} · Last updated ${esc(p.updated || '')}</p>${blocks}`;
+  }
+
   function privacy(s, p) {
+    if (p.privacy_own && String(p.privacy_custom || '').trim()) return own('Privacy Policy', s, p, p.privacy_custom);
     const name = esc(s.store_name);
     const contact = p.contact_email ? `<a href="mailto:${esc(p.contact_email)}">${esc(p.contact_email)}</a>` : 'the shop’s contact details';
     return `<h1>Privacy Policy</h1>
@@ -39,6 +51,7 @@
   }
 
   function terms(s, p) {
+    if (p.terms_own && String(p.terms_custom || '').trim()) return own('Terms of Service', s, p, p.terms_custom);
     const name = esc(s.store_name);
     const contact = p.contact_email ? `<a href="mailto:${esc(p.contact_email)}">${esc(p.contact_email)}</a>` : 'the shop’s contact details';
     const where = regionsText(p);
@@ -66,7 +79,7 @@
       <p>Questions about these terms? Write to ${contact}.</p>`;
   }
 
-  window.OutpostLegal = { privacy, terms };
+  window.OutpostLegal = { privacy, terms, own };
 
   window.renderLegal = function (doc) {
     fetch('/api/settings').then((r) => r.json()).then((s) => {

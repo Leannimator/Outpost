@@ -149,7 +149,7 @@ const taxRate = () => {
   const n = parseFloat(getSetting('tax_rate', '0'));
   return Number.isFinite(n) ? Math.min(Math.max(n, 0), 30) : 0;
 };
-const calcTax = (subtotal) => Math.round((subtotal * taxRate()) / 100);
+const calcTax = (subtotal) => Math.round((subtotal * taxRate()) / 100);   // in-person (register) sales only
 const storeName = () => getSetting('store_name', 'Outpost');
 const Theme = require('./public/theme.js');
 const themeSettings = () => ({ bg: getSetting('theme_bg', ''), accent: getSetting('theme_accent', ''), button: getSetting('theme_button', ''), mode: getSetting('theme_mode', ''), textmode: getSetting('theme_textmode', ''), text: getSetting('theme_text', ''), heading: getSetting('theme_heading', ''), link: getSetting('theme_link', ''), buttontext: getSetting('theme_buttontext', '') });
@@ -183,8 +183,8 @@ const reviewsOn = () => true; /* reviews are always on: verified buyers only, an
 const US_STATES = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
 const CA_PROVINCES = new Set('AB BC MB NB NL NS NT NU ON PE QC SK YT'.split(' '));
 const codeList = (s) => String(s || '').toUpperCase().split(/[\s,]+/).filter(Boolean);
-const taxMode = () => (getSetting('tax_mode', 'flat') === 'stripe' ? 'stripe' : 'flat');
-const taxStates = () => codeList(getSetting('tax_states', ''));
+// Online sales tax is always worked out by Stripe Tax, from the buyer's address. The seller's own rate is for the register only.
+const taxMode = () => 'stripe';
 const shippingCfg = () => {
   try {
     const o = JSON.parse(getSetting('shipping_json', ''));
@@ -193,7 +193,7 @@ const shippingCfg = () => {
   return { on: false, regions: [], free_over_cents: 0 };
 };
 // Online checkout asks for an address first whenever shipping or tax depends on where the buyer is.
-const needsAddress = () => shippingCfg().on || taxMode() === 'stripe' || taxStates().length > 0;
+const needsAddress = () => true;   // online checkout always asks for the address first, so Stripe can work out tax and shipping
 
 function cleanAddress(a) {
   a = a && typeof a === 'object' ? a : {};
@@ -216,14 +216,16 @@ function shippingFor(addr, net) {
   if (cfg.free_over_cents && net >= cfg.free_over_cents) return { cents: 0, label: '(free over $' + (cfg.free_over_cents / 100).toFixed(cfg.free_over_cents % 100 ? 2 : 0) + ')' };
   return { cents: reg.cents, label: '(' + reg.name + ')' };
 }
-function taxFor(addr, net) {
-  if (taxMode() === 'stripe') return { cents: 0, label: '' };   // Stripe works it out on the payment page
-  const states = taxStates();
-  if (addr.country === 'US' && (!states.length || states.includes(addr.state))) return { cents: Math.round((net * taxRate()) / 100), label: '(' + taxRate() + '%)' };
-  return { cents: 0, label: '(none for this address)' };
-}
+function taxFor() { return { cents: 0, label: '' }; }   // Stripe works it out on the payment page
 const linksAll = () => { try { const a = JSON.parse(getSetting('links_json', '[]')); return Array.isArray(a) ? a : []; } catch { return []; } };
-const policyObj = () => { try { const o = JSON.parse(getSetting('policy_json', '{}')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
+const policyObj = () => {
+  let o = {};
+  try { const x = JSON.parse(getSetting('policy_json', '{}')); if (x && typeof x === 'object') o = x; } catch { /* none saved */ }
+  // Where you ship comes from your Shipping regions, so it's only asked once.
+  const sh = shippingCfg();
+  if (sh.on && sh.regions.length) { const c = new Set(sh.regions.map((r) => r.country)); o = { ...o, ship_regions: c.has('US') && c.has('CA') ? 'usca' : c.has('US') ? 'us' : '' }; }
+  return o;
+};
 const SHOP_PAGES = ['store.html', 'auction.html', 'about.html', 'reviews.html'];
 function cleanLinks(inp) {
   if (!Array.isArray(inp) || inp.length > 40) throw new HttpError(400, 'Too many links');
@@ -245,7 +247,7 @@ function cleanLinks(inp) {
 function cleanPolicy(q) {
   q = q && typeof q === 'object' ? q : {};
   const t = (k, n) => String(q[k] || '').trim().slice(0, n);
-  return { contact_email: t('contact_email', 120), ship_regions: ['us', 'usca', 'world'].includes(q.ship_regions) ? q.ship_regions : '', ship_note: t('ship_note', 400), governing_law: t('governing_law', 80), privacy_extra: t('privacy_extra', 1500), terms_extra: t('terms_extra', 1500), updated: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) };
+  return { contact_email: t('contact_email', 120), ship_regions: ['us', 'usca', 'world'].includes(q.ship_regions) ? q.ship_regions : '', ship_note: t('ship_note', 400), governing_law: t('governing_law', 80), privacy_extra: t('privacy_extra', 1500), terms_extra: t('terms_extra', 1500), privacy_custom: t('privacy_custom', 20000), terms_custom: t('terms_custom', 20000), privacy_own: !!q.privacy_own, terms_own: !!q.terms_own, updated: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) };
 }
 function cleanShipping(b) {
   b = b && typeof b === 'object' ? b : {};
@@ -264,7 +266,7 @@ function cleanShipping(b) {
   if (b.on && !regions.length) throw new HttpError(400, 'Add at least one shipping region, or turn shipping off');
   return { on: !!b.on, regions, free_over_cents: Math.max(0, Math.min(10000000, Math.round(Number(b.free_over_cents) || 0))) };
 }
-const bidCardOn = () => !!stripe && getSetting('bid_card_required', '') === '1';
+const bidCardOn = () => !!stripe && getSetting('bid_card_required', '1') === '1';   // on unless the seller turns it off
 const handmadeText = () => getSetting('handmade_statement', '');
 const SOCIALS = ['website', 'instagram', 'tiktok', 'facebook', 'youtube', 'pinterest', 'bluesky', 'threads', 'email'];
 const socialLinks = () => { try { const o = JSON.parse(getSetting('social_json', '{}')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
@@ -509,7 +511,7 @@ function priceCart(rawItems, code, opts = {}) {
   const disc = findDiscount(code, subtotal);
   const discount = disc ? disc.amount : 0;
   const net = subtotal - discount;
-  let tax = calcTax(net), shipping = 0, shipping_label = '', tax_label = '', address = null;
+  let tax = opts.online ? 0 : calcTax(net), shipping = 0, shipping_label = '', tax_label = '', address = null;
   if (opts.online && needsAddress()) {
     tax = 0;   // not known until we have an address
     if (opts.address) {
@@ -730,14 +732,14 @@ app.post('/api/admin/upload', requireAdmin, express.raw({ type: 'image/*', limit
 
 // ---------- public API: settings, products, checkout, receipts ----------
 const settingsPayload = () => ({
-  store_name: storeName(), tax_rate: taxRate(), currency: CURRENCY,
+  store_name: storeName(), tax_rate: taxRate(), online_tax_rate: 0, currency: CURRENCY,
   break_on: breakOn(), break_message: breakMessage(),
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
   handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: socialLinks(), ship_days: shipDays(), reviews_on: reviewsOn(),
-  bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '') === '1', stripe_ready: !!stripe,
+  bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '1') === '1', stripe_ready: !!stripe,
   links: linksAll().filter((l) => !l.hidden).map(({ hidden, ...l }) => l), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1',
-  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_states: taxStates().join(', '), needs_address: needsAddress(),
+  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_home: getSetting('tax_home', ''), needs_address: needsAddress(),
   ...brandSettings(),
 });
 app.get('/api/settings', (req, res) => { res.json(settingsPayload()); });
@@ -923,19 +925,25 @@ app.get('/api/admin/status', requireAdmin, (req, res) => {
   res.json({ stripe: !!stripe, webhook: !!process.env.STRIPE_WEBHOOK_SECRET, base_url: BASE_URL });
 });
 
+// Is Stripe Tax switched on in the seller's Stripe account? Best effort: if Stripe can't say, we say "unknown".
+let taxStatusCache = null;
+app.get('/api/admin/tax-status', requireAdmin, h(async (req, res) => {
+  if (!stripe) return res.json({ state: 'no_stripe' });
+  if (taxStatusCache && Date.now() - taxStatusCache.t < 30e3) return res.json(taxStatusCache.v);
+  let v;
+  try { const st = await stripe.tax.settings.retrieve(); v = { state: st.status === 'active' ? 'active' : 'pending' }; } catch { v = { state: 'unknown' }; }
+  taxStatusCache = { t: Date.now(), v };
+  res.json(v);
+}));
+
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { links, links_intro, mailing_list_on, policy, shipping, tax_mode, tax_states, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
+  const { links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
   if (links !== undefined) setSetting('links_json', JSON.stringify(cleanLinks(links)));
   if (links_intro !== undefined) setSetting('links_intro', String(links_intro).trim().slice(0, 200));
   if (mailing_list_on !== undefined) setSetting('mailing_list_on', mailing_list_on ? '1' : '');
   if (policy !== undefined) setSetting('policy_json', JSON.stringify(cleanPolicy(policy)));
   if (shipping !== undefined) setSetting('shipping_json', JSON.stringify(cleanShipping(shipping)));
-  if (tax_mode !== undefined) setSetting('tax_mode', tax_mode === 'stripe' ? 'stripe' : 'flat');
-  if (tax_states !== undefined) {
-    const st = codeList(tax_states);
-    if (st.some((x) => !US_STATES.has(x))) throw new HttpError(400, 'Use two-letter state codes, like WA or WA, OR');
-    setSetting('tax_states', st.join(', '));
-  }
+  if (tax_home !== undefined) setSetting('tax_home', US_STATES.has(String(tax_home).toUpperCase()) ? String(tax_home).toUpperCase() : '');
   if (tax_rate !== undefined) {
     const n = Number(tax_rate);
     if (!Number.isFinite(n) || n < 0 || n > 30) throw new HttpError(400, 'Tax rate must be between 0 and 30');
@@ -1493,7 +1501,7 @@ function settleAuction(auctionId) {
     }
     const subtotal = high.amount_cents;
     // Where the winner is decides shipping and tax. Without an address we charge neither (and don't auto-charge) rather than guess.
-    let addr = null, shipping = 0, tax = needsAddress() ? 0 : calcTax(subtotal);
+    let addr = null, shipping = 0, tax = 0;   // Stripe works it out from the winner's address
     if (needsAddress()) {
       const bd = db.prepare('SELECT address_json FROM bidders WHERE id=?').get(high.bidder_id);
       try { addr = bd && bd.address_json ? JSON.parse(bd.address_json) : null; } catch { addr = null; }
