@@ -598,6 +598,7 @@ async function createStripeSession(orderId, priced, { collectShipping = false, c
   }
   const params = {
     mode: 'payment',
+    payment_method_types: ['card'],   // card only (Apple Pay and Google Pay are cards): these pay instantly, so no delayed-payment webhooks are needed
     line_items,
     metadata: { order_id: String(orderId) },
     client_reference_id: String(orderId),
@@ -736,7 +737,7 @@ const settingsPayload = () => ({
   handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: socialLinks(), ship_days: shipDays(), reviews_on: reviewsOn(),
   bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '') === '1', stripe_ready: !!stripe,
   links: linksAll().filter((l) => !l.hidden).map(({ hidden, ...l }) => l), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1',
-  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_states: taxStates().join(', '),
+  policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_states: taxStates().join(', '), needs_address: needsAddress(),
   ...brandSettings(),
 });
 app.get('/api/settings', (req, res) => { res.json(settingsPayload()); });
@@ -1491,12 +1492,25 @@ function settleAuction(auctionId) {
       return;
     }
     const subtotal = high.amount_cents;
-    const tax = calcTax(subtotal);
+    // Where the winner is decides shipping and tax. Without an address we charge neither (and don't auto-charge) rather than guess.
+    let addr = null, shipping = 0, tax = needsAddress() ? 0 : calcTax(subtotal);
+    if (needsAddress()) {
+      const bd = db.prepare('SELECT address_json FROM bidders WHERE id=?').get(high.bidder_id);
+      try { addr = bd && bd.address_json ? JSON.parse(bd.address_json) : null; } catch { addr = null; }
+      if (addr) {
+        try { shipping = shippingFor(addr, subtotal).cents; } catch { shipping = 0; }
+        tax = taxFor(addr, subtotal).cents;   // 0 here when Stripe Tax is on: it's worked out when the card is charged
+      }
+    }
     const priced = {
       lines: [{ product_id: null, name: `${a.title} (Lot ${a.id})`, unit_price_cents: subtotal, quantity: 1 }],
-      subtotal, tax, total: subtotal + tax,
+      subtotal, tax, shipping, total: subtotal + shipping + tax,
     };
     const orderId = createOrder('auction', 'card', 'pending', priced, auctionId);
+    if (addr) {
+      db.prepare('UPDATE orders SET shipping_cents=?, shipping_json=?, customer_email=?, tax_state=? WHERE id=?').run(
+        shipping, JSON.stringify({ name: addr.name, address: { line1: addr.line1, line2: addr.line2, city: addr.city, state: addr.state, postal_code: addr.zip, country: addr.country } }), addr.email, addr.state, orderId);
+    }
     db.prepare("UPDATE auctions SET status='closed', winner_bid_id=?, order_id=?, pay_token=? WHERE id=?")
       .run(high.id, orderId, rid(16), auctionId);
   })();
@@ -1613,6 +1627,18 @@ app.post('/api/bidders/card', h(async (req, res) => {
   res.json({ url: session.url });
 }));
 
+// A bidder who joined before delivery addresses were needed adds theirs here.
+app.post('/api/bidders/address', h(async (req, res) => {
+  const bidder = bidderFromReq(req);
+  if (!bidder) throw new HttpError(401, 'Please join first');
+  if (rlCount('addr:' + bidder.id, 3600e3) >= 10) throw new HttpError(429, 'Too many tries. Please wait a bit.');
+  rlAdd('addr:' + bidder.id);
+  const addr = cleanAddress({ ...(req.body.address || {}), name: bidder.name, email: bidder.email });
+  shippingFor(addr, 0);
+  db.prepare('UPDATE bidders SET address_json=? WHERE id=?').run(JSON.stringify(addr), bidder.id);
+  res.json({ ok: true });
+}));
+
 app.get('/card-saved', async (req, res) => {
   const lot = Number(req.query.lot) > 0 ? Number(req.query.lot) : '';
   let ok = false;
@@ -1633,18 +1659,34 @@ async function autoChargeDue() {
   if (!bidCardOn() || chargingNow) return;
   chargingNow = true;
   try {
-    const rows = db.prepare(`SELECT o.id, o.total_cents, a.id AS aid, a.title, bd.email, bd.stripe_customer_id AS cust, bd.stripe_payment_method AS pm
+    const needAddr = needsAddress() ? 1 : 0;
+    const rows = db.prepare(`SELECT o.id, o.total_cents, o.subtotal_cents, o.shipping_cents, o.shipping_json, a.id AS aid, a.title, bd.email, bd.stripe_customer_id AS cust, bd.stripe_payment_method AS pm
       FROM orders o JOIN auctions a ON a.order_id = o.id JOIN bids b ON b.id = a.winner_bid_id JOIN bidders bd ON bd.id = b.bidder_id
       WHERE o.channel='auction' AND o.status='pending' AND o.charge_status='' AND a.status='closed'
-        AND bd.stripe_payment_method IS NOT NULL AND bd.stripe_customer_id IS NOT NULL`).all();
+        AND (? = 0 OR o.shipping_json IS NOT NULL)
+        AND bd.stripe_payment_method IS NOT NULL AND bd.stripe_customer_id IS NOT NULL`).all(needAddr);
     for (const r of rows) {
       if (!db.prepare("UPDATE orders SET charge_status='charging' WHERE id=? AND charge_status='' AND status='pending'").run(r.id).changes) continue;
       try {
+        let amount = r.total_cents, hooks;
+        if (taxMode() === 'stripe' && r.shipping_json) {
+          // Stripe Tax: ask Stripe what tax this address owes, then charge exactly that.
+          const ad = (JSON.parse(r.shipping_json) || {}).address || {};
+          const calc = await stripe.tax.calculations.create({
+            currency: CURRENCY,
+            line_items: [{ amount: r.subtotal_cents, reference: `lot-${r.aid}`, tax_behavior: 'exclusive' }],
+            ...(r.shipping_cents > 0 ? { shipping_cost: { amount: r.shipping_cents, tax_behavior: 'exclusive' } } : {}),
+            customer_details: { address: { line1: ad.line1, line2: ad.line2 || undefined, city: ad.city, state: ad.state, postal_code: ad.postal_code, country: ad.country }, address_source: 'shipping' },
+          });
+          amount = calc.amount_total;
+          hooks = { inputs: { tax: { calculation: calc.id } } };
+          db.prepare('UPDATE orders SET tax_cents=?, total_cents=? WHERE id=?').run(calc.tax_amount_exclusive, amount, r.id);
+        }
         const pi = await stripe.paymentIntents.create({
-          amount: r.total_cents, currency: CURRENCY, customer: r.cust, payment_method: r.pm, off_session: true, confirm: true,
+          amount, currency: CURRENCY, customer: r.cust, payment_method: r.pm, off_session: true, confirm: true,
           payment_method_types: ['card'], receipt_email: r.email, description: `${r.title} (Lot ${r.aid})`,
-          metadata: { order_id: String(r.id), auction_id: String(r.aid) },
-        }, { idempotencyKey: `outpost-lot-order-${r.id}` });
+          metadata: { order_id: String(r.id), auction_id: String(r.aid) }, ...(hooks ? { hooks } : {}),
+        }, { idempotencyKey: `outpost-lot-order-${r.id}-${amount}` });
         if (pi.status === 'succeeded') {
           fulfillOrder(r.id, { email: r.email, payment_intent: pi.id });
           db.prepare("UPDATE orders SET charge_status='paid', charge_error=NULL WHERE id=?").run(r.id);
@@ -1666,9 +1708,17 @@ app.post('/api/bidders', h(async (req, res) => {
   if (DISPOSABLE.has(email.split('@')[1])) { logSecurity('disposable_email', req, email); throw new HttpError(400, 'Please use your real email address so the seller can reach you if you win.'); }
   if (isBlocked('email', email)) { logSecurity('blocked_email', req, email); throw new HttpError(403, GENERIC_REJECT); }
   if (db.prepare('SELECT COUNT(*) c FROM bidders WHERE lower(email)=?').get(email).c >= 5) { logSecurity('email_reuse', req, email); throw new HttpError(429, 'That email has been used to sign up too many times.'); }
+  let addrJson = null;
+  if (needsAddress()) {
+    // Shipping and tax for a winning bid depend on where the item goes, so ask up front.
+    if (!req.body.address) throw new HttpError(400, 'Please add your delivery address so the right shipping and tax can be worked out.');
+    const addr = cleanAddress({ ...req.body.address, name, email });
+    shippingFor(addr, 0);   // refuses addresses outside the regions you ship to
+    addrJson = JSON.stringify(addr);
+  }
   rlAdd('reg:' + req.ip); rlAdd('regday:' + req.ip);
   const token = rid(24);
-  db.prepare('INSERT INTO bidders (name, email, token, created_at) VALUES (?,?,?,?)').run(name, email, token, Date.now());
+  db.prepare('INSERT INTO bidders (name, email, token, created_at, address_json) VALUES (?,?,?,?,?)').run(name, email, token, Date.now(), addrJson);
   res.json({ token, name });
 }));
 
@@ -1713,6 +1763,9 @@ app.post('/api/auctions/:id/bids', h(async (req, res) => {
   if (bidCardOn() && !bidder.stripe_payment_method) {
     const e = new HttpError(402, 'Add a card to bid. You are only charged if you win.'); e.extra = { need_card: true }; throw e;
   }
+  if (needsAddress() && !bidder.address_json) {
+    const e = new HttpError(428, 'Please add your delivery address to bid.'); e.extra = { need_address: true }; throw e;
+  }
   if (rlCount('bidip:' + req.ip, 60e3) >= 90) { logSecurity('bid_rate', req); throw new HttpError(429, 'Slow down a little'); }
   rlAdd('bidip:' + req.ip);
   if (rlCount('bid:' + bidder.id, 60e3) >= 30) throw new HttpError(429, 'Slow down a little');
@@ -1755,10 +1808,20 @@ app.get('/pay/:token', async (req, res) => {
     const items = db.prepare('SELECT * FROM order_items WHERE order_id=?').all(order.id);
     const priced = {
       lines: items.map((i) => ({ name: i.name, unit_price_cents: i.unit_price_cents, quantity: i.quantity })),
-      subtotal: order.subtotal_cents, tax: order.tax_cents, total: order.total_cents,
+      subtotal: order.subtotal_cents, tax: order.tax_cents, shipping: order.shipping_cents || 0, total: order.total_cents,
     };
+    let haveAddr = false;
+    if (order.shipping_json) {
+      try {
+        const sj = JSON.parse(order.shipping_json); const ad = sj.address || {};
+        priced.address = { email: order.customer_email, name: sj.name, line1: ad.line1, line2: ad.line2, city: ad.city, state: ad.state, zip: ad.postal_code, country: ad.country };
+        haveAddr = true;
+        if (taxMode() === 'stripe') priced.tax = 0;   // Stripe works it out on its page
+      } catch { /* fall through */ }
+    }
+    if (needsAddress() && !haveAddr) return text(409, 'The seller needs your delivery address before you can pay. Please contact the seller.');
     const session = await createStripeSession(order.id, priced, {
-      collectShipping: true, cancelUrl: `${BASE_URL}/auction.html?lot=${a.id}`, keepOnFail: true,
+      collectShipping: !haveAddr, cancelUrl: `${BASE_URL}/auction.html?lot=${a.id}`, keepOnFail: true,
     });
     res.redirect(303, session.url);
   } catch (e) {
