@@ -1189,19 +1189,14 @@
           <h2 class="sgroup">Selling</h2>
           ${card('Sales tax: in person', `
             <p class="muted small" style="margin:0 0 12px">Used at the register, for markets and events. Charged on every in-person sale.</p>
-            <label class="field"><span class="label">Where are you selling?</span><select class="input" id="shome"><option value="">Choose a state to fill in its rate…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${(cur.tax_home || String(cur.tax_states || '').split(/[\s,]+/)[0]) === c ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+            <label class="field"><span class="label">Where are you selling?</span><select class="input" id="shome"><option value="">Choose a state to fill in its rate…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${cur.tax_home === c ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
             <label class="field"><span class="label">Tax rate (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint" id="srhint">Picking a state fills in its base rate. Your city or county may add a bit more, so check a receipt from your area and adjust it. Heading to an event in another state? Change this before you go. Use 0 for none.</div></label>
             <button class="btn btn-primary mt" id="taxsave">Save</button><div id="taxmsg"></div>`)}
           ${card('Sales tax: online orders', `
-            <p class="muted small" style="margin:0 0 12px">Used for orders from your shop and auctions. Buyers enter their address at checkout.</p>
-            <div id="taxopts">
-              <label class="opt"><input type="radio" name="taxm" value="stripe"><span><b>Stripe works it out</b> <span class="tag">Easiest</span><br><span class="muted small">Finds the right tax for each buyer’s address, in every state you’re registered in. Costs about 0.5% per sale. Turn on Stripe Tax in your Stripe dashboard first.</span></span></label>
-              <label class="opt"><input type="radio" name="taxm" value="flat"><span><b>My own rate</b><br><span class="muted small">Charged to buyers who live in the state below. Everyone else pays no tax.</span>
-                <span class="grid2" style="margin-top:8px"><select class="input" id="ohome"><option value="">Choose a state…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${(String(cur.tax_states || '').split(/[\s,]+/)[0] || cur.tax_home) === c ? ' selected' : ''}>${n}</option>`).join('')}</select>
-                <input class="input" id="orate" inputmode="decimal" aria-label="Online tax rate (%)" placeholder="Rate %" value="${esc(cur.tax_rate_online !== '' && cur.tax_rate_online != null ? cur.tax_rate_online : cur.tax_rate)}"></span></span></label>
-            </div>
-            <div class="hint">Not sure what you owe? Ask an accountant. Which states you must collect in depends on your sales there.</div>
-            <button class="btn btn-primary mt" id="otaxsave">Save</button><div id="otaxmsg"></div>`)}
+            <p style="margin:0 0 10px">For orders from your shop and auctions, <b>Stripe works out the tax</b> from each buyer’s address and adds it at checkout. You don’t set a rate.</p>
+            <div id="taxflag" class="msg err" style="margin:0 0 10px"><b>You need to turn on Stripe Tax.</b> It’s off until you switch it on. Until then, online checkout will show an error and nobody can buy.<span id="taxflagmore"></span></div>
+            <p class="small" style="margin:0 0 6px"><b>To turn it on:</b> in your Stripe dashboard open <b>Tax</b>, press <b>Get started</b>, add your business address, and add the states you’re registered to collect tax in.</p>
+            <div class="hint">Stripe charges about 0.5% per sale where you’re registered, and nothing elsewhere. Not sure where you need to register? Ask an accountant.</div>`)}
           ${card('Shipping', `
             <label class="check"><input type="checkbox" id="shon" ${ship.on ? 'checked' : ''}> <span>Charge for shipping online</span></label>
             <p class="muted small" style="margin:6px 0 12px">Buyers enter their address in the checkout, and the shipping fee for their region is added. A buyer outside every region below can’t check out.</p>
@@ -1247,14 +1242,19 @@
             <button class="btn btn-primary mt" id="bsave" ${cur.stripe_ready ? '' : 'disabled'}>Save</button><div id="bmsg2"></div>`)}
           <h2 class="sgroup">Legal pages</h2>
           ${card('Privacy and Terms', `
-            <p class="muted small" style="margin:0 0 12px">Outpost writes these for you from your other settings, at <b>${esc(base)}/privacy.html</b> and <b>${esc(base)}/terms.html</b>. Stripe asks for both. They link from the bottom of your shop. Nothing to fill in unless you want to add something.</p>
-            <div class="msg" style="margin:0 0 10px">Plain-language starting points, not legal advice. Give them a read.</div>
-            <details class="more"><summary>Add your own touches (optional)</summary>
+            <p class="muted small" style="margin:0 0 12px">Outpost writes both pages for you from your other settings, at <b>${esc(base)}/privacy.html</b> and <b>${esc(base)}/terms.html</b>. Stripe asks for these two addresses. Nothing to fill in unless you want to change something.</p>
+            <div class="msg" style="margin:0 0 10px">Plain-language starting points, not legal advice. Give them a read, and change anything that doesn’t match how you run your shop.</div>
+            <details class="more"><summary>Add a few touches to Outpost’s version</summary>
               <label class="field" style="margin-top:10px"><span class="label">Which state or country’s laws apply?</span><input class="input" id="plaw" maxlength="80" placeholder="Washington State, USA" value="${esc(pol.governing_law || '')}"></label>
               <label class="field"><span class="label">Extra shipping notes</span><textarea class="input" id="pship" rows="2" maxlength="400" placeholder="Tracking is emailed once your order is on its way.">${esc(pol.ship_note || '')}</textarea></label>
               <label class="field"><span class="label">Extra for your Privacy Policy</span><textarea class="input" id="ppriv" rows="3" maxlength="1500">${esc(pol.privacy_extra || '')}</textarea></label>
               <label class="field"><span class="label">Extra for your Terms</span><textarea class="input" id="pterm" rows="3" maxlength="1500" placeholder="Custom orders, commissions, workshop cancellations…">${esc(pol.terms_extra || '')}</textarea></label>
             </details>
+            ${[['privacy', 'Privacy Policy'], ['terms', 'Terms of Service']].map(([k, label]) => `<details class="more" id="own-${k}"${pol[k + '_own'] ? ' open' : ''}><summary>Write your own ${label}</summary>
+              <label class="check" style="margin-top:10px"><input type="checkbox" id="${k}own" ${pol[k + '_own'] ? 'checked' : ''}> <span>Show my text instead of Outpost’s</span></label>
+              <textarea class="input" id="${k}custom" rows="14" maxlength="20000" style="margin-top:8px" placeholder="Write your ${label} here…">${esc(pol[k + '_custom'] || '')}</textarea>
+              <div class="hint">Leave a blank line between paragraphs. Start a line with <b>##</b> for a heading, or with <b>-</b> for a bullet. Your text replaces the whole page, so the touches above aren’t used while this is on.</div>
+              <button class="btn btn-ghost mt" type="button" data-startfrom="${k}">Start from Outpost’s version</button></details>`).join('')}
             <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="polsave">Save</button><a class="btn btn-ghost" href="privacy.html" target="_blank" rel="noopener">View privacy ↗</a><a class="btn btn-ghost" href="terms.html" target="_blank" rel="noopener">View terms ↗</a></div><div id="polmsg"></div>`)}
         </div>
         <div style="display:grid;gap:18px;min-width:0">
@@ -1279,14 +1279,13 @@
         </div>
       </div>`;
     wireLook();
-    {
-      const opts = document.querySelectorAll('#taxopts input[name=taxm]');
-      const sync = () => opts.forEach((r) => { r.closest('.opt').classList.toggle('on', r.checked); r.closest('.opt').querySelectorAll('select,input:not([type=radio])').forEach((x) => { x.disabled = !r.checked; }); });
-      opts.forEach((r) => { r.checked = r.value === (cur.tax_mode === 'stripe' ? 'stripe' : 'flat'); r.onchange = sync; });
-      sync();
-      const fill = (sel, rate, hint) => () => { const t = STATE_TAX[$(sel).value]; if (t) { $(rate).value = t[1]; if (hint) $(hint).textContent = t[0] + '’s base rate is ' + t[1] + '%. Your city or county may add a bit more, so check a receipt from your area and adjust it.'; } };
-      $('#shome').onchange = fill('#shome', '#srate', '#srhint'); $('#ohome').onchange = fill('#ohome', '#orate');
-    }
+    $('#shome').onchange = () => { const t = STATE_TAX[$('#shome').value]; if (t) { $('#srate').value = t[1]; $('#srhint').textContent = t[0] + '’s base rate is ' + t[1] + '%. Your city or county may add a bit more, so check a receipt from your area and adjust it.'; } };
+    // Is Stripe Tax on? Best effort. If Stripe can't tell us, the warning stays up.
+    api('/api/admin/tax-status').then((t) => {
+      const f = $('#taxflag'); if (!f) return;
+      if (t.state === 'active') { f.className = 'msg'; f.innerHTML = '<b>Stripe Tax is on.</b> Online orders get the right tax automatically.'; }
+      else if (t.state === 'pending') $('#taxflagmore').textContent = ' Stripe says it isn’t finished setting up yet.';
+    }).catch(() => {});
 
     // --- shop name, contact email, pause ---
     $('#ssave').onclick = async () => {
@@ -1308,16 +1307,6 @@
         $('#taxmsg').innerHTML = '<div class="msg">Saved. The register now charges ' + esc($('#srate').value || '0') + '%.</div>';
       } catch (e) { $('#taxmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
-    $('#otaxsave').onclick = async () => {
-      try {
-        const m = (document.querySelector('#taxopts input[name=taxm]:checked') || {}).value || 'flat', home = $('#ohome').value;
-        if (m === 'flat' && !home) throw new Error('Choose the state your buyers pay tax in, or pick “Stripe works it out.”');
-        const r = await put('/api/admin/settings', m === 'flat' ? { tax_mode: 'flat', tax_states: home, tax_rate_online: $('#orate').value } : { tax_mode: 'stripe' });
-        settings = { ...settings, ...r };
-        $('#otaxmsg').innerHTML = '<div class="msg">Saved.' + (m === 'stripe' ? ' Remember to turn on Stripe Tax in your Stripe dashboard, or checkout will show an error.' : '') + '</div>';
-      } catch (e) { $('#otaxmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
-    };
-
     // --- stock ---
     $('#stsave').onclick = async () => {
       try {
@@ -1361,9 +1350,22 @@
       } catch (e) { $('#shmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
+    // Fill the box with Outpost's own wording as plain text, so you can edit it instead of starting from nothing.
+    const legalText = (k) => {
+      const d = document.createElement('div'); d.innerHTML = window.OutpostLegal[k]({ ...settings, store_name: settings.store_name }, { ...pol, [k + '_own']: false });
+      const out = [];
+      d.childNodes.forEach((n) => {
+        if (n.tagName === 'H1' || (n.tagName === 'P' && n.classList.contains('muted'))) return;
+        if (n.tagName === 'H2') out.push('## ' + n.textContent.trim());
+        else if (n.tagName === 'UL') out.push([...n.children].map((li) => '- ' + li.textContent.trim()).join('\n'));
+        else if (n.textContent.trim()) out.push(n.textContent.trim());
+      });
+      return out.join('\n\n');
+    };
+    document.querySelectorAll('[data-startfrom]').forEach((b) => { b.onclick = () => { const k = b.dataset.startfrom, box = $('#' + k + 'custom'); if (box.value.trim() && !confirm('Replace what you’ve written with Outpost’s version?')) return; box.value = legalText(k); }; });
     $('#polsave').onclick = async () => {
       try {
-        const r = await put('/api/admin/settings', { policy: { ...pol, ship_note: $('#pship').value, governing_law: $('#plaw').value, privacy_extra: $('#ppriv').value, terms_extra: $('#pterm').value } });
+        const r = await put('/api/admin/settings', { policy: { ...pol, ship_note: $('#pship').value, governing_law: $('#plaw').value, privacy_extra: $('#ppriv').value, terms_extra: $('#pterm').value, privacy_custom: $('#privacycustom').value, terms_custom: $('#termscustom').value, privacy_own: $('#privacyown').checked, terms_own: $('#termsown').checked } });
         settings = { ...settings, ...r }; if (r.policy) pol = r.policy; $('#polmsg').innerHTML = '<div class="msg">Saved. Your Privacy and Terms pages are up to date.</div>';
       } catch (e) { $('#polmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
