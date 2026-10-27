@@ -705,8 +705,8 @@ const IMG_HEADERS = (res) => {
 fs.mkdirSync(path.join(db.dataDir || __dirname, db.dataDir ? 'images' : path.join('public', 'images')), { recursive: true });
 // Slows down anyone downloading photos in bulk. The shop page loads every product photo at once, so a single visit to a
 // shop with 40 products is 40 requests; several people on one shared connection (craft fair wifi) add up fast. Hence the
-// room above "10 a minute", which would block real shoppers. Change it with IMAGE_LIMIT_PER_MIN.
-const IMAGE_LIMIT_PER_MIN = Math.max(20, parseInt(process.env.IMAGE_LIMIT_PER_MIN, 10) || 200);
+// room above "10 a minute", which would block real shoppers. Lower it with IMAGE_LIMIT_PER_MIN if you want it stricter.
+const IMAGE_LIMIT_PER_MIN = Math.max(20, parseInt(process.env.IMAGE_LIMIT_PER_MIN, 10) || 600);
 app.use('/images', (req, res, next) => {
   if (!aiShieldOn()) return next();
   const key = 'img:' + req.ip;
