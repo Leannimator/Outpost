@@ -111,6 +111,19 @@ CREATE TABLE IF NOT EXISTS blocks (
   UNIQUE (kind, value)
 );
 
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  ip TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  at INTEGER NOT NULL,
+  ip TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_login_at ON login_attempts (at);
+
 CREATE TABLE IF NOT EXISTS security_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at INTEGER NOT NULL,

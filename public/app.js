@@ -100,23 +100,58 @@
   // ---------- login ----------
   function loginScreen(msg) {
     appReady = false;
-    document.body.innerHTML = `
-      <div class="login-wrap"><div class="login card">
-        <span class="wordmark" data-brand="name">Outpost</span>
+    let pending = null; // password, once it has been accepted and a code is needed
+    const shell = (inner) => `
+      <div class="login-wrap"><div class="login-col"><div class="login card">
+        <span class="wordmark" data-brand="name">Outpost</span>${inner}
+      </div>
+      <div class="login-shop"><div>Looking to shop?</div><a class="btn btn-block" href="/shop">Take me to the shop →</a></div></div></div>`;
+    const finish = (d) => { token = d.token; store.set('outpost_token', token); init(); };
+    function passwordStep(m) {
+      pending = null;
+      document.body.innerHTML = shell(`
         <p class="muted">Sign in to your shop</p>
         <input class="input" id="pw" type="password" placeholder="Password" autocomplete="current-password">
         <button class="btn btn-primary btn-block mt" id="go">Sign in</button>
-        <div id="lerr">${msg ? `<div class="msg err">${esc(msg)}</div>` : ''}</div>
-      </div></div>`;
-    paintBrand();
-    const go = async () => {
-      token = $('#pw').value;
-      try { await api('/api/admin/status'); store.set('outpost_token', token); init(); }
-      catch (e) { token = ''; $('#lerr').innerHTML = `<div class="msg err">${esc(e.status === 401 ? "That password didn't work" : e.message)}</div>`; }
-    };
-    $('#go').onclick = go;
-    $('#pw').onkeydown = (e) => { if (e.key === 'Enter') go(); };
-    $('#pw').focus();
+        <div id="lerr">${m ? `<div class="msg err">${esc(m)}</div>` : ''}</div>
+        <p class="hint">You stay signed in for 12 hours, or until you sign out. Too many wrong tries pauses sign-in for 15 minutes.</p>`);
+      paintBrand();
+      const go = async () => {
+        const password = $('#pw').value;
+        $('#go').disabled = true;
+        try {
+          const d = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Something went wrong'); return j; });
+          if (d.need_code) { pending = password; return codeStep(); }
+          finish(d);
+        } catch (e) { $('#lerr').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#go').disabled = false; }
+      };
+      $('#go').onclick = go;
+      $('#pw').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      $('#pw').focus();
+    }
+    function codeStep(recovery, m) {
+      document.body.innerHTML = shell(`
+        <p class="muted">${recovery ? 'Enter one of your recovery codes' : 'Enter the 6-digit code from your authenticator app'}</p>
+        <input class="input" id="cd" ${recovery ? 'placeholder="xxxx-xxxx" autocomplete="off"' : 'inputmode="numeric" maxlength="7" placeholder="123456" autocomplete="one-time-code"'} style="text-align:center;font-size:20px;letter-spacing:.1em">
+        <button class="btn btn-primary btn-block mt" id="go">Confirm</button>
+        <div id="lerr">${m ? `<div class="msg err">${esc(m)}</div>` : ''}</div>
+        <p class="hint" style="text-align:center">${recovery ? '<button class="link-btn" id="swap">Use my authenticator app instead</button>' : 'Lost your phone? <button class="link-btn" id="swap">Use a recovery code</button>'}</p>
+        <p class="hint" style="text-align:center"><button class="link-btn" id="again">← Start over</button></p>`);
+      paintBrand();
+      const go = async () => {
+        const v = $('#cd').value; $('#go').disabled = true;
+        try {
+          const d = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pending, [recovery ? 'recovery' : 'code']: v }) }).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j.error || 'Something went wrong'); e.status = r.status; throw e; } return j; });
+          finish(d);
+        } catch (e) { if (e.status === 429) return passwordStep(e.message); codeStep(recovery, e.message); }
+      };
+      $('#go').onclick = go;
+      $('#cd').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      $('#swap').onclick = () => codeStep(!recovery);
+      $('#again').onclick = () => passwordStep();
+      $('#cd').focus();
+    }
+    passwordStep(msg);
   }
 
   // ---------- shell + router ----------
@@ -139,7 +174,7 @@
         </aside>
         <main class="main" id="view"></main>
       </div>`;
-    $('#signout').onclick = () => { store.del('outpost_token'); token = ''; loginScreen(); };
+    $('#signout').onclick = async () => { try { await post('/api/admin/logout'); } catch { /* already signed out */ } store.del('outpost_token'); token = ''; loginScreen(); };
     paintBrand();
     appReady = true;
   }
@@ -1230,7 +1265,7 @@
     };
   }
 
-  const EVENT_LABELS = { honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', ai_crawler: 'AI crawler turned away', image_flood: 'Too many photo downloads', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes' };
+  const EVENT_LABELS = { honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', ai_crawler: 'AI crawler turned away', image_flood: 'Too many photo downloads', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes', admin_login: 'Staff signed in', admin_login_failed: 'Failed staff sign-in', admin_lockout: 'Sign-in paused after too many tries', admin_recovery_used: 'Recovery code used to sign in', admin_logout_all: 'Signed out everywhere', admin_2fa_on: 'Two-step sign-in turned on', admin_2fa_off: 'Two-step sign-in turned off' };
   const evLabel = (k) => EVENT_LABELS[k] || String(k).replace(/_/g, ' ');
 
   // State base sales-tax rates (Tax Foundation, 2026). Local add-ons aren't included, so the field stays editable.
@@ -1352,6 +1387,9 @@
             <div id="blist" style="margin-top:8px"></div><div id="bmsg"></div>
             <h3 style="font-size:18px;margin:18px 0 6px">Recent blocked attempts</h3>
             <div id="sevents"></div>`)}
+          ${card('Two-step sign-in', `
+            <div id="tfabox"></div>
+            <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:14px" class="row"><div style="flex:1"><b>Sign out everywhere</b><div class="hint">Ends every sign-in on every device, including this one.</div></div><button class="btn btn-sm" id="signall">Sign out everywhere</button></div>`)}
           ${card('Keep AI crawlers out', `
             <label class="check"><input type="checkbox" id="aishield" ${cur.block_ai ? 'checked' : ''}> <span>Turn away AI crawlers and slow down bulk photo downloads</span></label>
             <div class="hint">Your photos and writing are asked to stay out of AI training, and known AI crawlers are blocked even if they ignore the request. <b>Google, Bing, DuckDuckGo, Pinterest and link previews are never blocked</b>, so your shop can still be found in search. The tradeoff: AI assistants like ChatGPT and Perplexity won’t be able to show or link your shop either. A crawler that pretends to be an ordinary browser can’t be spotted from here. The guide shows how to add Cloudflare’s free bot controls for that.</div>
@@ -1466,6 +1504,40 @@
         settings = { ...settings, ...r }; $('#bmsg2').innerHTML = '<div class="msg">Saved.</div>';
       } catch (e) { $('#bmsg2').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
+    // ---- two-step sign-in ----
+    let tfaOn = !!st.two_step, tfaLeft = st.recovery_left || 0;
+    const paintTfa = (extra = '') => {
+      $('#tfabox').innerHTML = tfaOn
+        ? `<p class="small" style="margin:0 0 10px">Two-step sign-in is <b>on</b>. After your password you type a code from your phone. You have <b>${tfaLeft}</b> recovery code${tfaLeft === 1 ? '' : 's'} left.</p>${extra}
+           <details><summary class="small" style="cursor:pointer">Turn it off</summary><div style="margin-top:10px"><label class="field"><span class="label">Password</span><input class="input" id="tfpw" type="password" autocomplete="current-password"></label><label class="field"><span class="label">Current 6-digit code</span><input class="input" id="tfcd" inputmode="numeric" maxlength="7"></label><button class="btn btn-sm" id="tfoff">Turn off two-step sign-in</button><div id="tfmsg"></div></div></details>`
+        : `<p class="small" style="margin:0 0 10px">After your password, you’ll type a 6-digit code from an app on your phone (Google Authenticator, Authy, 1Password…). Even if someone learns your password, they can’t get in without your phone. It works offline and needs no account.</p>${extra}<button class="btn btn-primary" id="tfstart">Set up two-step sign-in</button><div id="tfmsg"></div>`;
+      if ($('#tfstart')) $('#tfstart').onclick = async () => {
+        try {
+          const d = await post('/api/admin/2fa/start');
+          $('#tfabox').innerHTML = `<div class="row" style="align-items:flex-start;flex-wrap:wrap;gap:18px"><img src="${esc(d.qr)}" alt="Scan this with your authenticator app" width="150" height="150" style="border-radius:12px;background:#fff">
+            <div style="flex:1 1 240px"><div class="label">1. Scan the picture with your authenticator app</div><div class="hint" style="margin:0 0 12px">Can’t scan? Type this key instead: <b style="font-family:ui-monospace,monospace">${esc(d.secret.replace(/(.{4})/g, '$1 ').trim())}</b></div>
+            <label class="field" style="margin:0"><span class="label">2. Type the code it shows</span><div class="row"><input class="input" id="tfcode" inputmode="numeric" maxlength="7" placeholder="123456"><button class="btn btn-primary" id="tfon">Turn on</button></div></label><div id="tfmsg"></div></div></div>`;
+          $('#tfon').onclick = async () => {
+            try {
+              const r = await post('/api/admin/2fa/enable', { code: $('#tfcode').value });
+              tfaOn = true; tfaLeft = r.recovery_codes.length;
+              paintTfa(`<div class="msg" style="margin-bottom:12px"><b>Save your recovery codes now.</b> They’re the only way in if you lose your phone, and they’re shown just once. Each works one time.</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:12px">${r.recovery_codes.map((c) => `<div class="input" style="text-align:center;font-family:ui-monospace,monospace">${esc(c)}</div>`).join('')}</div>
+                <div class="row" style="gap:8px;margin-bottom:14px"><button class="btn btn-sm" id="rccopy">Copy</button><button class="btn btn-sm" id="rcdl">Download</button></div>`);
+              const text = r.recovery_codes.join('\n');
+              $('#rccopy').onclick = async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Couldn’t copy. Use Download instead.'); } };
+              $('#rcdl').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([`Outpost recovery codes. Each works once.\n\n${text}\n`], { type: 'text/plain' })); a.download = 'outpost-recovery-codes.txt'; a.click(); URL.revokeObjectURL(a.href); };
+            } catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+          };
+        } catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+      };
+      if ($('#tfoff')) $('#tfoff').onclick = async () => {
+        try { await post('/api/admin/2fa/disable', { password: $('#tfpw').value, code: $('#tfcd').value }); tfaOn = false; paintTfa('<div class="msg">Two-step sign-in is off.</div>'); }
+        catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+      };
+    };
+    paintTfa();
+    $('#signall').onclick = async () => { if (!confirm('Sign out of every device, including this one?')) return; try { await post('/api/admin/logout-all'); } catch { /* ignore */ } store.del('outpost_token'); token = ''; loginScreen('Signed out everywhere'); };
     $('#aisave').onclick = async () => {
       try {
         const r = await put('/api/admin/settings', { block_ai: $('#aishield').checked });

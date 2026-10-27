@@ -87,6 +87,12 @@ Strongly recommended:
 2. **Turn on Radar in Stripe** (Settings → Radar) to screen stolen cards.
 3. When you put Outpost online behind a host, set `TRUST_PROXY=1` so limits count each visitor separately. (If you also put Cloudflare in front of the host, use `2`.)
 
+## Signing in to the staff side
+
+Your `ADMIN_PASSWORD` is checked on the server and never stored in the database. Signing in gives you a session that lasts 12 hours (or until you sign out; **Settings → Sign out everywhere** ends every session). After 10 wrong tries from one address, sign-in pauses for 15 minutes, and failed tries show in Settings → Protection.
+
+**Two-step sign-in (optional, recommended).** In Settings, turn on *Two-step sign-in* and scan the picture with any authenticator app (Google Authenticator, Authy, 1Password). You'll be shown 8 one-time recovery codes. Save them: they are the only way in if you lose your phone, since there is no email reset. No outside service or account is needed. If you ever get locked out with no codes left, stop the app, clear the `totp_secret` setting in the database, and start again.
+
 ## Keeping AI crawlers out (on by default)
 
 Outpost is for people who make their own work, so it keeps AI crawlers away from your photos and writing without hiding you from search. Built in, no setup (switch it off under Settings → Keep AI crawlers out):

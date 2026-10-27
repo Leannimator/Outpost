@@ -9,6 +9,7 @@ const QRCode = require('qrcode');
 const Stripe = require('stripe');
 const db = require('./db');
 const AiShield = require('./ai-shield');
+const Auth = require('./auth');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -34,12 +35,23 @@ if (!stripe) console.warn('WARNING: STRIPE_SECRET_KEY is not set; card payments 
 
 const app = express();
 // Behind a proxy or host (Render, Fly, nginx...), set TRUST_PROXY=1 so each visitor keeps their own IP for rate limits.
+if (!process.env.TRUST_PROXY && process.env.RENDER) process.env.TRUST_PROXY = '1'; // Render always sits behind a proxy; without this every visitor shares one IP
 if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'SAMEORIGIN');
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (req.secure) res.set('Strict-Transport-Security', 'max-age=15552000'); // browsers will insist on HTTPS for this site
+  if (!req.path.startsWith('/api/') && !req.path.startsWith('/images/')) {
+    res.set('Content-Security-Policy', [
+      "default-src 'self'", "base-uri 'self'", "object-src 'none'", "frame-ancestors 'self'",
+      "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: https:", "connect-src 'self' https://challenges.cloudflare.com", "frame-src https://challenges.cloudflare.com",
+      "form-action 'self' https://checkout.stripe.com",
+    ].join('; '));
+  }
   next();
 });
 // Keeps AI crawlers out; Google, Bing and other search engines are never blocked (see ai-shield.js).
@@ -129,13 +141,38 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ---------- staff sign-in: password (+ optional authenticator code) -> expiring session ----------
+const SESSION_MS = 12 * 3600e3;
+const LOGIN_WINDOW = 15 * 60e3, LOGIN_PER_IP = 10, LOGIN_ALL = 60;
+function loginLocked(req) {
+  const since = Date.now() - LOGIN_WINDOW;
+  const mine = db.prepare('SELECT COUNT(*) c FROM login_attempts WHERE at > ? AND ip = ?').get(since, req.ip || '').c;
+  const all = db.prepare('SELECT COUNT(*) c FROM login_attempts WHERE at > ?').get(since).c;
+  return mine >= LOGIN_PER_IP || all >= LOGIN_ALL;
+}
+function loginFailed(req, why) {
+  db.prepare('INSERT INTO login_attempts (at, ip) VALUES (?,?)').run(Date.now(), req.ip || '');
+  db.prepare('DELETE FROM login_attempts WHERE at < ?').run(Date.now() - 24 * 3600e3);
+  logSecurity('admin_login_failed', req, why);
+  if (loginLocked(req)) logSecurity('admin_lockout', req);
+}
+function startSession(req) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  db.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').run(now);
+  db.prepare('DELETE FROM admin_sessions WHERE token_hash IN (SELECT token_hash FROM admin_sessions ORDER BY created_at DESC LIMIT -1 OFFSET 19)').run();
+  db.prepare('INSERT INTO admin_sessions (token_hash, created_at, expires_at, ip) VALUES (?,?,?,?)').run(Auth.hashToken(token), now, now + SESSION_MS, req.ip || '');
+  return { token, expires_at: now + SESSION_MS };
+}
+const sessionFor = (token) => token ? db.prepare('SELECT * FROM admin_sessions WHERE token_hash=? AND expires_at > ?').get(Auth.hashToken(token), Date.now()) : null;
+
 function requireAdmin(req, res, next) {
   const token = req.get('x-admin-token') || '';
   const key = 'adminfail:' + req.ip;
-  if (rlCount(key, 10 * 60 * 1000) >= 20) {
-    return res.status(429).json({ error: 'Too many wrong passwords. Try again in a few minutes.' });
+  if (rlCount(key, 10 * 60 * 1000) >= 60) {
+    return res.status(429).json({ error: 'Too many failed requests. Try again in a few minutes.' });
   }
-  if (ADMIN_PASSWORD && safeEqual(token, ADMIN_PASSWORD)) return next();
+  if (ADMIN_PASSWORD && sessionFor(token)) return next();
   if (token) rlAdd(key);
   res.status(401).json({ error: 'Unauthorized' });
 }
@@ -943,9 +980,81 @@ app.post('/api/register/sale', requireAdmin, h(async (req, res) => {
   res.json({ orderId, status: 'pending', ...base, url: session.url, qr });
 }));
 
+
+// ---------- staff sign-in routes ----------
+app.post('/api/admin/login', h(async (req, res) => {
+  if (!ADMIN_PASSWORD) throw new HttpError(401, 'Sign-in is switched off until ADMIN_PASSWORD is set.');
+  if (loginLocked(req)) throw new HttpError(429, 'Too many tries. Sign-in is paused for about 15 minutes.');
+  const b = req.body || {};
+  if (!safeEqual(String(b.password || ''), ADMIN_PASSWORD)) { loginFailed(req, 'wrong password'); throw new HttpError(401, 'That password didn’t work'); }
+  const secret = getSetting('totp_secret', '');
+  if (secret) {
+    const code = String(b.code || '').trim(), rec = String(b.recovery || '').trim();
+    if (!code && !rec) return res.json({ need_code: true });
+    if (rec) {
+      const list = JSON.parse(getSetting('totp_recovery', '') || '[]');
+      const hash = Auth.hashRecovery(rec);
+      const i = list.indexOf(hash);
+      if (i < 0) { loginFailed(req, 'wrong recovery code'); throw new HttpError(401, 'That recovery code didn’t work'); }
+      list.splice(i, 1); setSetting('totp_recovery', JSON.stringify(list));
+      logSecurity('admin_recovery_used', req, `${list.length} left`);
+    } else {
+      const step = Auth.checkTotp(secret, code);
+      if (step === null || step <= Number(getSetting('totp_last_step', '0'))) { loginFailed(req, 'wrong code'); throw new HttpError(401, 'That code didn’t work. Check the time on your phone, or wait for a new code.'); }
+      setSetting('totp_last_step', String(step));
+    }
+  }
+  db.prepare('DELETE FROM login_attempts WHERE ip = ?').run(req.ip || '');
+  logSecurity('admin_login', req);
+  res.json(startSession(req));
+}));
+app.post('/api/admin/logout', requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM admin_sessions WHERE token_hash=?').run(Auth.hashToken(req.get('x-admin-token')));
+  res.json({ ok: true });
+});
+app.post('/api/admin/logout-all', requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM admin_sessions').run();
+  logSecurity('admin_logout_all', req);
+  res.json({ ok: true });
+});
+
+// Two-step sign-in (authenticator app)
+const tfaGuard = (req) => { if (rlCount('tfa:' + req.ip, 10 * 60e3) >= 10) throw new HttpError(429, 'Too many tries. Wait a few minutes.'); };
+app.post('/api/admin/2fa/start', requireAdmin, h(async (req, res) => {
+  if (getSetting('totp_secret', '')) throw new HttpError(400, 'Two-step sign-in is already on.');
+  const secret = Auth.newSecret();
+  setSetting('totp_pending', secret);
+  const url = Auth.otpauthUrl(secret, getSetting('store_name', 'Outpost') || 'Outpost', 'Outpost');
+  res.json({ secret, qr: await QRCode.toDataURL(url, { width: 220, margin: 1 }) });
+}));
+app.post('/api/admin/2fa/enable', requireAdmin, h(async (req, res) => {
+  tfaGuard(req);
+  const secret = getSetting('totp_pending', '');
+  if (!secret) throw new HttpError(400, 'Start setup again.');
+  const step = Auth.checkTotp(secret, (req.body || {}).code);
+  if (step === null) { rlAdd('tfa:' + req.ip); throw new HttpError(400, 'That code didn’t match. Check the 6 digits and try again.'); }
+  const codes = Auth.newRecoveryCodes(8);
+  setSetting('totp_secret', secret); setSetting('totp_pending', ''); setSetting('totp_last_step', String(step));
+  setSetting('totp_recovery', JSON.stringify(codes.map(Auth.hashRecovery)));
+  logSecurity('admin_2fa_on', req);
+  res.json({ recovery_codes: codes });
+}));
+app.post('/api/admin/2fa/disable', requireAdmin, h(async (req, res) => {
+  tfaGuard(req);
+  const b = req.body || {};
+  const secret = getSetting('totp_secret', '');
+  if (!secret) return res.json({ ok: true });
+  const okPw = safeEqual(String(b.password || ''), ADMIN_PASSWORD);
+  const step = Auth.checkTotp(secret, b.code);
+  if (!okPw || step === null) { rlAdd('tfa:' + req.ip); throw new HttpError(400, 'Enter your password and a current code to turn this off.'); }
+  for (const k of ['totp_secret', 'totp_pending', 'totp_recovery', 'totp_last_step']) setSetting(k, '');
+  logSecurity('admin_2fa_off', req);
+  res.json({ ok: true });
+}));
+
 // ---------- admin API: status, settings, products, orders ----------
 app.get('/api/admin/status', requireAdmin, (req, res) => {
-  res.json({ stripe: !!stripe, webhook: !!process.env.STRIPE_WEBHOOK_SECRET, base_url: BASE_URL });
+  res.json({ stripe: !!stripe, webhook: !!process.env.STRIPE_WEBHOOK_SECRET, base_url: BASE_URL, two_step: !!getSetting('totp_secret', ''), recovery_left: getSetting('totp_secret', '') ? JSON.parse(getSetting('totp_recovery', '') || '[]').length : 0 });
 });
 
 // Is Stripe Tax switched on in the seller's Stripe account? Best effort: if Stripe can't say, we say "unknown".

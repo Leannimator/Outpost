@@ -544,3 +544,8 @@ details.more summary{cursor:pointer;color:var(--forest);font-weight:600}
 .line-row .thumb { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; background: var(--cream-2); flex: none; }
 .line-pick { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
 .line-pick label { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 14px; }
+
+/* sign-in: link to the shop for shoppers who land here by mistake */
+.login-col { width: 100%; max-width: 380px; }
+.login-shop { margin-top: 16px; text-align: center; color: var(--muted); font-size: 14px; }
+.login-shop .btn { margin-top: 10px; text-decoration: none; }
