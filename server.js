@@ -703,11 +703,14 @@ const IMG_HEADERS = (res) => {
   res.set('X-Content-Type-Options', 'nosniff');
 };
 fs.mkdirSync(path.join(db.dataDir || __dirname, db.dataDir ? 'images' : path.join('public', 'images')), { recursive: true });
-// Slows down anyone downloading photos in bulk. 600 a minute is far more than a person browsing your shop ever needs.
+// Slows down anyone downloading photos in bulk. The shop page loads every product photo at once, so a single visit to a
+// shop with 40 products is 40 requests; several people on one shared connection (craft fair wifi) add up fast. Hence the
+// room above "10 a minute", which would block real shoppers. Change it with IMAGE_LIMIT_PER_MIN.
+const IMAGE_LIMIT_PER_MIN = Math.max(20, parseInt(process.env.IMAGE_LIMIT_PER_MIN, 10) || 200);
 app.use('/images', (req, res, next) => {
   if (!aiShieldOn()) return next();
   const key = 'img:' + req.ip;
-  if (rlCount(key, 60e3) >= 600) {
+  if (rlCount(key, 60e3) >= IMAGE_LIMIT_PER_MIN) {
     if (rlCount('imglog:' + req.ip, 10 * 60e3) === 0) { rlAdd('imglog:' + req.ip); logSecurity('image_flood', req); }   // log it once, not on every refused request
     return res.status(429).type('text/plain').send('Too many requests. Please slow down.');
   }

@@ -94,7 +94,7 @@ Outpost is for people who make their own work, so it keeps AI crawlers away from
 - `/robots.txt` asks AI crawlers to stay away (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Amazonbot, Meta's crawlers and more), plus the robots.txt-only opt-outs `Google-Extended` (Gemini training) and `Applebot-Extended`. Neither affects Google Search or Siri.
 - Every response carries `X-Robots-Tag: noai, noimageai`.
 - Requests from known AI crawlers get a 403 even if they ignore `robots.txt`, and are listed in Settings → Protection.
-- Anyone downloading photos faster than 600 a minute from one address is slowed down.
+- Anyone downloading photos faster than 200 a minute from one address is slowed down. It can't be as low as 10, because the shop page loads every product photo at once and shoppers sharing one connection (craft fair wifi) add up. Change it with `IMAGE_LIMIT_PER_MIN` in `.env`.
 - Receipts, the thank-you page and the staff screens are kept out of search results.
 
 Google, Bing, DuckDuckGo, Applebot, Pinterest and link previews (Facebook, Slack, X, LinkedIn, iMessage) are never blocked. The tradeoff is that AI assistants such as ChatGPT and Perplexity can't show your shop either.
