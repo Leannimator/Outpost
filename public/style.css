@@ -520,3 +520,27 @@ tr:last-child td { border-bottom: 0; }
 .opt .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;background:var(--rose);color:var(--rose-ink);vertical-align:middle}
 details.more{margin:10px 0}
 details.more summary{cursor:pointer;color:var(--forest);font-weight:600}
+
+/* product lines (shop) */
+.lines { margin: 0 0 14px; }
+.lines-h { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.line-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.ltile { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 12px; color: inherit; text-decoration: none; }
+.ltile:hover { box-shadow: var(--shadow); }
+.ltile .pic { width: 100%; aspect-ratio: 1.4; border-radius: 10px; object-fit: cover; display: block; background: var(--cream-2); font-size: 32px; }
+.ltile .pic.ph { display: flex; align-items: center; justify-content: center; }
+.ltile .nm { margin: 8px 4px 0; font-size: 14px; font-weight: 600; }
+.ltile .st { margin: 0 4px; font-size: 12px; color: var(--muted); }
+.lines .chips { margin-bottom: 14px; }
+.lines .chip { text-decoration: none; display: inline-block; }
+.lines .chip.back { background: transparent; }
+.line-banner { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin: 0 0 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.line-banner h2 { font-size: 26px; margin: 0; }
+.line-banner p { margin: 6px 0 0; color: var(--muted); }
+.line-banner img { width: 120px; height: 90px; object-fit: cover; border-radius: 10px; flex: none; }
+@media (max-width: 640px) { .line-tiles { display: flex; overflow-x: auto; margin: 0 -16px; padding: 0 16px 4px; scrollbar-width: none; } .line-tiles::-webkit-scrollbar { display: none; } .ltile { flex: 0 0 140px; } .line-banner img { width: 84px; height: 64px; } }
+/* product lines (staff) */
+.line-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.line-row .thumb { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; background: var(--cream-2); flex: none; }
+.line-pick { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.line-pick label { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 14px; }

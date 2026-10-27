@@ -146,7 +146,7 @@
 
   const routes = [
     [/^#\/sell$/, viewSell, 'sell'], [/^#\/products$/, viewProducts, 'products'],
-    [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
+    [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/lines$/, viewLines, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
     [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
     [/^#\/settings$/, viewSettings, 'settings'],
@@ -398,7 +398,7 @@
     const low = () => Number(settings.low_stock) || 0;
     view().innerHTML = `
       <div class="topbar"><h1>Products</h1><div class="spacer"></div>
-        <button class="btn" id="imp">Import CSV</button><button class="btn" id="exp">Export CSV</button>
+        <a class="btn" href="#/lines">Product lines</a><button class="btn" id="imp">Import CSV</button><button class="btn" id="exp">Export CSV</button>
         <a class="btn btn-primary" href="#/products/new">+ New product</a></div>
       <div id="pmsg"></div>
       <div class="search">${icon('search')}<input class="input" id="pq" placeholder="Search products…"></div>
@@ -486,11 +486,11 @@
 
   async function viewEditor(m) {
     const isNew = m[1] === 'new';
-    const [existing, all] = await Promise.all([isNew ? null : api('/api/admin/products/' + m[1]), api('/api/admin/products')]);
+    const [existing, all, allLines] = await Promise.all([isNew ? null : api('/api/admin/products/' + m[1]), api('/api/admin/products'), api('/api/admin/lines')]);
     const cats = [...new Set(all.map((p) => p.category).filter(Boolean))];
     const s = existing
-      ? { name: existing.name, price: dollars(existing.price_cents), category: existing.category, description: existing.description, active: !!existing.active, badge: existing.badge || '', process: existing.process || '', sku: existing.sku || '', option_label: existing.option_label || '', custom_fields: (existing.custom_fields || []).map((f) => ({ label: f.label, required: !!f.required })), variants: existing.variants.map((v) => ({ id: v.id, name: v.name, sku: v.sku || '', price: v.own_price ? dollars(v.price_cents) : '', stock: String(v.stock) })), stock: String(existing.stock), tags: [...existing.tags], images: [...existing.images] }
-      : { name: '', price: '', category: '', description: '', active: true, badge: '', process: '', sku: '', option_label: '', custom_fields: [], variants: [], stock: '1', tags: [], images: [] };
+      ? { name: existing.name, price: dollars(existing.price_cents), category: existing.category, description: existing.description, active: !!existing.active, badge: existing.badge || '', process: existing.process || '', sku: existing.sku || '', option_label: existing.option_label || '', custom_fields: (existing.custom_fields || []).map((f) => ({ label: f.label, required: !!f.required })), variants: existing.variants.map((v) => ({ id: v.id, name: v.name, sku: v.sku || '', price: v.own_price ? dollars(v.price_cents) : '', stock: String(v.stock) })), stock: String(existing.stock), tags: [...existing.tags], images: [...existing.images], line_ids: [...(existing.line_ids || [])] }
+      : { name: '', price: '', category: '', description: '', active: true, badge: '', process: '', sku: '', option_label: '', custom_fields: [], variants: [], stock: '1', tags: [], images: [], line_ids: [] };
 
     view().innerHTML = `
       <div class="topbar"><button class="crumb" id="back">← Back</button><div class="spacer"></div>
@@ -525,6 +525,8 @@
             <div class="hint">Shown to shoppers on the product’s Details page. Photos of your process make a great extra picture.</div></label>
           <label class="field"><span class="label">Shop label</span><select class="input" id="badge">${BADGES.map(([k, l]) => `<option value="${k}"${s.badge === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
             <div class="hint">A small label on the photo in your shop. “Sold out” and “Only a few left” appear on their own.</div></label>
+          <div class="field"><span class="label">Product lines</span><div class="chips" id="linechips"></div>
+            <div class="hint">${allLines.length ? 'Groups shoppers can browse, like “Frogs” or “Gift sets”. Tap to add or remove. You can pick more than one.' : 'Lines are curated groups shoppers can browse, like “Frogs” or “Gift sets”. <a href="#/lines">Make your first line</a>.'}</div></div>
           <div class="field"><span class="label">Tags</span><div class="chips" id="tags"></div></div>
         </div>
       </div>`;
@@ -572,6 +574,10 @@
       inp.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); } };
       inp.onblur = () => { if (inp.value.trim()) commit(); };
     }
+    function paintLineChips() {
+      $('#linechips').innerHTML = allLines.map((l) => { const on = s.line_ids.includes(l.id); return `<button type="button" class="chip${on ? ' on' : ''}" data-ln="${l.id}">${on ? '✓ ' : ''}${esc(l.name)}</button>`; }).join('');
+    }
+    $('#linechips').onclick = (e) => { const b = e.target.closest('[data-ln]'); if (!b) return; const id = Number(b.dataset.ln); s.line_ids = s.line_ids.includes(id) ? s.line_ids.filter((x) => x !== id) : [...s.line_ids, id]; paintLineChips(); };
     $('#tags').onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { s.tags.splice(Number(b.dataset.t), 1); paintTags(); } };
     $('#imgs').onclick = (e) => {
       const x = e.target.closest('[data-x]');
@@ -603,12 +609,92 @@
       }
       for (const [i, f] of s.custom_fields.entries()) if (!f.label.trim()) return ($('#emsg').innerHTML = `<div class="msg err">Question ${i + 1} for the buyer needs a label, like “Name to engrave”</div>`);
       const variants = s.variants.map((v) => ({ id: v.id || undefined, name: v.name.trim(), sku: v.sku.trim(), price_cents: v.price.trim() === '' ? null : toCents(v.price), stock: parseInt(v.stock, 10) || 0 }));
-      const payload = { name: $('#name').value.trim(), price_cents, stock, sku: $('#sku').value.trim(), option_label: $('#optlabel').value.trim(), custom_fields: s.custom_fields.map((f) => ({ label: f.label.trim(), required: !!f.required })), variants, description: $('#desc').value, category: $('#category').value.trim(), badge: $('#badge').value, process: $('#proc').value, tags: s.tags, images: s.images, active: $('#active').value === '1' };
+      const payload = { name: $('#name').value.trim(), price_cents, stock, sku: $('#sku').value.trim(), option_label: $('#optlabel').value.trim(), custom_fields: s.custom_fields.map((f) => ({ label: f.label.trim(), required: !!f.required })), variants, description: $('#desc').value, category: $('#category').value.trim(), badge: $('#badge').value, process: $('#proc').value, tags: s.tags, images: s.images, line_ids: s.line_ids, active: $('#active').value === '1' };
       $('#save').disabled = true;
       try { isNew ? await post('/api/admin/products', payload) : await put('/api/admin/products/' + m[1], payload); toast('Saved'); location.hash = '#/products'; }
       catch (e) { $('#emsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#save').disabled = false; }
     };
-    paintImgs(); paintTags(); paintVars(); paintCfs();
+    paintImgs(); paintTags(); paintVars(); paintCfs(); paintLineChips();
+  }
+
+  // =====================================================================
+  // PRODUCT LINES
+  // =====================================================================
+  async function viewLines() {
+    let [lines, products] = await Promise.all([api('/api/admin/lines'), api('/api/admin/products')]);
+    let editing = null; // null = none, 0 = new, id = existing
+    let draft = null;
+    view().innerHTML = `<div class="topbar"><button class="crumb" id="back">← Products</button><div class="spacer"></div><h1 style="font-size:26px">Product lines</h1><div class="spacer"></div><button class="btn btn-primary" id="newline">+ New line</button></div>
+      <p class="muted small" style="margin:0 0 14px">Curated groups shoppers can browse, like “Frogs” or “Gift sets”. A product can be in as many lines as you like. Lines don’t replace categories: a category says what something is, a line says what it goes with.</p>
+      <div id="lmsg"></div><div id="llist" style="display:grid;gap:10px"></div><div id="ledit"></div>`;
+    $('#back').onclick = () => { location.hash = '#/products'; };
+    const base = (settings.base_url || location.origin).replace(/\/$/, '');
+    function paintList() {
+      $('#llist').innerHTML = lines.length ? lines.map((l, i) => `<div class="card line-row" data-id="${l.id}">
+        ${l.cover ? `<img class="thumb" src="${esc(l.cover)}" alt="">` : '<div class="thumb"></div>'}
+        <div style="flex:1 1 200px;min-width:0"><div style="font-weight:600;font-size:16px">${esc(l.name)}</div><div class="muted small">${l.count} item${l.count === 1 ? '' : 's'} · ${esc(base)}/shop?line=${esc(l.slug)}</div></div>
+        <span class="badge ${l.active ? 'b-paid' : ''}">${l.active ? 'Shown' : 'Hidden'}</span>
+        <button class="btn btn-sm btn-ghost" data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="btn btn-sm btn-ghost" data-dn="${i}" ${i === lines.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+        <button class="btn btn-sm" data-edit="${l.id}">Edit</button></div>`).join('') : '<div class="card empty">No lines yet. Make one, like “Frogs”, then tick the products that belong in it.</div>';
+    }
+    function paintEdit() {
+      if (editing === null) { $('#ledit').innerHTML = ''; return; }
+      const d = draft;
+      $('#ledit').innerHTML = `<div class="card" style="margin-top:14px"><h2 style="font-size:22px;margin-bottom:12px">${editing ? 'Editing: ' + esc(d.name || 'line') : 'New line'}</h2>
+        <div class="grid2" style="align-items:start"><div>
+          <label class="field"><span class="label">Name</span><input class="input" id="ln" maxlength="40" placeholder="Frogs" value="${esc(d.name)}"></label>
+          <label class="field"><span class="label">Short blurb (optional)</span><textarea class="input" id="lb" rows="3" maxlength="300" placeholder="Every frog I’ve ever glazed, printed or doodled.">${esc(d.blurb)}</textarea></label>
+          <div class="field"><span class="label">Cover photo</span>
+            <div class="row" style="flex-wrap:wrap;gap:8px">${d.image_url ? `<img class="thumb" style="width:56px;height:56px;border-radius:10px;object-fit:cover" src="${esc(d.image_url)}" alt="">` : ''}<button class="btn btn-sm" id="lpic" type="button">${d.image_url ? 'Change photo' : 'Upload a photo'}</button>${d.image_url ? '<button class="btn btn-sm btn-ghost" id="lpicx" type="button">Use a product photo</button>' : ''}</div>
+            <input type="file" id="lfile" hidden accept="image/png,image/jpeg,image/gif,image/webp">
+            <div class="hint">Leave this alone and the first product’s photo is used.</div></div>
+          <label class="check"><input type="checkbox" id="la" ${d.active ? 'checked' : ''}> <span>Show this line in my shop</span></label>
+          <div class="hint">A line only appears once it has something for sale in it.</div>
+        </div><div>
+          <span class="label">Products in this line (<span id="lcount">${d.product_ids.length}</span>)</span>
+          <div class="search" style="margin-bottom:8px">${icon('search')}<input class="input" id="lq" placeholder="Search products…"></div>
+          <div class="line-pick" id="lpick"></div>
+        </div></div>
+        <div class="row" style="margin-top:14px;gap:10px"><button class="btn btn-primary" id="lsave">Save line</button><button class="btn btn-ghost" id="lcancel">Cancel</button><div class="spacer"></div>${editing ? '<button class="btn btn-ghost" id="ldel">Delete line</button>' : ''}</div></div>`;
+      const paintPick = () => {
+        const n = $('#lq').value.trim().toLowerCase();
+        $('#lpick').innerHTML = products.filter((p) => !n || (p.name + ' ' + p.category).toLowerCase().includes(n)).map((p) => `<label><input type="checkbox" data-p="${p.id}" ${d.product_ids.includes(p.id) ? 'checked' : ''}> <span>${esc(p.name)}${p.active ? '' : ' <span class="muted small">(hidden)</span>'}</span></label>`).join('') || '<div class="muted small">No matches</div>';
+      };
+      paintPick();
+      $('#lq').oninput = paintPick;
+      $('#lpick').onchange = (e) => { const c = e.target.closest('[data-p]'); if (!c) return; const id = Number(c.dataset.p); d.product_ids = c.checked ? [...new Set([...d.product_ids, id])] : d.product_ids.filter((x) => x !== id); $('#lcount').textContent = d.product_ids.length; };
+      const keep = () => { d.name = $('#ln').value; d.blurb = $('#lb').value; d.active = $('#la').checked; };
+      $('#lpic').onclick = () => $('#lfile').click();
+      $('#lfile').onchange = async () => { const f = $('#lfile').files[0]; if (!f) return; keep(); try { d.image_url = await uploadImage(f); paintEdit(); } catch (err) { $('#lmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; } };
+      if ($('#lpicx')) $('#lpicx').onclick = () => { keep(); d.image_url = ''; paintEdit(); };
+      $('#lcancel').onclick = () => { editing = null; draft = null; paintEdit(); };
+      if ($('#ldel')) $('#ldel').onclick = async () => {
+        if (!confirm('Delete this line? The products stay in your shop. Only the group goes away.')) return;
+        try { await api('/api/admin/lines/' + editing, { method: 'DELETE' }); editing = null; draft = null; lines = await api('/api/admin/lines'); paintList(); paintEdit(); toast('Deleted'); } catch (err) { $('#lmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+      };
+      $('#lsave').onclick = async () => {
+        keep();
+        if (!d.name.trim()) return ($('#lmsg').innerHTML = '<div class="msg err">Your line needs a name</div>');
+        const body = { name: d.name, blurb: d.blurb, image_url: d.image_url, active: d.active, product_ids: d.product_ids };
+        $('#lsave').disabled = true;
+        try { editing ? await put('/api/admin/lines/' + editing, body) : await post('/api/admin/lines', body); editing = null; draft = null; lines = await api('/api/admin/lines'); $('#lmsg').innerHTML = ''; paintList(); paintEdit(); toast('Saved'); }
+        catch (err) { $('#lmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; $('#lsave').disabled = false; }
+      };
+    }
+    const open = (id) => {
+      const l = lines.find((x) => x.id === id);
+      editing = id; draft = l ? { name: l.name, blurb: l.blurb, image_url: l.image_url, active: !!l.active, product_ids: [...l.ids] } : { name: '', blurb: '', image_url: '', active: true, product_ids: [] };
+      $('#lmsg').innerHTML = ''; paintEdit(); $('#ledit').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    $('#newline').onclick = () => open(0);
+    $('#llist').onclick = async (e) => {
+      const ed = e.target.closest('[data-edit]'); if (ed) return open(Number(ed.dataset.edit));
+      const up = e.target.closest('[data-up]'), dn = e.target.closest('[data-dn]');
+      const i = up ? Number(up.dataset.up) : dn ? Number(dn.dataset.dn) : -1; if (i < 0) return;
+      const j = up ? i - 1 : i + 1; [lines[i], lines[j]] = [lines[j], lines[i]]; paintList();
+      try { await put('/api/admin/lines/order', { ids: lines.map((l) => l.id) }); } catch (err) { $('#lmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+    };
+    paintList();
   }
 
   // =====================================================================

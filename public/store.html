@@ -42,6 +42,7 @@
     <a class="ratingline" id="ratingline" href="reviews.html" hidden></a>
     <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
       <input class="input" id="q" placeholder="Search the shop…"></div>
+    <div class="lines" id="lines" hidden></div>
     <div class="chips" id="cats"></div>
     <div class="pgrid" id="grid"></div>
   </main>
@@ -53,7 +54,7 @@
   const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pic = (url, name) => url ? `<img class="pic" src="${esc(url)}" alt="">` : `<div class="pic ph">${esc((name || '?').charAt(0).toUpperCase())}</div>`;
   const loadedAt = Date.now();
-  let products = [], rate = 0, q = '', cat = 'All', resting = false, settings = {}, maxQty = 10;
+  let products = [], rate = 0, q = '', cat = 'All', line = '', lines = [], resting = false, settings = {}, maxQty = 10;
   let code = '', quote = null, captchaToken = '', captchaId = null;
   const cart = new Map();   // key "id" or "id:variantId" -> quantity
   const keyOf = (id, vid, cv) => id + ':' + (vid || 0) + (cv && cv.some(Boolean) ? ':' + encodeURIComponent(JSON.stringify(cv)) : '');
@@ -81,7 +82,10 @@
   }
   fetch('/api/reviews').then((r) => r.json()).then(paintReviews).catch(() => {});
 
-  Promise.all([fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json())]).then(([s, p]) => {
+  Promise.all([fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json()), fetch('/api/lines').then((r) => r.json()).catch(() => [])]).then(([s, p, ln]) => {
+    lines = Array.isArray(ln) ? ln : [];
+    const want = new URLSearchParams(location.search).get('line');
+    if (want && lines.some((l) => l.slug === want)) line = want;
     settings = s; rate = Number(s.online_tax_rate === undefined ? s.tax_rate : s.online_tax_rate) || 0; maxQty = s.max_qty === undefined ? 10 : Number(s.max_qty);
     resting = !!s.break_on;
     if (resting) {
@@ -96,8 +100,8 @@
     if (rp && rp.text) bits.push(`<b>Returns &amp; refunds.</b> ${esc(rp.text)}`);
     $('policy').innerHTML = bits.join('<br>');
     if (s.handmade_statement) { $('handmade').hidden = false; $('handmade').innerHTML = `<h2>Made by hand</h2><p>${esc(s.handmade_statement)}</p>`; }
-    OutpostBrand.apply(s); document.title = s.store_name + ' — Shop';
-    products = p; paintCats(); paintGrid(); paintCart();
+    OutpostBrand.apply(s); document.title = (curLine() ? curLine().name + ' — ' : '') + s.store_name + (curLine() ? '' : ' — Shop');
+    products = p; paintLines(); paintCats(); paintGrid(); paintCart();
     if (s.captcha_site_key && !resting) loadCaptcha(s.captcha_site_key);
   });
 
@@ -111,11 +115,39 @@
     sc.async = true; document.head.appendChild(sc);
   }
 
-  const cats = () => ['All', ...new Set(products.map((p) => p.category).filter(Boolean))];
+  const curLine = () => lines.find((l) => l.slug === line) || null;
+  const inLine = (p) => { const l = curLine(); return !l || l.ids.includes(p.id); };
+  const cats = () => ['All', ...new Set(products.filter(inLine).map((p) => p.category).filter(Boolean))];
+  const lineHref = (slug) => location.pathname + (slug ? '?line=' + encodeURIComponent(slug) : '');
+  function paintLines() {
+    const box = $('lines');
+    if (!lines.length) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    const cur = curLine();
+    if (!cur) {
+      box.innerHTML = `<div class="lines-h">Shop by line</div><div class="line-tiles">${lines.map((l) => `<a class="ltile" href="${lineHref(l.slug)}" data-l="${esc(l.slug)}">${pic(l.cover, l.name)}<div class="nm">${esc(l.name)}</div><div class="st">${l.count} item${l.count === 1 ? '' : 's'}</div></a>`).join('')}</div>`;
+      return;
+    }
+    box.innerHTML = `<div class="chips"><a class="chip back" href="${lineHref('')}" data-l="">← All products</a>${lines.map((l) => `<a class="chip${l.slug === line ? ' on' : ''}" href="${lineHref(l.slug)}" data-l="${esc(l.slug)}">${esc(l.name)}</a>`).join('')}</div>
+      <section class="line-banner"><div><div class="lines-h">Product line · ${cur.count} item${cur.count === 1 ? '' : 's'}</div><h2>${esc(cur.name)}</h2>${cur.blurb ? `<p>${esc(cur.blurb)}</p>` : ''}</div>${cur.cover ? `<img src="${esc(cur.cover)}" alt="">` : ''}</section>`;
+  }
+  function pickLine(slug, push) {
+    line = slug || ''; cat = 'All';
+    if (push) history.pushState({ line }, '', lineHref(line));
+    const cur = curLine();
+    document.title = (cur ? cur.name + ' — ' : '') + (settings.store_name || 'Shop') + (cur ? '' : ' — Shop');
+    paintLines(); paintCats(); paintGrid();
+  }
+  $('lines').onclick = (e) => {
+    const a = e.target.closest('[data-l]');
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
+    e.preventDefault(); pickLine(a.dataset.l, true); window.scrollTo({ top: 0 });
+  };
+  window.addEventListener('popstate', () => { const w = new URLSearchParams(location.search).get('line'); pickLine(w && lines.some((l) => l.slug === w) ? w : '', false); });
   function paintCats() { const c = cats(); $('cats').innerHTML = c.length > 1 ? c.map((x) => `<button class="chip${x === cat ? ' on' : ''}" data-c="${esc(x)}">${esc(x)}</button>`).join('') : ''; }
   function paintGrid() {
     const n = q.trim().toLowerCase();
-    const list = products.filter((p) => (cat === 'All' || p.category === cat) && (!n || [p.name, p.category, p.description, p.tags.join(' '), ...p.variants.map((v) => v.name)].join(' ').toLowerCase().includes(n)));
+    const list = products.filter((p) => inLine(p) && (cat === 'All' || p.category === cat) && (!n || [p.name, p.category, p.description, p.tags.join(' '), ...p.variants.map((v) => v.name)].join(' ').toLowerCase().includes(n)));
     $('grid').innerHTML = list.map((p) => {
       const t = tagFor(p);
       return `<button class="pcard${p.stock < 1 ? ' is-sold' : ''}" data-id="${p.id}" ${p.stock < 1 ? 'aria-disabled="true"' : ''}>

@@ -1083,6 +1083,88 @@ app.delete('/api/admin/subscribers/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+
+// ---------- product lines (curated groups like "Frogs"; a product can be in several) ----------
+const slugify = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'line';
+function uniqueSlug(name, ownId = 0) {
+  const base = slugify(name); let slug = base, i = 2;
+  while (db.prepare('SELECT id FROM lines WHERE slug=? AND id<>?').get(slug, ownId)) slug = base + '-' + i++;
+  return slug;
+}
+function lineIdsFor(productId) { return db.prepare('SELECT line_id FROM product_lines WHERE product_id=?').all(productId).map((r) => r.line_id); }
+function cleanLineIds(ids) {
+  if (!Array.isArray(ids)) throw new HttpError(400, 'Lines must be a list');
+  const valid = new Set(db.prepare('SELECT id FROM lines').all().map((r) => r.id));
+  return [...new Set(ids.map(Number).filter((i) => valid.has(i)))];
+}
+function saveProductLines(productId, ids) {
+  db.prepare('DELETE FROM product_lines WHERE product_id=?').run(productId);
+  const ins = db.prepare('INSERT INTO product_lines (product_id, line_id) VALUES (?,?)');
+  for (const l of ids) ins.run(productId, l);
+}
+function shapeLine(l) {
+  const ids = db.prepare('SELECT pl.product_id AS id FROM product_lines pl JOIN products p ON p.id=pl.product_id WHERE pl.line_id=? AND p.active=1 ORDER BY p.name').all(l.id).map((r) => r.id);
+  let cover = l.image_url || '';
+  if (!cover && ids.length) { const p = db.prepare('SELECT images, image_url FROM products WHERE id=?').get(ids[0]); cover = p ? p.image_url || '' : ''; }
+  return { id: l.id, name: l.name, slug: l.slug, blurb: l.blurb, image_url: l.image_url, cover, active: l.active, count: ids.length, ids };
+}
+function cleanLine(b, base) {
+  const n = { ...base };
+  if ('name' in b) { n.name = String(b.name || '').trim().slice(0, 40); if (!n.name) throw new HttpError(400, 'Your line needs a name'); }
+  if ('blurb' in b) n.blurb = String(b.blurb || '').trim().slice(0, 300);
+  if ('image_url' in b) { const u = String(b.image_url || '').trim(); if (u && !/^\/images\/[\w.\-]+$/.test(u)) throw new HttpError(400, 'Pick a photo you uploaded'); n.image_url = u; }
+  if ('active' in b) n.active = b.active ? 1 : 0;
+  return n;
+}
+
+// Public: lines that are shown and have something for sale in them
+app.get('/api/lines', (req, res) => {
+  const rows = db.prepare('SELECT * FROM lines WHERE active=1 ORDER BY position, id').all().map(shapeLine).filter((l) => l.count > 0);
+  res.json(rows.map(({ image_url, active, ...l }) => l));
+});
+
+app.get('/api/admin/lines', requireAdmin, (req, res) => {
+  res.json(db.prepare('SELECT * FROM lines ORDER BY position, id').all().map((l) => { const r = db.prepare('SELECT product_id FROM product_lines WHERE line_id=?').all(l.id).map((x) => x.product_id); return { ...shapeLine(l), ids: r, count: r.length }; }));
+});
+app.post('/api/admin/lines', requireAdmin, h(async (req, res) => {
+  const n = cleanLine(req.body, { name: '', blurb: '', image_url: '', active: 1 });
+  if (db.prepare('SELECT COUNT(*) c FROM lines').get().c >= 30) throw new HttpError(400, 'That’s plenty of lines. Delete one you don’t use before adding another.');
+  const pos = db.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM lines').get().p;
+  const r = db.prepare('INSERT INTO lines (name, slug, blurb, image_url, position, active) VALUES (?,?,?,?,?,?)').run(n.name, uniqueSlug(n.name), n.blurb, n.image_url, pos, n.active);
+  const id = Number(r.lastInsertRowid);
+  if ('product_ids' in req.body) setLineProducts(id, req.body.product_ids);
+  res.json({ id });
+}));
+function setLineProducts(lineId, ids) {
+  if (!Array.isArray(ids)) throw new HttpError(400, 'Products must be a list');
+  const valid = new Set(db.prepare('SELECT id FROM products').all().map((r) => r.id));
+  const keep = [...new Set(ids.map(Number).filter((i) => valid.has(i)))];
+  db.transaction(() => {
+    db.prepare('DELETE FROM product_lines WHERE line_id=?').run(lineId);
+    const ins = db.prepare('INSERT INTO product_lines (product_id, line_id) VALUES (?,?)');
+    for (const p of keep) ins.run(p, lineId);
+  })();
+}
+app.put('/api/admin/lines/order', requireAdmin, h(async (req, res) => {
+  if (!Array.isArray(req.body.ids)) throw new HttpError(400, 'Bad order');
+  const up = db.prepare('UPDATE lines SET position=? WHERE id=?');
+  db.transaction(() => req.body.ids.forEach((id, i) => up.run(i + 1, Number(id))))();
+  res.json({ ok: true });
+}));
+app.put('/api/admin/lines/:id', requireAdmin, h(async (req, res) => {
+  const l = db.prepare('SELECT * FROM lines WHERE id=?').get(req.params.id);
+  if (!l) throw new HttpError(404, 'Not found');
+  const n = cleanLine(req.body, l);
+  const slug = n.name !== l.name ? uniqueSlug(n.name, l.id) : l.slug;
+  db.prepare('UPDATE lines SET name=?, slug=?, blurb=?, image_url=?, active=? WHERE id=?').run(n.name, slug, n.blurb, n.image_url, n.active, l.id);
+  if ('product_ids' in req.body) setLineProducts(l.id, req.body.product_ids);
+  res.json({ ok: true });
+}));
+app.delete('/api/admin/lines/:id', requireAdmin, h(async (req, res) => {
+  db.prepare('DELETE FROM lines WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+}));
+
 app.get('/api/admin/products', requireAdmin, (req, res) => {
   res.json(db.prepare('SELECT * FROM products ORDER BY name').all().map((p) => shapeProduct(p, true)));
 });
@@ -1090,7 +1172,7 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
 app.get('/api/admin/products/:id', requireAdmin, (req, res) => {
   const p = db.prepare('SELECT * FROM products WHERE id=?').get(req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
-  res.json(shapeProduct(p, true));
+  res.json({ ...shapeProduct(p, true), line_ids: lineIdsFor(p.id) });
 });
 
 app.post('/api/admin/products', requireAdmin, h(async (req, res) => {
@@ -1098,12 +1180,14 @@ app.post('/api/admin/products', requireAdmin, h(async (req, res) => {
   if (vs.length) req.body.stock = vs.reduce((a, v) => a + v.stock, 0);
   const n = cleanProduct(req.body, NEW_PRODUCT);
   checkSkus(0, n.sku, vs);
+  const lineIds = 'line_ids' in req.body ? cleanLineIds(req.body.line_ids) : null;
   const id = db.transaction(() => {
     const r = db.prepare(
       `INSERT INTO products (name, price_cents, stock, description, category, tags, images, image_url, active, badge, process, sku, option_label, custom_fields)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(n.name, n.price_cents, n.stock, n.description, n.category, n.tags, n.images, n.image_url, n.active, n.badge || '', n.process || '', n.sku || '', n.option_label || '', n.custom_fields || '[]');
     if (vs.length) saveVariants(Number(r.lastInsertRowid), vs);
+    if (lineIds) saveProductLines(Number(r.lastInsertRowid), lineIds);
     return Number(r.lastInsertRowid);
   })();
   res.json({ id });
@@ -1118,12 +1202,14 @@ app.put('/api/admin/products/:id', requireAdmin, h(async (req, res) => {
   else if (!hasV && activeVariants(p.id).length) req.body.stock = p.stock;
   const n = cleanProduct(req.body, p);
   checkSkus(p.id, n.sku, vs || []);
+  const lineIds = 'line_ids' in req.body ? cleanLineIds(req.body.line_ids) : null;
   db.transaction(() => {
     db.prepare(
       `UPDATE products SET name=?, price_cents=?, stock=?, description=?, category=?, tags=?, images=?, image_url=?, active=?, badge=?, process=?, sku=?, option_label=?, custom_fields=?
        WHERE id=?`
     ).run(n.name, n.price_cents, n.stock, n.description, n.category, n.tags, n.images, n.image_url, n.active, n.badge || '', n.process || '', n.sku || '', n.option_label || '', n.custom_fields || '[]', p.id);
     if (hasV) saveVariants(p.id, vs);
+    if (lineIds) saveProductLines(p.id, lineIds);
   })();
   res.json({ ok: true });
 }));
