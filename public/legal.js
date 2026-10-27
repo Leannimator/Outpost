@@ -71,7 +71,7 @@
       <h2>Auctions</h2>
       <p>A bid is a promise to buy. If you hold the highest bid when an auction ends, you agree to pay for the item. Where a card is required to bid, it is only charged if you win. Bids can’t be withdrawn once placed. Anyone who bids and doesn’t pay may be blocked from future auctions.</p>
       <h2>Handmade work and copyright</h2>
-      <p>The artwork, designs, photos and text on this site belong to ${name}. Please don’t copy, reproduce or sell them without written permission. Buying a piece gives you the physical item, not the right to reproduce the design.</p>
+      <p>The artwork, designs, photos and text on this site belong to ${name}. Please don’t copy, reproduce or sell them, or use them to train or feed AI or machine-learning systems, without written permission. Buying a piece gives you the physical item, not the right to reproduce the design.</p>
       <h2>Reviews</h2>
       <p>Reviews come from verified buyers. We may hide reviews that contain abuse, spam or personal information.</p>
       ${p.terms_extra ? `<h2>More from us</h2>${para(p.terms_extra)}` : ''}

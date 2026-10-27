@@ -85,7 +85,21 @@ Strongly recommended:
 
 1. **Turn on the human check (free).** Make a Cloudflare Turnstile widget, then put the two keys in `.env` as `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` and restart. Visitors then pass a quick check before checkout and before joining to bid. If the check can't be verified, Outpost says no (it fails closed).
 2. **Turn on Radar in Stripe** (Settings → Radar) to screen stolen cards.
-3. When you put Outpost online behind a host, set `TRUST_PROXY=1` so limits count each visitor separately.
+3. When you put Outpost online behind a host, set `TRUST_PROXY=1` so limits count each visitor separately. (If you also put Cloudflare in front of the host, use `2`.)
+
+## Keeping AI crawlers out (on by default)
+
+Outpost is for people who make their own work, so it keeps AI crawlers away from your photos and writing without hiding you from search. Built in, no setup (switch it off under Settings → Keep AI crawlers out):
+
+- `/robots.txt` asks AI crawlers to stay away (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Amazonbot, Meta's crawlers and more), plus the robots.txt-only opt-outs `Google-Extended` (Gemini training) and `Applebot-Extended`. Neither affects Google Search or Siri.
+- Every response carries `X-Robots-Tag: noai, noimageai`.
+- Requests from known AI crawlers get a 403 even if they ignore `robots.txt`, and are listed in Settings → Protection.
+- Anyone downloading photos faster than 600 a minute from one address is slowed down.
+- Receipts, the thank-you page and the staff screens are kept out of search results.
+
+Google, Bing, DuckDuckGo, Applebot, Pinterest and link previews (Facebook, Slack, X, LinkedIn, iMessage) are never blocked. The tradeoff is that AI assistants such as ChatGPT and Perplexity can't show your shop either.
+
+Honest limit: this stops crawlers that say who they are. A scraper pretending to be an ordinary browser looks like a visitor, and no site can fully stop a public photo from being saved. For another layer, put the shop behind Cloudflare's free bot controls (the guide has the steps). The crawler list lives in `ai-shield.js`; names change over time, so add new ones there.
 
 Bidder sign-up doesn't verify email addresses (so a bidder could use someone else's email). The human check, rate limits and blocklist reduce abuse; you can also remove any bid from the Auctions page.
 

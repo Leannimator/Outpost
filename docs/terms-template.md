@@ -22,6 +22,9 @@ A bid is a promise to buy. If you win, you agree to pay the winning bid plus any
 ## Reviews
 Only people with a paid order can leave a review. I may hide reviews that contain abuse, personal information or content unrelated to the order. I won't hide a review just because it is critical, and the shop shows how many reviews were hidden.
 
+## My work and copyright
+The artwork, designs, photos and writing on this site belong to me. Please don't copy, reproduce or sell them, or use them to train or feed AI or machine-learning systems, without my written permission. Buying a piece gives you the physical item, not the right to reproduce the design.
+
 ## Contact
 [Your email]
 

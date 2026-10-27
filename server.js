@@ -8,6 +8,7 @@ const express = require('express');
 const QRCode = require('qrcode');
 const Stripe = require('stripe');
 const db = require('./db');
+const AiShield = require('./ai-shield');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -41,6 +42,8 @@ app.use((req, res, next) => {
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
+// Keeps AI crawlers out; Google, Bing and other search engines are never blocked (see ai-shield.js).
+app.use(AiShield.aiShield({ enabled: () => aiShieldOn(), onBlock: (req, ua) => logSecurity('ai_crawler', req, ua) }));
 const TURNSTILE_SITE = process.env.TURNSTILE_SITE_KEY || '';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 
@@ -145,6 +148,7 @@ const getSetting = (k, d) => {
 const setSetting = (k, v) =>
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(k, String(v));
+const aiShieldOn = () => getSetting('block_ai', '1') !== '0';   // on unless the seller turns it off
 const taxRate = () => {
   const n = parseFloat(getSetting('tax_rate', '0'));
   return Number.isFinite(n) ? Math.min(Math.max(n, 0), 30) : 0;
@@ -681,6 +685,11 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
 });
 
 app.use(express.json());
+// robots.txt: search engines are welcome, AI crawlers are asked to stay away.
+app.get('/robots.txt', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.type('text/plain').send(AiShield.robotsTxt(aiShieldOn()));
+});
 // Short, shareable addresses: yourshop.com/links goes in your Instagram bio.
 const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html' };
 for (const [route, file] of Object.entries(CLEAN_PAGES)) app.get(route, (req, res) => res.sendFile(path.join(__dirname, 'public', file)));
@@ -694,6 +703,17 @@ const IMG_HEADERS = (res) => {
   res.set('X-Content-Type-Options', 'nosniff');
 };
 fs.mkdirSync(path.join(db.dataDir || __dirname, db.dataDir ? 'images' : path.join('public', 'images')), { recursive: true });
+// Slows down anyone downloading photos in bulk. 600 a minute is far more than a person browsing your shop ever needs.
+app.use('/images', (req, res, next) => {
+  if (!aiShieldOn()) return next();
+  const key = 'img:' + req.ip;
+  if (rlCount(key, 60e3) >= 600) {
+    if (rlCount('imglog:' + req.ip, 10 * 60e3) === 0) { rlAdd('imglog:' + req.ip); logSecurity('image_flood', req); }   // log it once, not on every refused request
+    return res.status(429).type('text/plain').send('Too many requests. Please slow down.');
+  }
+  rlAdd(key);
+  next();
+});
 app.use('/images', express.static(db.dataDir ? path.join(db.dataDir, 'images') : path.join(__dirname, 'public', 'images'), { setHeaders: IMG_HEADERS }));
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res, file) {
@@ -737,7 +757,7 @@ const settingsPayload = () => ({
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
   handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: socialLinks(), ship_days: shipDays(), reviews_on: reviewsOn(),
-  bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '1') === '1', stripe_ready: !!stripe,
+  bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '1') === '1', stripe_ready: !!stripe, block_ai: aiShieldOn(),
   links: linksAll().filter((l) => !l.hidden).map(({ hidden, ...l }) => l), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1',
   policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_home: getSetting('tax_home', ''), needs_address: needsAddress(),
   ...brandSettings(),
@@ -937,7 +957,7 @@ app.get('/api/admin/tax-status', requireAdmin, h(async (req, res) => {
 }));
 
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required } = req.body;
+  const { links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required, block_ai } = req.body;
   if (links !== undefined) setSetting('links_json', JSON.stringify(cleanLinks(links)));
   if (links_intro !== undefined) setSetting('links_intro', String(links_intro).trim().slice(0, 200));
   if (mailing_list_on !== undefined) setSetting('mailing_list_on', mailing_list_on ? '1' : '');
@@ -1017,6 +1037,7 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
     if (bid_card_required && !stripe) throw new HttpError(400, 'Add your Stripe keys first. A card can only be saved through Stripe.');
     setSetting('bid_card_required', bid_card_required ? '1' : '');
   }
+  if (block_ai !== undefined) setSetting('block_ai', block_ai ? '1' : '0');
   if (refund_text !== undefined) setSetting('refund_text', String(refund_text).trim().slice(0, 1500));
   if (break_on !== undefined) setSetting('break_on', break_on ? '1' : '');
   if (break_message !== undefined) setSetting('break_message', String(break_message).trim().slice(0, 200));

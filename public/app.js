@@ -1144,7 +1144,7 @@
     };
   }
 
-  const EVENT_LABELS = { honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes' };
+  const EVENT_LABELS = { honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', ai_crawler: 'AI crawler turned away', image_flood: 'Too many photo downloads', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes' };
   const evLabel = (k) => EVENT_LABELS[k] || String(k).replace(/_/g, ' ');
 
   // State base sales-tax rates (Tax Foundation, 2026). Local add-ons aren't included, so the field stays editable.
@@ -1266,6 +1266,10 @@
             <div id="blist" style="margin-top:8px"></div><div id="bmsg"></div>
             <h3 style="font-size:18px;margin:18px 0 6px">Recent blocked attempts</h3>
             <div id="sevents"></div>`)}
+          ${card('Keep AI crawlers out', `
+            <label class="check"><input type="checkbox" id="aishield" ${cur.block_ai ? 'checked' : ''}> <span>Turn away AI crawlers and slow down bulk photo downloads</span></label>
+            <div class="hint">Your photos and writing are asked to stay out of AI training, and known AI crawlers are blocked even if they ignore the request. <b>Google, Bing, DuckDuckGo, Pinterest and link previews are never blocked</b>, so your shop can still be found in search. The tradeoff: AI assistants like ChatGPT and Perplexity won’t be able to show or link your shop either. A crawler that pretends to be an ordinary browser can’t be spotted from here. The guide shows how to add Cloudflare’s free bot controls for that.</div>
+            <button class="btn btn-primary mt" id="aisave">Save</button><div id="aimsg"></div>`)}
           ${card('Back up your shop', `
             <p class="small">Downloads one file with all your products, orders, reviews and photos. Do this every week or two and keep it somewhere safe, like your computer or a cloud drive.</p>
             <button class="btn btn-primary" id="bkup">Download backup</button><div id="bkmsg"></div>
@@ -1375,6 +1379,12 @@
         const r = await put('/api/admin/settings', { bid_card_required: $('#bcard').checked });
         settings = { ...settings, ...r }; $('#bmsg2').innerHTML = '<div class="msg">Saved.</div>';
       } catch (e) { $('#bmsg2').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+    $('#aisave').onclick = async () => {
+      try {
+        const r = await put('/api/admin/settings', { block_ai: $('#aishield').checked });
+        settings = { ...settings, ...r }; $('#aimsg').innerHTML = '<div class="msg">Saved.</div>';
+      } catch (e) { $('#aimsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
     $('#bkup').onclick = async () => {
       try { await download('/api/admin/backup', 'outpost-backup-' + new Date().toISOString().slice(0, 10) + '.tar.gz'); $('#bkmsg').innerHTML = '<div class="msg">Backup downloaded. Check your Downloads folder.</div>'; }

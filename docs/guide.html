@@ -317,6 +317,22 @@ body { overflow-wrap: anywhere; }
   <p>When a new version is released, make a backup first. On your fork on GitHub click <b>Sync fork → Update branch</b>. Render notices and redeploys on its own. Your data stays because it’s on the permanent disk.</p>
 </div></div>
 
+<div class="step"><div class="num">4</div><div>
+  <h3>Keep AI crawlers out of your photos and writing</h3>
+  <p>Outpost does this from the start, with nothing for you to set up. It asks AI crawlers to stay away, turns away the known ones, and slows down anyone downloading your photos in bulk. <b>Google, Bing and DuckDuckGo are never blocked</b>, so your shop can still be found in search. You can switch it off under <b>Settings → Keep AI crawlers out</b>.</p>
+  <p>One tradeoff: AI assistants such as ChatGPT and Perplexity also won’t be able to show or link your shop.</p>
+  <div class="note"><b>What this can’t do.</b>The blocking works on crawlers that say who they are. A scraper that pretends to be an ordinary web browser looks like a normal visitor to Outpost, and no website can fully stop a public photo from being saved. For another layer, see the Cloudflare option below.</div>
+</div></div>
+
+<details><summary>Extra protection with Cloudflare (optional)</summary>
+  <p>Cloudflare is the same company that runs the human check above, and its free plan can block AI bots before they ever reach your shop. You need your own web address (domain) for this.</p>
+  <p>1. At <b>dash.cloudflare.com</b>, add your shop’s domain and follow its steps to point the domain at Cloudflare.<br>
+  2. In Cloudflare’s <b>DNS</b> page, make sure the record for your shop is set to go through Cloudflare (the orange cloud), and under <b>SSL/TLS</b> choose <b>Full (strict)</b>.<br>
+  3. Open <b>Security → Settings</b> and choose <b>Configure AI bot policies</b> (older accounts may show a single <b>Block AI bots</b> switch). Set <b>Training</b> to <b>Block</b>. Cloudflare’s screens change often, so go by what you see.<br>
+  4. In Render’s Environment, change <code>TRUST_PROXY</code> from <code>1</code> to <code>2</code>, so Outpost can still tell visitors apart. I haven’t been able to test this on every setup. If customers start seeing “too many requests,” set it back to <code>1</code> and ask for help on the Outpost GitHub page.</p>
+  <p>A few days later, search for your shop’s name in Google to confirm you still show up. You can also paste your shop’s address into <b>Google Search Console</b> (search.google.com/search-console) and use its <b>URL inspection</b>, which tells you whether Google can read the page.</p>
+</details>
+
 <details><summary>Restoring a backup</summary>
   <p>The backup is a <code>.tar.gz</code> file that holds your database (<code>outpost.db</code>) and an <code>images</code> folder of photos. Double-clicking it on a Mac unpacks it.</p>
   <p><b>On your own computer:</b> stop Outpost (<kbd>Ctrl</kbd> + <kbd>C</kbd>). With no <code>DATA_DIR</code> set, copy the unpacked <code>outpost.db</code> into Outpost’s folder as <code>pos.db</code>, and copy the photos into <code>public/images</code>. Start Outpost again.</p>
