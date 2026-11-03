@@ -36,6 +36,7 @@
     shop: '<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/><path d="M5 12v8h14v-8"/>',
     products: '<path d="M4 8l8-4 8 4v8l-8 4-8-4V8z"/><path d="M4 8l8 4 8-4M12 12v8"/>',
     orders: '<rect x="6" y="5" width="12" height="16" rx="2"/><path d="M9 5V4h6v1M9 11h6M9 15h4"/>',
+    security: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
     settings: '<path d="M5 7h14M5 12h14M5 17h14"/><circle cx="9" cy="7" r="2" fill="var(--cream-2)"/><circle cx="15" cy="12" r="2" fill="var(--cream-2)"/><circle cx="8" cy="17" r="2" fill="var(--cream-2)"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
     customers: '<circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-3.5 3-5 5.5-5s5 1.5 5.5 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5M18 14.5c1.7.6 2.6 2 2.9 4.5"/>',
@@ -160,7 +161,7 @@
   }
 
   // ---------- shell + router ----------
-  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['reports', 'Reports', '#/reports'], ['settings', 'Settings', '#/settings']];
+  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['reports', 'Reports', '#/reports'], ['security', 'Security', '#/security'], ['settings', 'Settings', '#/settings']];
 
   function paintResting() { const el = document.getElementById('resting'); if (el) el.hidden = !settings.break_on; }
   function paintBrand() { if (window.OutpostBrand) OutpostBrand.apply(settings); paintResting(); }
@@ -189,7 +190,7 @@
     [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/lines$/, viewLines, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
     [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
-    [/^#\/settings$/, viewSettings, 'settings'],
+    [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
   ];
 
   async function route() {
@@ -1277,7 +1278,7 @@
   const STATE_TAX = {AL:['Alabama',4],AK:['Alaska',0],AZ:['Arizona',5.6],AR:['Arkansas',6.5],CA:['California',7.25],CO:['Colorado',2.9],CT:['Connecticut',6.35],DE:['Delaware',0],DC:['District of Columbia',6],FL:['Florida',6],GA:['Georgia',4],HI:['Hawaii',4],ID:['Idaho',6],IL:['Illinois',6.25],IN:['Indiana',7],IA:['Iowa',6],KS:['Kansas',6.5],KY:['Kentucky',6],LA:['Louisiana',5],ME:['Maine',5.5],MD:['Maryland',6],MA:['Massachusetts',6.25],MI:['Michigan',6],MN:['Minnesota',6.88],MS:['Mississippi',7],MO:['Missouri',4.23],MT:['Montana',0],NE:['Nebraska',5.5],NV:['Nevada',6.85],NH:['New Hampshire',0],NJ:['New Jersey',6.63],NM:['New Mexico',4.88],NY:['New York',4],NC:['North Carolina',4.75],ND:['North Dakota',5],OH:['Ohio',5.75],OK:['Oklahoma',4.5],OR:['Oregon',0],PA:['Pennsylvania',6],RI:['Rhode Island',7],SC:['South Carolina',6],SD:['South Dakota',4.2],TN:['Tennessee',7],TX:['Texas',6.25],UT:['Utah',6.1],VT:['Vermont',6],VA:['Virginia',5.3],WA:['Washington',6.5],WV:['West Virginia',6],WI:['Wisconsin',5],WY:['Wyoming',4]};
 
   async function viewSettings() {
-    const [st, cur, discounts, sec] = await Promise.all([api('/api/admin/status'), fetch('/api/settings').then((r) => r.json()), api('/api/admin/discounts'), api('/api/admin/security')]);
+    const [st, cur, discounts] = await Promise.all([api('/api/admin/status'), fetch('/api/settings').then((r) => r.json()), api('/api/admin/discounts')]);
     settings = cur;
     const base = st.base_url;
     const rp = cur.refund_policy || { preset: '', days: 14, custom: '', text: '' };
@@ -1384,17 +1385,6 @@
             <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn btn-primary" id="polsave">Save</button><a class="btn btn-ghost" href="privacy.html" target="_blank" rel="noopener">View privacy ↗</a><a class="btn btn-ghost" href="terms.html" target="_blank" rel="noopener">View terms ↗</a></div><div id="polmsg"></div>`)}
         </div>
         <div style="display:grid;gap:18px;min-width:0">
-          ${card('Protection from bots and scammers', `
-            <div id="prot"></div>
-            <h3 style="font-size:18px;margin:18px 0 6px">Blocked people</h3>
-            <div class="row" style="flex-wrap:wrap"><select class="input" id="bkind" style="width:auto"><option value="email">Email</option><option value="ip">IP address</option></select>
-              <input class="input" id="bval" placeholder="someone@example.com" style="flex:1;min-width:160px"><button class="btn" id="badd">Block</button></div>
-            <div id="blist" style="margin-top:8px"></div><div id="bmsg"></div>
-            <h3 style="font-size:18px;margin:18px 0 6px">Recent blocked attempts</h3>
-            <div id="sevents"></div>`)}
-          ${card('Two-step sign-in', `
-            <div id="tfabox"></div>
-            <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:14px" class="row"><div style="flex:1"><b>Sign out everywhere</b><div class="hint">Ends every sign-in on every device, including this one.</div></div><button class="btn btn-sm" id="signall">Sign out everywhere</button></div>`)}
           ${card('Keep AI crawlers out', `
             <label class="check"><input type="checkbox" id="aishield" ${cur.block_ai ? 'checked' : ''}> <span>Turn away AI crawlers and slow down bulk photo downloads</span></label>
             <div class="hint">Your photos and writing are asked to stay out of AI training, and known AI crawlers are blocked even if they ignore the request. <b>Google, Bing, DuckDuckGo, Pinterest and link previews are never blocked</b>, so your shop can still be found in search. The tradeoff: AI assistants like ChatGPT and Perplexity won’t be able to show or link your shop either. A crawler that pretends to be an ordinary browser can’t be spotted from here. The guide shows how to add Cloudflare’s free bot controls for that.</div>
@@ -1509,40 +1499,6 @@
         settings = { ...settings, ...r }; $('#bmsg2').innerHTML = '<div class="msg">Saved.</div>';
       } catch (e) { $('#bmsg2').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
-    // ---- two-step sign-in ----
-    let tfaOn = !!st.two_step, tfaLeft = st.recovery_left || 0;
-    const paintTfa = (extra = '') => {
-      $('#tfabox').innerHTML = tfaOn
-        ? `<p class="small" style="margin:0 0 10px">Two-step sign-in is <b>on</b>. After your password you type a code from your phone. You have <b>${tfaLeft}</b> recovery code${tfaLeft === 1 ? '' : 's'} left.</p>${extra}
-           <details><summary class="small" style="cursor:pointer">Turn it off</summary><div style="margin-top:10px"><label class="field"><span class="label">Password</span><input class="input" id="tfpw" type="password" autocomplete="current-password"></label><label class="field"><span class="label">Current 6-digit code</span><input class="input" id="tfcd" inputmode="numeric" maxlength="7"></label><button class="btn btn-sm" id="tfoff">Turn off two-step sign-in</button><div id="tfmsg"></div></div></details>`
-        : `<p class="small" style="margin:0 0 10px">After your password, you’ll type a 6-digit code from an app on your phone (Google Authenticator, Authy, 1Password…). Even if someone learns your password, they can’t get in without your phone. It works offline and needs no account.</p>${extra}<button class="btn btn-primary" id="tfstart">Set up two-step sign-in</button><div id="tfmsg"></div>`;
-      if ($('#tfstart')) $('#tfstart').onclick = async () => {
-        try {
-          const d = await post('/api/admin/2fa/start');
-          $('#tfabox').innerHTML = `<div class="row" style="align-items:flex-start;flex-wrap:wrap;gap:18px"><img src="${esc(d.qr)}" alt="Scan this with your authenticator app" width="150" height="150" style="border-radius:12px;background:#fff">
-            <div style="flex:1 1 240px"><div class="label">1. Scan the picture with your authenticator app</div><div class="hint" style="margin:0 0 12px">Can’t scan? Type this key instead: <b style="font-family:ui-monospace,monospace">${esc(d.secret.replace(/(.{4})/g, '$1 ').trim())}</b></div>
-            <label class="field" style="margin:0"><span class="label">2. Type the code it shows</span><div class="row"><input class="input" id="tfcode" inputmode="numeric" maxlength="7" placeholder="123456"><button class="btn btn-primary" id="tfon">Turn on</button></div></label><div id="tfmsg"></div></div></div>`;
-          $('#tfon').onclick = async () => {
-            try {
-              const r = await post('/api/admin/2fa/enable', { code: $('#tfcode').value });
-              tfaOn = true; tfaLeft = r.recovery_codes.length;
-              paintTfa(`<div class="msg" style="margin-bottom:12px"><b>Save your recovery codes now.</b> They’re the only way in if you lose your phone, and they’re shown just once. Each works one time.</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:12px">${r.recovery_codes.map((c) => `<div class="input" style="text-align:center;font-family:ui-monospace,monospace">${esc(c)}</div>`).join('')}</div>
-                <div class="row" style="gap:8px;margin-bottom:14px"><button class="btn btn-sm" id="rccopy">Copy</button><button class="btn btn-sm" id="rcdl">Download</button></div>`);
-              const text = r.recovery_codes.join('\n');
-              $('#rccopy').onclick = async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Couldn’t copy. Use Download instead.'); } };
-              $('#rcdl').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([`Outpost recovery codes. Each works once.\n\n${text}\n`], { type: 'text/plain' })); a.download = 'outpost-recovery-codes.txt'; a.click(); URL.revokeObjectURL(a.href); };
-            } catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
-          };
-        } catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
-      };
-      if ($('#tfoff')) $('#tfoff').onclick = async () => {
-        try { await post('/api/admin/2fa/disable', { password: $('#tfpw').value, code: $('#tfcd').value }); tfaOn = false; paintTfa('<div class="msg">Two-step sign-in is off.</div>'); }
-        catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
-      };
-    };
-    paintTfa();
-    $('#signall').onclick = async () => { if (!confirm('Sign out of every device, including this one?')) return; try { await post('/api/admin/logout-all'); } catch { /* ignore */ } store.del('outpost_token'); token = ''; loginScreen('Signed out everywhere'); };
     $('#aisave').onclick = async () => {
       try {
         const r = await put('/api/admin/settings', { block_ai: $('#aishield').checked });
@@ -1610,6 +1566,99 @@
       } catch (err) { $('#dmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
     };
 
+
+  }
+
+  // =====================================================================
+  // SECURITY
+  // =====================================================================
+  async function viewSecurity() {
+    const [st, sec, chk] = await Promise.all([api('/api/admin/status'), api('/api/admin/security'), api('/api/admin/setup-check')]);
+    const card = (title, inner) => `<div class="card"><h2 style="font-size:22px;margin-bottom:14px">${title}</h2>${inner}</div>`;
+    view().innerHTML = `
+      <div class="topbar"><h1>Security</h1></div>
+      <div class="settings-col">
+        <div style="display:grid;gap:18px;min-width:0">
+          <h2 class="sgroup">Your sign-in</h2>
+          ${card('Two-step sign-in', `<div id="tfabox"></div><div style="border-top:1px solid var(--line);margin-top:16px;padding-top:14px" class="row" id="sabox"></div>`)}
+          ${card('Check your setup', '<div id="setup"></div>')}
+        </div>
+        <div style="display:grid;gap:18px;min-width:0">
+          <h2 class="sgroup">Protection</h2>
+          ${card('Protection from bots and scammers', `
+            <div id="prot"></div>
+            <h3 style="font-size:18px;margin:18px 0 6px">Blocked people</h3>
+            <div class="row" style="flex-wrap:wrap"><select class="input" id="bkind" style="width:auto"><option value="email">Email</option><option value="ip">IP address</option></select>
+              <input class="input" id="bval" placeholder="someone@example.com" style="flex:1;min-width:160px"><button class="btn" id="badd">Block</button></div>
+            <div id="blist" style="margin-top:8px"></div><div id="bmsg"></div>
+            <h3 style="font-size:18px;margin:18px 0 6px">Recent blocked attempts</h3>
+            <div id="sevents"></div>`)}
+        </div>
+      </div>`;
+    // ---- check your setup ----
+    const okRow = (t, d) => `<div class="prow"><span class="pdot ok"></span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`;
+    const warnRow = (t, d) => `<div class="prow"><span class="pdot warn"></span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`;
+    const isPrivateIp = (ip) => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc|fd|fe80)/i.test(ip) || ip === '';
+    const nodeMajor = Number(String(chk.node).replace(/^v/, '').split('.')[0]) || 0;
+    const proxyRow = (() => {
+      const seen = esc(chk.ip_seen || 'unknown'), tp = chk.trust_proxy;
+      if (chk.cf_connecting_ip && chk.cf_connecting_ip !== chk.ip_seen) return warnRow('Visitor addresses may be wrong', `You are connecting through Cloudflare. Your real address is ${esc(chk.cf_connecting_ip)} but Outpost sees ${seen}. The proxy setting needs a small change. Tell Claude and we will check it together.`);
+      if (chk.hosted && !tp) return warnRow('Visitor addresses are not set up', `Outpost sees ${seen}. Behind a host like Render every visitor would look like the same one, so limits would hit everyone at once. Set TRUST_PROXY (a number such as 1).`);
+      if (chk.hosted && isPrivateIp(chk.ip_seen)) return warnRow('Visitor addresses look wrong', `Outpost sees ${seen}, which is a private address and not yours. Tell Claude and we will check the proxy setting together.`);
+      if (!chk.hosted) return okRow('Visitor addresses', `Outpost sees you as ${seen}. Running on your own computer, nothing to set.`);
+      return okRow('Visitor addresses', `Outpost sees you as ${seen} (proxy setting: ${esc(tp)}). If that is your own address, it is right.`);
+    })();
+    $('#setup').innerHTML =
+      proxyRow +
+      (!chk.password ? okRow('Password', 'Long enough and not a common one.') : chk.password.level === 'hard' ? warnRow('Password is weak', `Your password is ${esc(chk.password.why)}. Change ADMIN_PASSWORD in your hosting settings to something long and private.`) : warnRow('Password could be stronger', `Your password is ${esc(chk.password.why)}. Twelve or more characters is best.`)) +
+      (chk.https ? okRow('Web address', `${esc(chk.base_url)} is https, and browsers are told to always use the secure version.`) : warnRow('Web address is not https', `BASE_URL is ${esc(chk.base_url)}. ${chk.hosted ? 'For a live shop set BASE_URL to your https address.' : 'Fine on your own computer.'}`)) +
+      (chk.captcha ? okRow('Human check (captcha)', 'On. It is the strongest protection against bots filling your lists and checkouts.') : warnRow('Human check (captcha) is off', 'It is free and is the real protection against bots filling your email list and checkouts. See “Turn on the human check” in the README.')) +
+      (chk.two_step ? okRow('Two-step sign-in', 'On.') : warnRow('Two-step sign-in is off', 'Turn it on above so a stolen password alone can’t get in.')) +
+      (nodeMajor >= 22 ? okRow('Node version', `${esc(chk.node)}.`) : warnRow('Node version is old', `Running ${esc(chk.node)}. This app is tested on version 22 or newer.`));
+    // ---- two-step sign-in ----
+    let tfaOn = !!st.two_step, tfaLeft = st.recovery_left || 0, pw0 = '';
+    const paintTfa = (extra = '') => {
+      paintSign();
+      $('#tfabox').innerHTML = tfaOn
+        ? `<p class="small" style="margin:0 0 10px">Two-step sign-in is <b>on</b>. After your password you type a code from your phone. You have <b>${tfaLeft}</b> recovery code${tfaLeft === 1 ? '' : 's'} left.</p>${extra}
+           <details><summary class="small" style="cursor:pointer">Turn it off</summary><div style="margin-top:10px"><label class="field"><span class="label">Password</span><input class="input" id="tfpw" type="password" autocomplete="current-password"></label><label class="field"><span class="label">Current 6-digit code</span><input class="input" id="tfcd" inputmode="numeric" maxlength="7"></label><button class="btn btn-sm" id="tfoff">Turn off two-step sign-in</button><div id="tfmsg"></div></div></details>`
+        : `<p class="small" style="margin:0 0 10px">After your password, you’ll type a 6-digit code from an app on your phone (Google Authenticator, Authy, 1Password…). Even if someone learns your password, they can’t get in without your phone. It works offline and needs no account.</p>${extra}<label class="field"><span class="label">Your password</span><input class="input" id="tfpw0" type="password" autocomplete="current-password"></label><button class="btn btn-primary" id="tfstart">Set up two-step sign-in</button><div id="tfmsg"></div>`;
+      if ($('#tfstart')) $('#tfstart').onclick = async () => {
+        try {
+          pw0 = $('#tfpw0').value; const d = await post('/api/admin/2fa/start', { password: pw0 });
+          $('#tfabox').innerHTML = `<div class="row" style="align-items:flex-start;flex-wrap:wrap;gap:18px"><img src="${esc(d.qr)}" alt="Scan this with your authenticator app" width="150" height="150" style="border-radius:12px;background:#fff">
+            <div style="flex:1 1 240px"><div class="label">1. Scan the picture with your authenticator app</div><div class="hint" style="margin:0 0 12px">Can’t scan? Type this key instead: <b style="font-family:ui-monospace,monospace">${esc(d.secret.replace(/(.{4})/g, '$1 ').trim())}</b></div>
+            <label class="field" style="margin:0"><span class="label">2. Type the code it shows</span><div class="row"><input class="input" id="tfcode" inputmode="numeric" maxlength="7" placeholder="123456"><button class="btn btn-primary" id="tfon">Turn on</button></div></label><div id="tfmsg"></div></div></div>`;
+          $('#tfon').onclick = async () => {
+            try {
+              const r = await post('/api/admin/2fa/enable', { password: pw0, code: $('#tfcode').value }); pw0 = '';
+              tfaOn = true; tfaLeft = r.recovery_codes.length;
+              paintTfa(`<div class="msg" style="margin-bottom:12px"><b>Save your recovery codes now.</b> They’re the only way in if you lose your phone, and they’re shown just once. Each works one time.</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:12px">${r.recovery_codes.map((c) => `<div class="input" style="text-align:center;font-family:ui-monospace,monospace">${esc(c)}</div>`).join('')}</div>
+                <div class="row" style="gap:8px;margin-bottom:14px"><button class="btn btn-sm" id="rccopy">Copy</button><button class="btn btn-sm" id="rcdl">Download</button></div>`);
+              const text = r.recovery_codes.join('\n');
+              $('#rccopy').onclick = async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Couldn’t copy. Use Download instead.'); } };
+              $('#rcdl').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([`Outpost recovery codes. Each works once.\n\n${text}\n`], { type: 'text/plain' })); a.download = 'outpost-recovery-codes.txt'; a.click(); URL.revokeObjectURL(a.href); };
+            } catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+          };
+        } catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+      };
+      if ($('#tfoff')) $('#tfoff').onclick = async () => {
+        try { await post('/api/admin/2fa/disable', { password: $('#tfpw').value, code: $('#tfcd').value }); tfaOn = false; paintTfa('<div class="msg">Two-step sign-in is off.</div>'); }
+        catch (e) { $('#tfmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+      };
+    };
+    // ---- sign out everywhere (asks for your password, and a fresh code if two-step is on) ----
+    const paintSign = () => {
+      $('#sabox').innerHTML = `<div style="flex:1"><b>Sign out everywhere</b><div class="hint">Ends every sign-in on every device, including this one. Type your password${tfaOn ? ' and a new code from your phone' : ''} to confirm.</div>
+        <div class="row" style="flex-wrap:wrap;margin-top:8px"><input class="input" id="sapw" type="password" placeholder="Your password" autocomplete="current-password" style="flex:1;min-width:150px">${tfaOn ? '<input class="input" id="sacd" inputmode="numeric" maxlength="7" placeholder="6-digit code" style="width:130px">' : ''}<button class="btn btn-sm" id="signall">Sign out everywhere</button></div><div id="samsg"></div></div>`;
+      $('#signall').onclick = async () => {
+        try { await post('/api/admin/logout-all', { password: $('#sapw').value, code: tfaOn ? $('#sacd').value : undefined }); }
+        catch (e) { $('#samsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+        store.del('outpost_token'); token = ''; loginScreen('Signed out everywhere');
+      };
+    };
+    paintTfa();
     // --- protection ---
     let sdata = sec;
     const sPaint = () => {
@@ -1620,8 +1669,6 @@
         on('Rate limits', 'Each visitor can only try checkout, sign-up and bidding so many times per minute and hour, and the whole shop has a daily ceiling.') +
         on('Throwaway email blocking', 'Sign-ups from disposable email services are refused.') +
         (Number(settings.max_qty) > 0 ? on('Order size limit', `No more than ${settings.max_qty} of one item per order. Unpaid orders never hold your stock.`) : off('Order size limit is off', 'Set “Max per item, per order” in Your shop to stop bulk buying.')) +
-        (sdata.captcha ? on('Human check (Cloudflare Turnstile)', 'Visitors pass a quick invisible check before checking out or joining to bid.') : off('Human check is not turned on', 'It is free and the strongest protection. See “Turn on the human check” in the README (two keys in your .env file).')) +
-        (sdata.trust_proxy ? on('Real visitor addresses', 'Outpost can tell visitors apart behind your host.') : off('Visitor addresses', 'When you put Outpost online behind a host like Render or Fly, set TRUST_PROXY=1 in .env so limits work per person and not for everyone at once.')) +
         `<p class="small" style="margin-top:10px"><b>${sdata.last_24h}</b> suspicious attempt${sdata.last_24h === 1 ? '' : 's'} turned away in the last 24 hours.</p>
          <p class="hint">Also turn on Radar in your Stripe dashboard (Settings → Radar). It screens stolen cards for you.</p>`;
       $('#blist').innerHTML = sdata.blocks.length ? sdata.blocks.map((b) => `<div class="drow"><div><b>${esc(b.value)}</b> <span class="badge">${b.kind === 'ip' ? 'IP' : 'Email'}</span>${b.note ? `<div class="small muted">${esc(b.note)}</div>` : ''}</div><button class="btn btn-sm" data-bx="${b.id}">Unblock</button></div>`).join('') : '<div class="muted small">Nobody is blocked.</div>';

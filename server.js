@@ -1539,6 +1539,21 @@ app.get('/api/admin/security', requireAdmin, (req, res) => {
   const blocks = db.prepare('SELECT * FROM blocks ORDER BY id DESC').all();
   res.json({ last_24h: counts.reduce((a, c) => a + c.n, 0), counts, recent, blocks, captcha: !!TURNSTILE_SECRET, trust_proxy: !!process.env.TRUST_PROXY });
 });
+// What the "check your setup" list on the Security page needs. Nothing secret: the password is described, never shown.
+app.get('/api/admin/setup-check', requireAdmin, (req, res) => {
+  res.json({
+    ip_seen: req.ip || '',
+    trust_proxy: process.env.TRUST_PROXY || '',
+    forwarded_for: String(req.get('x-forwarded-for') || '').slice(0, 300),
+    cf_connecting_ip: String(req.get('cf-connecting-ip') || '').slice(0, 64),
+    password: PW_PROBLEM ? { level: PW_PROBLEM.level, why: PW_PROBLEM.why } : null,
+    base_url: BASE_URL, https: /^https:/i.test(BASE_URL), hosted: ON_INTERNET,
+    captcha: !!TURNSTILE_SECRET, captcha_site: !!TURNSTILE_SITE,
+    two_step: !!getSetting('totp_secret', ''),
+    node: process.version,
+    hsts_subdomains: process.env.HSTS_SUBDOMAINS === '1',
+  });
+});
 app.post('/api/admin/blocks', requireAdmin, h(async (req, res) => {
   const kind = req.body.kind;
   const value = String(req.body.value || '').trim().toLowerCase();

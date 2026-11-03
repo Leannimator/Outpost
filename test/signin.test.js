@@ -122,3 +122,18 @@ test('item 14: changing the password signs every old session out', async () => {
     finally { sameAgain.stop(); }
   } finally { try { if (again) again.stop(); } catch { /* ignore */ } try { fs.rmSync(s.dir, { recursive: true, force: true }); } catch { /* ignore */ } }
 });
+
+test('Security page: the setup check tells the owner what the app sees', async () => {
+  const s = await startServer({ TRUST_PROXY: '1' });
+  try {
+    const { data } = await login(s);
+    const t = tok(data.token);
+    assert.equal((await s.j('GET', '/api/admin/setup-check')).status, 401, 'owner only');
+    const plain = (await s.j('GET', '/api/admin/setup-check', undefined, { ...t, 'x-forwarded-for': '198.51.100.20' })).data;
+    assert.equal(plain.ip_seen, '198.51.100.20'); assert.equal(plain.trust_proxy, '1'); assert.equal(plain.password, null);
+    assert.equal(plain.two_step, false); assert.match(plain.node, /^v\d+\./);
+    const cf = (await s.j('GET', '/api/admin/setup-check', undefined, { ...t, 'x-forwarded-for': '172.70.1.1', 'cf-connecting-ip': '203.0.113.9' })).data;
+    assert.equal(cf.cf_connecting_ip, '203.0.113.9'); assert.equal(cf.ip_seen, '172.70.1.1', 'shows the mismatch the page warns about');
+    assert.equal(JSON.stringify(plain).includes(PASSWORD), false, 'the password is never sent');
+  } finally { s.stop(); }
+});
