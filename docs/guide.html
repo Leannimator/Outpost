@@ -334,9 +334,9 @@ body { overflow-wrap: anywhere; }
 </details>
 
 <details><summary>Restoring a backup</summary>
-  <p>The backup is a <code>.tar.gz</code> file that holds your database (<code>outpost.db</code>) and an <code>images</code> folder of photos. Double-clicking it on a Mac unpacks it.</p>
-  <p><b>On your own computer:</b> stop Outpost (<kbd>Ctrl</kbd> + <kbd>C</kbd>). With no <code>DATA_DIR</code> set, copy the unpacked <code>outpost.db</code> into Outpost’s folder as <code>pos.db</code>, and copy the photos into <code>public/images</code>. Start Outpost again.</p>
-  <p><b>On Render:</b> the permanent disk can only be changed from Render’s <b>Shell</b> tab, which is a more technical step, and I haven’t been able to test that route. If you ever need it, ask for help on the Outpost GitHub page, and please never post a backup file anywhere public; it contains your customers’ details.</p>
+  <p><b>Settings → Back up your shop → Restore from a backup.</b> Choose the <code>.tar.gz</code> file you downloaded earlier (don’t unpack it). Type your password, type <b>RESTORE</b>, and press <b>Restore</b>. Outpost unpacks the file, sends your products, orders and photos back, then restarts your shop. This takes a minute or two. It works the same on Render and on your own computer.</p>
+  <p>Restoring <b>replaces everything</b> with what was in the backup, so anything added since then is lost. Check your Stripe dashboard for any payments made after the backup, because those orders won’t be in the restored shop. Two-step sign-in is turned off by a restore (the backup never holds that secret); turn it back on in <b>Security</b>. Outpost keeps a copy of what your shop had just before the restore for 30 days, in case you need to go back.</p>
+  <p>On your own computer Outpost stops when the restore finishes, so start it again. Please never post a backup file anywhere public; it contains your customers’ details.</p>
 </details>
 
 <h2 id="fix">When something goes wrong</h2>
@@ -354,7 +354,7 @@ body { overflow-wrap: anywhere; }
 </details>
 
 <details><summary>My products or photos disappeared after an update</summary>
-  <p>The permanent disk isn’t being used. In Render’s Environment make sure <code>DATA_DIR</code> is <code>/var/data</code>, and in the service’s <b>Disks</b> section confirm the disk is mounted at <code>/var/data</code>. Restore your latest backup.</p>
+  <p>The permanent disk isn’t being used. In Render’s Environment make sure <code>DATA_DIR</code> is <code>/var/data</code>, and in the service’s <b>Disks</b> section confirm the disk is mounted at <code>/var/data</code>. Then restore your latest backup (Settings → Back up your shop → Restore from a backup).</p>
 </details>
 
 <details><summary>I forgot my staff password</summary>

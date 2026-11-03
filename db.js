@@ -9,8 +9,11 @@ if (DATA_DIR) fsx.mkdirSync(DATA_DIR, { recursive: true });
 // The database file is found the same way no matter which folder the app is started from (it used to be relative to the
 // current folder, so starting from elsewhere opened an empty shop and made a new file there; review item 81).
 const DB_FILE = process.env.DB_PATH ? pathx.resolve(process.env.DB_PATH) : (DATA_DIR ? pathx.join(DATA_DIR, 'outpost.db') : pathx.join(__dirname, 'pos.db'));
+// A restore the owner finished on the Settings screen is applied here, before the database is opened (see restore.js).
+require('./restore').applyPending({ dbFile: DB_FILE, imagesDir: DATA_DIR ? pathx.join(DATA_DIR, 'images') : pathx.join(__dirname, 'public', 'images') });
 const db = new Database(DB_FILE);
 db.dataDir = DATA_DIR;
+db.schemaVersion = 2;   // kept equal to SCHEMA_VERSION below (a test checks it); a backup from a newer version is refused on restore
 db.file = DB_FILE;
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = FULL');     // a power cut can no longer lose the last few saved sales (it was NORMAL)

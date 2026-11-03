@@ -2035,6 +2035,69 @@ app.get('/api/admin/backup', requireAdmin, h(async (req, res) => {
   } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
 }));
 
+// ---------- restore from a backup ----------
+// The Settings screen unpacks the backup in the browser and sends the database and each photo here. They wait in a staging folder; the live shop is
+// untouched until the owner finishes. Finishing stops the shop, and restore.js swaps the files in on the next start (Render restarts it by itself).
+const Restore = require('./restore');
+const RESTORE_DB_MAX = (Number(process.env.RESTORE_DB_MAX_MB) > 0 ? Number(process.env.RESTORE_DB_MAX_MB) : 250) * 1048576;
+let restoreSession = null;   // { id, at, db, images: Map(name -> bytes) }
+const restoreDir = () => Restore.stagingDir(db.file);
+const restoreFor = (req) => {
+  const s = restoreSession;
+  if (!s || Date.now() - s.at > 60 * 60e3 || !safeEqual(String(req.params.id || ''), s.id)) throw new HttpError(409, 'This restore is no longer open. Start it again.');
+  s.at = Date.now();
+  return s;
+};
+const restoreClear = () => { restoreSession = null; try { fs.rmSync(restoreDir(), { recursive: true, force: true }); } catch { /* ignore */ } };
+app.post('/api/admin/restore/start', requireAdmin, h(async (req, res) => {
+  confirmOwner(req);   // replacing the whole shop asks for your password (and a code, if two-step is on), like signing out everywhere
+  restoreClear();
+  fs.mkdirSync(path.join(restoreDir(), 'images'), { recursive: true, mode: 0o700 });
+  restoreSession = { id: rid(16), at: Date.now(), db: null, images: new Map() };
+  const have = [];
+  for (const f of fs.readdirSync(UPLOAD_DIR)) { try { const st = fs.statSync(path.join(UPLOAD_DIR, f)); if (st.isFile()) have.push({ name: f, bytes: st.size }); } catch { /* gone */ } }
+  logSecurity('admin_restore_started', req);
+  res.json({ id: restoreSession.id, have });
+}));
+app.put('/api/admin/restore/:id/db', requireAdmin, h(async (req, res) => {
+  const s = restoreFor(req);
+  if (req.headers['content-encoding'] || !/^application\/octet-stream/i.test(req.get('content-type') || '')) throw new HttpError(400, 'That upload could not be read.');
+  const part = path.join(restoreDir(), 'outpost.db.part'), file = path.join(restoreDir(), 'outpost.db');
+  let n = 0;
+  const cap = new (require('node:stream').Transform)({ transform(c, e, cb) { n += c.length; cb(n > RESTORE_DB_MAX ? new HttpError(413, 'That database is too large to restore here.') : null, c); } });
+  try { await pipeline(req, cap, fs.createWriteStream(part, { mode: 0o600 })); }
+  catch (e) { try { fs.rmSync(part, { force: true }); } catch { /* ignore */ } throw e instanceof HttpError ? e : new HttpError(400, 'The upload stopped part-way. Nothing was changed.'); }
+  fs.renameSync(part, file);
+  const info = Restore.inspectDatabase(Database, file, db.schemaVersion);
+  for (const sfx of ['-wal', '-shm', '-journal']) { try { fs.rmSync(file + sfx, { force: true }); } catch { /* ignore */ } }
+  if (info.error) { try { fs.rmSync(file, { force: true }); } catch { /* ignore */ } s.db = null; throw new HttpError(400, info.error); }
+  s.db = { bytes: fs.statSync(file).size, sha: Restore.sha256(file), products: info.products, orders: info.orders };
+  res.json({ products: info.products, orders: info.orders });
+}));
+app.put('/api/admin/restore/:id/image/:name', requireAdmin, express.raw({ type: 'application/octet-stream', limit: '8mb', inflate: false }), h(async (req, res) => {
+  const s = restoreFor(req);
+  const name = String(req.params.name || '');
+  if (!Restore.SAFE_NAME.test(name) || !Restore.IMAGE_EXT.test(name) || name.startsWith('.')) throw new HttpError(400, 'A photo in the backup has a name that is not allowed.');
+  const ext = sniffImage(req.body);
+  if (!ext) throw new HttpError(400, 'A file in the backup is not a PNG, JPG, GIF, WebP or SVG image.');
+  if (ext === 'svg' && Safe.svgProblem(req.body.toString('utf8'))) throw new HttpError(400, 'A photo in the backup is an SVG with scripts in it, which is not allowed.');
+  let staged = 0; for (const [k, v] of s.images) if (k !== name) staged += v;
+  if (staged + req.body.length > IMAGES_MAX_BYTES) throw new HttpError(400, 'The photos in this backup are larger than this shop is set to hold.');
+  fs.writeFileSync(path.join(restoreDir(), 'images', name), req.body, { mode: 0o600 });
+  s.images.set(name, req.body.length);
+  res.json({ ok: true });
+}));
+app.post('/api/admin/restore/:id/finish', requireAdmin, h(async (req, res) => {
+  const s = restoreFor(req);
+  if (!s.db) throw new HttpError(400, 'The database has not been sent yet.');
+  const images = [...s.images].map(([name, bytes]) => ({ name, bytes }));
+  fs.writeFileSync(Restore.markerFile(db.file), JSON.stringify({ at: Date.now(), db_bytes: s.db.bytes, db_sha256: s.db.sha, products: s.db.products, orders: s.db.orders, images }), { mode: 0o600 });
+  res.json({ ok: true, hosted: ON_INTERNET, products: s.db.products, orders: s.db.orders });
+  // The shop stops once this answer is sent. Render starts it again by itself; on your own computer you start it again. The swap happens as it starts.
+  res.on('finish', () => setTimeout(() => { try { db.close(); } catch { /* ignore */ } process.exit(0); }, 400));
+}));
+app.delete('/api/admin/restore/:id', requireAdmin, h(async (req, res) => { restoreFor(req); restoreClear(); res.json({ ok: true }); }));
+
 app.get('/api/admin/security', requireAdmin, (req, res) => {
   const since = Date.now() - 24 * 3600e3;
   const counts = db.prepare('SELECT kind, COUNT(*) n FROM security_events WHERE at >= ? GROUP BY kind ORDER BY n DESC').all(since);
@@ -2864,4 +2927,10 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: status === 413 ? (req.path === '/api/admin/upload' ? 'Image is too large (8 MB max)' : req.path === '/api/admin/products/import' ? 'That file is too large to import in one go. Split it into smaller files.' : 'That request is too large.') : 'Server error' });
 });
 
+// A restore finished before this start: note it in the log (the old log was part of what was replaced), and tidy old leftovers.
+try {
+  const f = Restore.doneFile(db.file);
+  if (fs.existsSync(f)) { const i = JSON.parse(fs.readFileSync(f, 'utf8')); logSecurity('admin_restore', null, `Restored from a backup: ${i.products} products, ${i.orders} orders, ${i.photos} photos`); fs.rmSync(f, { force: true }); }
+  Restore.cleanStale(db.file);
+} catch { /* never stop the shop for this */ }
 app.listen(PORT, () => console.log(`Outpost running at ${BASE_URL}`));

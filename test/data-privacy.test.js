@@ -92,7 +92,7 @@ test('item 76: a restart no longer rewrites real orders ($0 item + $5 shipping s
 
 test('item 81: the database file is found next to the app, not wherever you started it from; private; saved with full safety', () => {
   const dir = tmp('outpost-path-'); const elsewhere = tmp('outpost-cwd-');
-  fs.copyFileSync(path.join(ROOT, 'db.js'), path.join(dir, 'db.js'));
+  fs.copyFileSync(path.join(ROOT, 'db.js'), path.join(dir, 'db.js')); fs.copyFileSync(path.join(ROOT, 'restore.js'), path.join(dir, 'restore.js'));   // db.js now loads restore.js beside it
   const r = spawnSync(process.execPath, ['-e', `const d=require(${JSON.stringify(path.join(dir, 'db.js'))});process.stdout.write(JSON.stringify({file:d.file,sync:d.pragma('synchronous',{simple:true}),sd:d.pragma('secure_delete',{simple:true})}))`],
     { cwd: elsewhere, env: { PATH: process.env.PATH, NODE_PATH: path.join(ROOT, 'node_modules') }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);

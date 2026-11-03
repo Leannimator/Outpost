@@ -120,7 +120,7 @@ Orders are marked paid and stock is decremented only when Stripe confirms paymen
 
 - Serve over HTTPS and set `BASE_URL` to your real address (payment links and QR codes use it).
 - Use a long random `ADMIN_PASSWORD`; test end to end with Stripe test cards (`4242 4242 4242 4242`) before switching to live keys.
-- Back up regularly with Settings → Back up your shop → Download backup (one file with the database and photos).
+- Back up regularly with Settings → Back up your shop → Download backup (one file with the database and photos). To go back to one, use Settings → Back up your shop → Restore from a backup.
 - Tax, shipping prices and refunds are set up in Settings. A physical card reader (Stripe Terminal) is not built in yet.
 
 ## Licence and legal

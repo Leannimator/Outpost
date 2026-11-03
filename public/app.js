@@ -1396,7 +1396,7 @@
     };
   }
 
-  const EVENT_LABELS = { oversold: 'Paid for more than was in stock', honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', ai_crawler: 'AI crawler turned away', image_flood: 'Too many photo downloads', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes', admin_login: 'Staff signed in', admin_login_failed: 'Failed staff sign-in', admin_lockout: 'Sign-in paused after too many tries', admin_recovery_used: 'Recovery code used to sign in', admin_logout_all: 'Signed out everywhere', admin_2fa_on: 'Two-step sign-in turned on', admin_2fa_off: 'Two-step sign-in turned off' };
+  const EVENT_LABELS = { oversold: 'Paid for more than was in stock', honeypot: 'Hidden-field trap tripped', too_fast: 'Submitted too fast', captcha_failed: 'Failed the human check', checkout_rate: 'Too many checkouts', signup_rate: 'Too many sign-ups', bid_rate: 'Too many bids', blocked_email: 'Blocked email tried to join', blocked_ip: 'Blocked address tried to visit', blocked_bid: 'Blocked person tried to bid', flood: 'Traffic flood', ai_crawler: 'AI crawler turned away', image_flood: 'Too many photo downloads', disposable_email: 'Throwaway email', email_reuse: 'Same email used under many names', code_guessing: 'Guessing discount codes', admin_login: 'Staff signed in', admin_restore: 'Shop restored from a backup', admin_restore_started: 'Restore from a backup started', admin_login_failed: 'Failed staff sign-in', admin_lockout: 'Sign-in paused after too many tries', admin_recovery_used: 'Recovery code used to sign in', admin_logout_all: 'Signed out everywhere', admin_2fa_on: 'Two-step sign-in turned on', admin_2fa_off: 'Two-step sign-in turned off' };
   const evLabel = (k) => EVENT_LABELS[k] || String(k).replace(/_/g, ' ');
 
   // State base sales-tax rates (Tax Foundation, 2026). Local add-ons aren't included, so the field stays editable.
@@ -1529,7 +1529,8 @@
           ${card('Back up your shop', `
             <p class="small">Downloads one file with all your products, orders, reviews and photos. Do this every week or two and keep it somewhere safe, like your computer or a cloud drive.</p>
             <button class="btn btn-primary" id="bkup">Download backup</button><div id="bkmsg"></div>
-            <p class="hint">To restore, follow “Restoring a backup” in the guide.</p>`)}
+            <p class="hint" style="margin-top:12px">Need to go back to an earlier backup? <button class="linkbtn" type="button" id="rsopen">Restore from a backup</button></p>
+            <div id="rspanel" class="rspanel" hidden></div>`)}
           <div class="card"><h2 style="font-size:22px;margin-bottom:14px">Status</h2>
           <p>Card payments: ${st.stripe ? '<span class="badge b-paid">Connected to Stripe</span>' : '<span class="badge b-pending">Not set up yet</span>'}</p>
           <p>Payment confirmations (webhook): ${st.webhook ? '<span class="badge b-paid">Ready</span>' : '<span class="badge b-pending">Not set up yet</span>'}</p>
@@ -1686,6 +1687,110 @@
       try { await download('/api/admin/backup', 'outpost-backup-' + new Date().toISOString().slice(0, 10) + '.tar.gz'); $('#bkmsg').innerHTML = '<div class="msg">Backup downloaded. Check your Downloads folder.</div>'; }
       catch (e) { $('#bkmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
+
+    // --- restore from a backup: the file is unpacked right here in the browser and sent to the shop in small pieces ---
+    const rsMsg = (cls, html) => `<div class="${cls}">${html}</div>`;
+    const readTar = async (file, onEntry) => {   // reads a .tar.gz one piece at a time; onEntry(name, size, header, readData) is called for every file inside
+      const reader = file.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+      let chunks = [], have = 0;
+      const fill = async (n) => { while (have < n) { const { done, value } = await reader.read(); if (done) return false; chunks.push(value); have += value.length; } return true; };
+      const take = async (n) => { if (!(await fill(n))) throw new Error('short'); const out = new Uint8Array(n); let o = 0; while (o < n) { const c = chunks[0]; const k = Math.min(c.length, n - o); out.set(c.subarray(0, k), o); o += k; if (k === c.length) chunks.shift(); else chunks[0] = c.subarray(k); } have -= n; return out; };
+      const skip = async (n) => { while (n > 0) { if (!chunks.length && !(await fill(1))) throw new Error('short'); const c = chunks[0]; const k = Math.min(c.length, n); if (k === c.length) chunks.shift(); else chunks[0] = c.subarray(k); have -= k; n -= k; } };
+      const txt = (b, a, z) => new TextDecoder().decode(b.subarray(a, z)).replace(/\0.*$/s, '').trim();
+      for (;;) {
+        if (!(await fill(512))) break;
+        const h = await take(512);
+        if (h.every((x) => x === 0)) break;
+        const name = txt(h, 0, 100), size = parseInt(txt(h, 124, 136), 8), type = String.fromCharCode(h[156] || 48), mtime = parseInt(txt(h, 136, 148), 8);
+        if (!name || !Number.isFinite(size)) throw new Error('bad header');
+        const pad = (512 - (size % 512)) % 512;
+        let used = false;
+        if (type === '0') await onEntry(name, size, mtime, async () => { used = true; return take(size); });
+        if (!used) await skip(size);
+        await skip(pad);
+      }
+      reader.cancel().catch(() => {});
+    };
+    const scanBackup = async (file) => {
+      let db = null, photos = 0, bytes = 0;
+      try { await readTar(file, async (name, size, mtime) => { if (name === 'outpost.db') db = { size, mtime }; else if (/^images\/[\w.-]+$/.test(name)) { photos++; bytes += size; } }); } catch { return null; }
+      return db ? { made: db.mtime * 1000, photos, bytes } : null;
+    };
+    const rawPut = async (path, body) => {
+      const r = await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'x-admin-token': token }, body });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'The upload failed. Nothing was changed.');
+      return d;
+    };
+    let rsFile = null, rsInfo = null, rsBusy = false;
+    const rsPanel = () => $('#rspanel');
+    const rsPick = (msg) => {
+      rsPanel().innerHTML = `<p><b>Restore from a backup</b></p>
+        <div class="msg warn"><b>This replaces everything in your shop</b> (products, orders, photos, settings) with what is in the backup. Anything added since the backup was made is lost, so check Stripe for any payments since then. Download a fresh backup first if you are not sure.</div>
+        ${msg || ''}
+        <label class="field"><span class="label">Backup file</span><input class="input" type="file" id="rsfile" accept=".gz,.tgz,.tar.gz,application/gzip"></label>
+        <button class="btn btn-primary" disabled>Restore</button>`;
+      $('#rsfile').onchange = async () => {
+        const f = $('#rsfile').files[0]; if (!f) return;
+        rsPanel().querySelector('button').textContent = 'Reading the file…';
+        const info = await scanBackup(f);
+        if (!info) return rsPick(rsMsg('msg err', '<b>That file is not an Outpost backup.</b> Choose the .tar.gz file you downloaded from Back up your shop. Nothing was changed.'));
+        rsFile = f; rsInfo = info; rsConfirm();
+      };
+    };
+    const rsConfirm = (msg) => {
+      const when = rsInfo.made ? new Date(rsInfo.made).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'unknown date';
+      rsPanel().innerHTML = `<p><b>Restore from a backup</b></p>
+        <div class="msg warn"><b>This replaces everything in your shop</b> (products, orders, photos, settings) with what is in the backup. Anything added since the backup was made is lost, so check Stripe for any payments since then.</div>
+        <div class="rsfile"><b>${esc(rsFile.name)}</b><span class="hint">${mb(rsFile.size)} MB · made ${esc(when)} · ${rsInfo.photos} photo${rsInfo.photos === 1 ? '' : 's'}</span></div>
+        ${msg || ''}
+        <label class="field"><span class="label">Your password</span><input class="input" type="password" id="rspw" autocomplete="current-password"></label>
+        ${st.two_step ? '<label class="field"><span class="label">Code from your authenticator app</span><input class="input" id="rscode" inputmode="numeric" maxlength="7" autocomplete="one-time-code"></label>' : ''}
+        <label class="field"><span class="label">Type RESTORE to confirm</span><input class="input" id="rstype" autocomplete="off"></label>
+        <div class="row"><button class="btn btn-primary" id="rsgo" disabled>Restore</button><button class="btn" id="rsagain" type="button">Choose a different file</button></div>`;
+      const ready = () => { $('#rsgo').disabled = !($('#rspw').value && $('#rstype').value.trim() === 'RESTORE'); };
+      $('#rspw').oninput = ready; $('#rstype').oninput = ready;
+      $('#rsagain').onclick = () => rsPick();
+      $('#rsgo').onclick = rsRun;
+    };
+    const rsProgress = (text, pct) => { rsPanel().innerHTML = `<p><b>Restoring…</b></p><div class="rsbar"><i style="width:${Math.max(2, Math.min(100, pct))}%"></i></div><p class="hint">${esc(text)} Please keep this page open.</p>`; };
+    const rsRun = async () => {
+      if (rsBusy) return; rsBusy = true;
+      const pw = $('#rspw').value, code = $('#rscode') ? $('#rscode').value : '';
+      let id = '';
+      try {
+        rsProgress('Checking your password.', 3);
+        const start = await post('/api/admin/restore/start', { password: pw, code });
+        id = start.id;
+        const have = new Map(start.have.map((x) => [x.name, x.bytes]));
+        let sent = 0, step = 0; const total = rsInfo.photos;
+        rsProgress('Sending your database.', 8);
+        await readTar(rsFile, async (name, size, mtime, data) => {
+          if (name === 'outpost.db') {
+            const d = await rawPut(`/api/admin/restore/${id}/db`, await data());
+            rsProgress(`Found ${d.products} product${d.products === 1 ? '' : 's'} and ${d.orders} order${d.orders === 1 ? '' : 's'}. Sending photos.`, 12);
+          } else if (/^images\/[\w.-]+$/.test(name)) {
+            const n = name.slice(7);
+            if (have.get(n) !== size) await rawPut(`/api/admin/restore/${id}/image/${encodeURIComponent(n)}`, await data());
+            step++; if (step % 3 === 0 || step === total) rsProgress(`Photos ${step} of ${total}.`, 12 + (step / Math.max(1, total)) * 80);
+          }
+        });
+        rsProgress('Finishing. Your shop is about to restart.', 96);
+        const fin = await post(`/api/admin/restore/${id}/finish`, {});
+        rsDone(fin);
+      } catch (e) {
+        rsBusy = false;
+        if (id) { try { await api('/api/admin/restore/' + id, { method: 'DELETE' }); } catch { /* it clears itself */ } }
+        rsConfirm(rsMsg('msg err', esc(e.message) + ' Nothing was changed.'));
+      }
+    };
+    const rsDone = (fin) => {
+      rsPanel().innerHTML = rsMsg('msg', `<b>Restored.</b> ${fin.products} product${fin.products === 1 ? '' : 's'} and ${fin.orders} order${fin.orders === 1 ? '' : 's'} are back. ${fin.hosted ? 'Your shop is restarting now, so this page will ask you to sign in again in about a minute.' : 'Outpost has stopped to finish the restore. Start it again, then sign in.'} Two-step sign-in is off after a restore. Turn it back on in Security.`);
+      if (!fin.hosted) return;
+      const wait = async () => { for (let i = 0; i < 90; i++) { await new Promise((r) => setTimeout(r, 2000)); try { const r = await fetch('/api/settings'); if (r.ok && i > 1) return location.reload(); } catch { /* still restarting */ } } };
+      wait();
+    };
+    $('#rsopen').onclick = () => { const p = rsPanel(); if (!p.hidden) { p.hidden = true; return; } p.hidden = false; rsPick(); };
 
     // --- refund policy ---
     const rpText = () => {
