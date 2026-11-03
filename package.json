@@ -4,7 +4,8 @@
   "description": "Outpost: self-hosted point of sale, online shop and auctions for independent artists (payments via Stripe)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/safe.test.js test/server.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

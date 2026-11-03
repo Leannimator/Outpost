@@ -10,6 +10,7 @@ const Stripe = require('stripe');
 const db = require('./db');
 const AiShield = require('./ai-shield');
 const Auth = require('./auth');
+const Safe = require('./safe');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -692,7 +693,7 @@ setInterval(() => {
 }, 10 * 60 * 1000).unref();
 
 // ---------- Stripe webhook (raw body — must come BEFORE express.json) ----------
-app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhook', express.raw({ type: 'application/json', inflate: false }), (req, res) => {
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).end();
   let event;
   try {
@@ -721,7 +722,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
   res.json({ received: true });
 });
 
-app.use(express.json());
+app.use(express.json({ inflate: false }));   // compressed request bodies are refused: nothing here needs them
 // robots.txt: search engines are welcome, AI crawlers are asked to stay away.
 app.get('/robots.txt', (req, res) => {
   res.set('Cache-Control', 'public, max-age=3600');
@@ -778,11 +779,11 @@ function sniffImage(b) {
   if (b.toString('latin1', 0, 3) === 'GIF') return 'gif';
   if (b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'webp';
   const head = b.toString('utf8', 0, Math.min(b.length, 600)).replace(/^\uFEFF/, '').trimStart();
-  if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'svg';
+  if (Safe.looksLikeSvg(head)) return 'svg';
   return null;
 }
 
-app.post('/api/admin/upload', requireAdmin, express.raw({ type: 'image/*', limit: '8mb' }), (req, res) => {
+app.post('/api/admin/upload', requireAdmin, express.raw({ type: 'image/*', limit: '8mb', inflate: false }), (req, res) => {
   const ext = sniffImage(req.body);
   if (!ext) return res.status(400).json({ error: 'That file is not a PNG, JPG, GIF, WebP or SVG image' });
   const name = rid(8) + '.' + ext;
@@ -887,7 +888,7 @@ app.post('/api/receipt/:id/review', h(async (req, res) => {
   if (!st.can_review) throw new HttpError(400, st.review ? 'Reviews can only be edited for 14 days' : 'This order cannot be reviewed');
   const rating = Number(req.body.rating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new HttpError(400, 'Choose 1 to 5 stars');
-  const body = String(req.body.body || '').trim().replace(/\s+\n/g, '\n').slice(0, 1000);
+  const body = Safe.cleanReviewBody(req.body.body);
   const items = db.prepare('SELECT name FROM order_items WHERE order_id=?').all(o.id).map((i) => i.name).join(', ').slice(0, 200);
   rlAdd('rev:' + req.ip);
   const now = Date.now();
@@ -1928,21 +1929,25 @@ async function autoChargeDue() {
 app.post('/api/bidders', h(async (req, res) => {
   await guardPublicForm(req, 'signup');
   if (rlCount('reg:' + req.ip, 3600e3) >= 5 || rlCount('regday:' + req.ip, 24 * 3600e3) >= 12) { logSecurity('signup_rate', req); throw new HttpError(429, 'Too many sign-ups from this connection. Try again later.'); }
-  const name = String(req.body.name || '').trim();
-  const email = String(req.body.email || '').trim().toLowerCase();
-  if (!name || name.length > 60) throw new HttpError(400, 'Please enter your name');
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 120) throw new HttpError(400, 'Please enter a valid email');
-  if (DISPOSABLE.has(email.split('@')[1])) { logSecurity('disposable_email', req, email); throw new HttpError(400, 'Please use your real email address so the seller can reach you if you win.'); }
-  if (isBlocked('email', email)) { logSecurity('blocked_email', req, email); throw new HttpError(403, GENERIC_REJECT); }
-  if (db.prepare('SELECT COUNT(*) c FROM bidders WHERE lower(email)=?').get(email).c >= 5) { logSecurity('email_reuse', req, email); throw new HttpError(429, 'That email has been used to sign up too many times.'); }
-  let addrJson = null;
-  if (needsAddress()) {
-    // Shipping and tax for a winning bid depend on where the item goes, so ask up front.
-    if (!req.body.address) throw new HttpError(400, 'Please add your delivery address so the right shipping and tax can be worked out.');
-    const addr = cleanAddress({ ...req.body.address, name, email });
-    shippingFor(addr, 0);   // refuses addresses outside the regions you ship to
-    addrJson = JSON.stringify(addr);
-  }
+  // Rejected sign-ups are counted too (separately from successful ones), so junk can't be sent for free.
+  if (rlCount('regbad:' + req.ip, 3600e3) >= 30) { logSecurity('signup_rate', req, 'many rejected'); throw new HttpError(429, 'Too many sign-ups from this connection. Try again later.'); }
+  let name, email, addrJson = null;
+  try {
+    name = String(req.body.name || '').slice(0, 200).trim();
+    email = Safe.cleanEmail(req.body.email);   // capped to 200 characters before any pattern check
+    if (!name || name.length > 60) throw new HttpError(400, 'Please enter your name');
+    if (!Safe.validEmail(email)) throw new HttpError(400, 'Please enter a valid email');
+    if (DISPOSABLE.has(email.split('@')[1])) { logSecurity('disposable_email', req, email); throw new HttpError(400, 'Please use your real email address so the seller can reach you if you win.'); }
+    if (isBlocked('email', email)) { logSecurity('blocked_email', req, email); throw new HttpError(403, GENERIC_REJECT); }
+    if (db.prepare('SELECT COUNT(*) c FROM bidders WHERE lower(email)=?').get(email).c >= 5) { logSecurity('email_reuse', req, email); throw new HttpError(429, 'That email has been used to sign up too many times.'); }
+    if (needsAddress()) {
+      // Shipping and tax for a winning bid depend on where the item goes, so ask up front.
+      if (!req.body.address) throw new HttpError(400, 'Please add your delivery address so the right shipping and tax can be worked out.');
+      const addr = cleanAddress({ ...req.body.address, name, email });
+      shippingFor(addr, 0);   // refuses addresses outside the regions you ship to
+      addrJson = JSON.stringify(addr);
+    }
+  } catch (e) { rlAdd('regbad:' + req.ip); throw e; }
   rlAdd('reg:' + req.ip); rlAdd('regday:' + req.ip);
   const token = rid(24);
   db.prepare('INSERT INTO bidders (name, email, token, created_at, address_json) VALUES (?,?,?,?,?)').run(name, email, token, Date.now(), addrJson);
