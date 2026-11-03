@@ -27,25 +27,37 @@ const MAX_BID_CENTS = 100000000;           // $1,000,000 sanity cap
 const MAX_AUCTION_MS = 90 * 24 * 3600 * 1000;
 
 const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(BASE_URL);
-const WEAK_PASSWORD = !ADMIN_PASSWORD || ADMIN_PASSWORD.length < 8 || ['change-me', 'changeme', 'password', 'admin', '12345678'].includes(ADMIN_PASSWORD.toLowerCase());
-if (WEAK_PASSWORD && !IS_LOCAL) {
-  console.error('\nOutpost will not start on the internet with a missing or easy-to-guess ADMIN_PASSWORD.\nSet ADMIN_PASSWORD to something long that only you know (at least 8 characters), then start again.\n');
+// "On the internet" no longer depends on BASE_URL alone: a host like Render with BASE_URL left blank still counts.
+const ON_INTERNET = !IS_LOCAL || !!process.env.RENDER || process.env.NODE_ENV === 'production';
+const PW_PROBLEM = Safe.passwordProblem(ADMIN_PASSWORD, [(() => { try { return new URL(BASE_URL).hostname.split('.')[0]; } catch { return ''; } })()]);
+if (PW_PROBLEM && PW_PROBLEM.level === 'hard' && ON_INTERNET) {
+  console.error(`\nOutpost will not start on the internet with this ADMIN_PASSWORD (${PW_PROBLEM.why}).\nSet ADMIN_PASSWORD to something long that only you know (12 or more characters is best), then start again.\n`);
   process.exit(1);
 }
 if (!ADMIN_PASSWORD) console.warn('WARNING: ADMIN_PASSWORD is not set; admin endpoints are locked.');
-else if (WEAK_PASSWORD) console.warn('NOTE: your ADMIN_PASSWORD is easy to guess. That is fine on your own computer, but pick a strong one before putting Outpost online.');
+else if (PW_PROBLEM) console.warn(`NOTE: your ADMIN_PASSWORD is easy to guess (${PW_PROBLEM.why}). ${ON_INTERNET ? 'Please change it soon.' : 'That is fine on your own computer, but pick a strong one before putting Outpost online.'}`);
 if (!stripe) console.warn('WARNING: STRIPE_SECRET_KEY is not set; card payments are disabled (cash still works).');
 
 const app = express();
 // Behind a proxy or host (Render, Fly, nginx...), set TRUST_PROXY=1 so each visitor keeps their own IP for rate limits.
 if (!process.env.TRUST_PROXY && process.env.RENDER) process.env.TRUST_PROXY = '1'; // Render always sits behind a proxy; without this every visitor shares one IP
+// TRUST_PROXY=true would believe whatever address a visitor writes in their request, which switches off every per-visitor limit. It is refused.
+if (/^(true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim())) {
+  console.warn(`WARNING: TRUST_PROXY=${process.env.TRUST_PROXY} is not allowed (it lets anyone fake their address). Ignoring it; use a number, such as 1, for how many proxies sit in front of the app.`);
+  delete process.env.TRUST_PROXY;
+  if (process.env.RENDER) process.env.TRUST_PROXY = '1';
+}
 if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'SAMEORIGIN');
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  if (req.secure) res.set('Strict-Transport-Security', 'max-age=15552000'); // browsers will insist on HTTPS for this site
+  // Browsers will insist on HTTPS for this site for a year. Sent whenever the shop's address is https (a plain-http request just ignores it).
+  // HSTS_SUBDOMAINS=1 adds every subdomain too; it is off because it can't be undone quickly if a subdomain only speaks http.
+  if (req.secure || /^https:/i.test(BASE_URL)) res.set('Strict-Transport-Security', 'max-age=31536000' + (process.env.HSTS_SUBDOMAINS === '1' ? '; includeSubDomains' : ''));
+  // The owner's screens carry private data (orders, customers, backups): never let a browser or proxy keep a copy.
+  if (req.path.startsWith('/api/admin') || req.path.startsWith('/api/register')) { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); }
   if (!req.path.startsWith('/api/') && !req.path.startsWith('/images/')) {
     res.set('Content-Security-Policy', [
       "default-src 'self'", "base-uri 'self'", "object-src 'none'", "frame-ancestors 'self'",

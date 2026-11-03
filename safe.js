@@ -78,4 +78,25 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ha, hb);
 }
 
-module.exports = { safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };
+// ---- admin password strength (review item 16) ----
+// 'hard' problems stop the app starting when it is reachable from the internet; 'soft' ones only show a warning.
+const COMMON = new Set(['password', 'passw0rd', 'pass', 'admin', 'administrator', 'root', 'welcome', 'letmein', 'changeme', 'change-me', 'change_me',
+  'qwerty', 'qwertyuiop', 'abc', 'abcdef', 'abcdefgh', 'iloveyou', 'monkey', 'dragon', 'master', 'login', 'secret', 'test', 'testing', 'demo',
+  'outpost', 'shop', 'store', 'default', 'letmein1', 'trustno1', 'sunshine', 'princess', 'football', 'baseball', 'superman', 'batman',
+  'ashandanchor', 'ash-and-anchor', 'ashanchor']);
+function passwordProblem(pw, extraWords = []) {
+  const p = String(pw == null ? '' : pw);
+  if (!p) return { level: 'hard', why: 'missing' };
+  if (p.length < 8) return { level: 'hard', why: 'shorter than 8 characters' };
+  const lower = p.toLowerCase();
+  const core = lower.replace(/[^a-z]+$/g, '').replace(/^[^a-z]+/g, '');   // "Password1!" -> "password"
+  const words = [...COMMON, ...extraWords.map((w) => String(w).toLowerCase()).filter((w) => w.length >= 4)];
+  if (COMMON.has(lower) || COMMON.has(core) || words.includes(lower) || words.includes(core)) return { level: 'hard', why: 'a very common password' };
+  if (/^(.)\1+$/.test(p)) return { level: 'hard', why: 'one character repeated' };
+  if (/^(0123456789|1234567890|12345678|123456789|987654321|87654321)\d*$/.test(p) || /^\d+$/.test(p) && new Set(p).size <= 3) return { level: 'hard', why: 'a simple number pattern' };
+  if (p.length < 12) return { level: 'soft', why: 'shorter than 12 characters' };
+  if (new Set(p).size < 5) return { level: 'soft', why: 'uses very few different characters' };
+  return null;
+}
+
+module.exports = { passwordProblem, safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };
