@@ -351,7 +351,7 @@
       $('copay').disabled = true; $('copay').textContent = 'Opening secure payment…';
       try {
         const r = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body(), address: addr, started: loadedAt, website: $('website').value, captcha: captchaToken }) });
+          body: JSON.stringify({ ...body(), address: addr, expected_total_cents: coq ? coq.total_cents : undefined, started: loadedAt, website: $('website').value, captcha: captchaToken }) });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || 'Checkout failed');
         location.href = d.url;
@@ -367,7 +367,7 @@
     $('checkout').disabled = true;
     try {
       const r = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body(), started: loadedAt, website: $('website').value, captcha: captchaToken }) });
+        body: JSON.stringify({ ...body(), expected_total_cents: quote ? quote.total_cents : undefined, started: loadedAt, website: $('website').value, captcha: captchaToken }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Checkout failed');
       location.href = d.url;

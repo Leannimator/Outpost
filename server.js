@@ -109,7 +109,7 @@ const GENERIC_REJECT = "We couldn't process that. Please refresh the page and tr
 
 function logSecurity(kind, req, detail = '') {
   try {
-    db.prepare('INSERT INTO security_events (at, kind, ip, detail) VALUES (?,?,?,?)').run(Date.now(), kind, req.ip || '', String(detail).slice(0, 200));
+    db.prepare('INSERT INTO security_events (at, kind, ip, detail) VALUES (?,?,?,?)').run(Date.now(), kind, (req && req.ip) || '', String(detail).slice(0, 200));
     db.prepare('DELETE FROM security_events WHERE id <= (SELECT MAX(id) FROM security_events) - 1000').run();
   } catch { /* never let logging break a request */ }
 }
@@ -249,6 +249,10 @@ const reviewsOn = () => true; /* reviews are always on: verified buyers only, an
 // ---------- shipping, tax by address, links, policies ----------
 const US_STATES = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
 const CA_PROVINCES = new Set('AB BC MB NB NL NS NT NU ON PE QC SK YT'.split(' '));
+// For a buyer typing into a free text box: "Oregon" or "or" both become OR.
+const STATE_NAMES = Object.fromEntries('alabama:AL;alaska:AK;arizona:AZ;arkansas:AR;california:CA;colorado:CO;connecticut:CT;delaware:DE;district of columbia:DC;florida:FL;georgia:GA;hawaii:HI;idaho:ID;illinois:IL;indiana:IN;iowa:IA;kansas:KS;kentucky:KY;louisiana:LA;maine:ME;maryland:MD;massachusetts:MA;michigan:MI;minnesota:MN;mississippi:MS;missouri:MO;montana:MT;nebraska:NE;nevada:NV;new hampshire:NH;new jersey:NJ;new mexico:NM;new york:NY;north carolina:NC;north dakota:ND;ohio:OH;oklahoma:OK;oregon:OR;pennsylvania:PA;rhode island:RI;south carolina:SC;south dakota:SD;tennessee:TN;texas:TX;utah:UT;vermont:VT;virginia:VA;washington:WA;west virginia:WV;wisconsin:WI;wyoming:WY;alberta:AB;british columbia:BC;manitoba:MB;new brunswick:NB;newfoundland and labrador:NL;newfoundland:NL;nova scotia:NS;northwest territories:NT;nunavut:NU;ontario:ON;prince edward island:PE;quebec:QC;québec:QC;saskatchewan:SK;yukon:YT'.split(';').map((x) => x.split(':')));
+const normState = (v) => { const t = String(v || '').trim().replace(/\./g, '').toLowerCase(); return STATE_NAMES[t] || t.toUpperCase(); };
+const normCountry = (v) => { const t = String(v || 'US').trim().replace(/\./g, '').toLowerCase(); return ['us', 'usa', 'united states', 'united states of america', 'america'].includes(t) ? 'US' : ['ca', 'canada'].includes(t) ? 'CA' : null; };
 const codeList = (s) => String(s || '').toUpperCase().split(/[\s,]+/).filter(Boolean);
 // Online sales tax is always worked out by Stripe Tax, from the buyer's address. The seller's own rate is for the register only.
 const taxMode = () => 'stripe';
@@ -414,7 +418,8 @@ function cleanVariants(raw) {
     const stock = Number(v.stock === '' || v.stock == null ? 0 : v.stock);
     if (!Number.isInteger(stock) || stock < 0 || stock > 1000000) throw new HttpError(400, `Stock for "${name}" must be a whole number, 0 or more`);
     const id = Number.isInteger(Number(v.id)) && Number(v.id) > 0 ? Number(v.id) : null;
-    return { id, name, sku, price_cents: price, stock };
+    const sw = v.stock_was == null || v.stock_was === '' ? null : Number(v.stock_was);
+    return { id, name, sku, price_cents: price, stock, stock_was: Number.isInteger(sw) && sw >= 0 ? sw : null };
   });
 }
 
@@ -515,15 +520,29 @@ const NEW_PRODUCT = {
 };
 
 // ---------- cart / orders ----------
-function findDiscount(code, subtotal) {
+// Every way a code can be refused is tagged, so wrong-code guessing is counted whichever message the guesser gets (review item 34).
+const codeErr = (msg) => { const e = new HttpError(400, msg); e.codeProbe = true; return e; };
+// Checkouts that have been started but not paid yet hold their stock and discount-code use for as long as the Stripe page lives (35 minutes, plus a margin).
+const HOLD = "datetime('now','-40 minutes')";
+const holdByOther = (email) => (email ? " AND lower(COALESCE(o.customer_email,'')) <> ?" : '');
+function heldQty(productId, variantId, email) {
+  const q = `SELECT COALESCE(SUM(oi.quantity),0) n FROM order_items oi JOIN orders o ON o.id=oi.order_id
+    WHERE o.channel='online' AND o.status='pending' AND o.created_at > ${HOLD} AND oi.product_id=? AND ${variantId ? 'oi.variant_id=?' : 'oi.variant_id IS NULL'}${holdByOther(email)}`;
+  return db.prepare(q).get(...[productId, ...(variantId ? [variantId] : []), ...(email ? [email] : [])]).n;
+}
+function heldCode(code, email) {
+  return db.prepare(`SELECT COUNT(*) n FROM orders o WHERE o.channel='online' AND o.status='pending' AND o.created_at > ${HOLD} AND o.discount_code=?${holdByOther(email)}`).get(...[code, ...(email ? [email] : [])]).n;
+}
+function findDiscount(code, subtotal, opts = {}) {
   const c = String(code || '').trim().toUpperCase();
   if (!c) return null;
   const d = db.prepare('SELECT * FROM discounts WHERE code = ?').get(c);
-  if (!d || !d.active) throw new HttpError(400, "That discount code isn't valid");
-  if (d.starts_on && todayStr() < d.starts_on) throw new HttpError(400, `That discount code starts on ${d.starts_on}`);
-  if (d.expires_on && todayStr() > d.expires_on) throw new HttpError(400, 'That discount code has expired');
-  if (d.max_uses != null && d.uses >= d.max_uses) throw new HttpError(400, 'That discount code has been fully used');
-  if (subtotal < d.min_subtotal_cents) throw new HttpError(400, `That code needs a subtotal of at least ${'$' + (d.min_subtotal_cents / 100).toFixed(2)}`);
+  if (!d || !d.active) throw codeErr("That discount code isn't valid");
+  if (d.starts_on && todayStr() < d.starts_on) throw codeErr(`That discount code starts on ${d.starts_on}`);
+  if (d.expires_on && todayStr() > d.expires_on) throw codeErr('That discount code has expired');
+  if (d.max_uses != null && d.uses >= d.max_uses) throw codeErr('That discount code has been fully used');
+  if (d.max_uses != null && opts.hold && d.uses + heldCode(d.code, opts.holdEmail) >= d.max_uses) throw codeErr('That discount code is being used by another checkout right now. Please try again in a few minutes.');
+  if (subtotal < d.min_subtotal_cents) throw codeErr(`That code needs a subtotal of at least ${'$' + (d.min_subtotal_cents / 100).toFixed(2)}`);
   const amount = d.kind === 'percent' ? Math.round((subtotal * d.value) / 100) : Math.min(d.value, subtotal);
   return { code: d.code, amount };
 }
@@ -566,16 +585,18 @@ function priceCart(rawItems, code, opts = {}) {
       const v = vs.find((x) => x.id === it.variant);
       if (!v) throw new HttpError(400, `That option of "${p.name}" is no longer available`);
       if (v.stock < qty) throw new HttpError(400, `Not enough stock for "${p.name} (${v.name})" (have ${v.stock})`);
+      if (opts.hold && v.stock - heldQty(p.id, v.id, opts.holdEmail) < qty) throw new HttpError(400, `Someone else is checking out with the last of "${p.name} (${v.name})" right now. Please try again in a few minutes.`);
       const unit = v.price_cents == null ? p.price_cents : v.price_cents;
       lines.push({ product_id: p.id, variant_id: v.id, name: `${p.name} (${v.name})`, unit_price_cents: unit, quantity: qty, custom });
       subtotal += unit * qty;
       continue;
     }
     if (p.stock < qty) throw new HttpError(400, `Not enough stock for "${p.name}" (have ${p.stock})`);
+    if (opts.hold && p.stock - heldQty(p.id, null, opts.holdEmail) < qty) throw new HttpError(400, `Someone else is checking out with the last of "${p.name}" right now. Please try again in a few minutes.`);
     lines.push({ product_id: p.id, variant_id: null, name: p.name, unit_price_cents: p.price_cents, quantity: qty, custom });
     subtotal += p.price_cents * qty;
   }
-  const disc = findDiscount(code, subtotal);
+  const disc = findDiscount(code, subtotal, opts);
   const discount = disc ? disc.amount : 0;
   const net = subtotal - discount;
   let tax = opts.online ? 0 : calcTax(net), shipping = 0, shipping_label = '', tax_label = '', address = null;
@@ -621,6 +642,10 @@ function fulfillOrder(orderId, extra = {}) {
       return;
     }
     const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
+    for (const i of items) {   // paid for more than is left (for example a register sale took the last one meanwhile): tell the owner
+      const have = i.variant_id ? (db.prepare('SELECT stock FROM variants WHERE id=?').get(i.variant_id) || {}).stock : i.product_id ? (db.prepare('SELECT stock FROM products WHERE id=?').get(i.product_id) || {}).stock : null;
+      if (have != null && have < i.quantity) logSecurity('oversold', null, `order #${orderId}: ${i.name} x${i.quantity}, only ${have} left`);
+    }
     const dec = db.prepare('UPDATE products SET stock = MAX(stock - ?, 0) WHERE id = ?');
     const decV = db.prepare('UPDATE variants SET stock = MAX(stock - ?, 0) WHERE id = ?');
     for (const i of items) {
@@ -848,8 +873,9 @@ app.get('/api/products', (req, res) => {
 // Price a cart (with an optional discount code) without creating anything.
 function quoteWithCodeGuard(req) {
   if (req.body.code && rlCount('code:' + ipKey(req), 10 * 60e3) >= 10) { logSecurity('code_guessing', req); throw new HttpError(429, 'Too many code attempts. Try again in a few minutes.'); }
-  try { return priceCart(req.body.items, req.body.code, { limits: true, online: true, address: req.body.address }); }
-  catch (e) { if (req.body.code && e instanceof HttpError && /discount code/.test(e.message)) rlAdd('code:' + ipKey(req)); throw e; }
+  const em = req.body.address && typeof req.body.address.email === 'string' ? req.body.address.email.trim().toLowerCase().slice(0, 200) : '';
+  try { return priceCart(req.body.items, req.body.code, { limits: true, online: true, address: req.body.address, hold: true, holdEmail: em }); }
+  catch (e) { if (req.body.code && e instanceof HttpError && e.codeProbe) rlAdd('code:' + ipKey(req)); throw e; }
 }
 app.post('/api/quote', h(async (req, res) => {
   const p = quoteWithCodeGuard(req);
@@ -870,6 +896,10 @@ app.post('/api/checkout', h(async (req, res) => {
   }
   if (needsAddress() && !req.body.address) throw new HttpError(400, 'Please enter your delivery address first.');
   const priced = quoteWithCodeGuard(req);
+  // The price the shopper saw must be the price they pay: if anything changed since their quote, stop and let them look again.
+  if (req.body.expected_total_cents != null && Number(req.body.expected_total_cents) !== priced.total) {
+    throw Object.assign(new HttpError(409, 'Prices changed while you were shopping. Please check your order and try again.'), { extra: { total_cents: priced.total } });
+  }
   rlAdd('co1:' + ipKey(req)); rlAdd('co2:' + ipKey(req)); rlAdd('coall');
   const orderId = createOrder('online', 'card', 'pending', priced);
   const a = priced.address;
@@ -946,10 +976,14 @@ app.post('/api/receipt/:id/shipping', h(async (req, res) => {
   rlAdd('ship:' + ipKey(req));
   if (o.status !== 'paid') throw new HttpError(400, 'This order is not paid yet');
   if (['shipped', 'delivered'].includes(o.fulfillment)) throw new HttpError(400, 'This order has already shipped. Message the seller to change the address.');
-  const f = (k, n) => String(req.body[k] || '').trim().slice(0, n);
-  const a = { name: f('name', 80), line1: f('line1', 100), line2: f('line2', 100), city: f('city', 60), state: f('state', 40), postal_code: f('postal_code', 20), country: f('country', 40) || 'US' };
-  if (!a.name || !a.line1 || !a.city || !a.postal_code) throw new HttpError(400, 'Please fill in your name, street address, city and ZIP / postal code');
-  db.prepare('UPDATE orders SET shipping_json=? WHERE id=?').run(JSON.stringify({ name: a.name, address: { line1: a.line1, line2: a.line2, city: a.city, state: a.state, postal_code: a.postal_code, country: a.country } }), o.id);
+  // Only for an order that has no address yet. Once one is on the order (typed at checkout, or added here once) it can't be rewritten from the receipt link,
+  // because shipping and tax were already worked out for it. To change it, message the seller.
+  let had = null; try { had = JSON.parse(o.shipping_json || 'null'); } catch { /* treat as none */ }
+  if (had && had.address && had.address.line1) throw new HttpError(400, 'This order already has a delivery address. Message the seller if it needs to change.');
+  const country = normCountry(req.body.country);
+  if (!country) throw new HttpError(400, 'Outpost ships within the US and Canada. Message the seller if you are somewhere else.');
+  const a = cleanAddress({ ...req.body, country, state: normState(req.body.state), zip: req.body.zip || req.body.postal_code, email: req.body.email || o.customer_email || 'receipt@example.invalid' });
+  db.prepare('UPDATE orders SET shipping_json=?, tax_state=COALESCE(NULLIF(tax_state,\'\'), ?) WHERE id=?').run(JSON.stringify({ name: a.name, address: { line1: a.line1, line2: a.line2, city: a.city, state: a.state, postal_code: a.zip, country: a.country } }), a.state, o.id);
   res.json({ ok: true });
 }));
 
@@ -1362,8 +1396,24 @@ app.put('/api/admin/products/:id', requireAdmin, h(async (req, res) => {
   if (!p) throw new HttpError(404, 'Not found');
   const hasV = 'variants' in req.body;
   const vs = hasV ? cleanVariants(req.body.variants) : null;
+  // The edit form remembers the stock it was opened with. If the number was left alone, the stock as it is NOW is kept (so a sale made
+  // meanwhile is not undone by saving some other field); if it was changed but the stock has moved since, the save is refused (review item 61).
+  const stale = (name, now, was, mine) => {
+    if (was == null) return mine;
+    if (mine === was) return now;
+    if (now !== was) throw new HttpError(409, `The stock for "${name}" changed while you had this open (it is now ${now}). Reload the page and try again.`);
+    return mine;
+  };
+  if (vs && vs.length) {
+    const cur = new Map(db.prepare('SELECT id, stock FROM variants WHERE product_id=?').all(p.id).map((r) => [r.id, r.stock]));
+    for (const v of vs) if (v.id && cur.has(v.id)) v.stock = stale(v.name, cur.get(v.id), v.stock_was, v.stock);
+  }
   if (vs && vs.length) req.body.stock = vs.reduce((a, v) => a + v.stock, 0);
   else if (!hasV && activeVariants(p.id).length) req.body.stock = p.stock;
+  else if (!activeVariants(p.id).length && 'stock_was' in req.body) {
+    const sw = Number(req.body.stock_was), mine = Number(req.body.stock);
+    if (Number.isInteger(sw) && Number.isInteger(mine)) req.body.stock = stale(p.name, p.stock, sw, mine);
+  }
   const n = cleanProduct(req.body, p);
   checkSkus(p.id, n.sku, vs || []);
   const lineIds = 'line_ids' in req.body ? cleanLineIds(req.body.line_ids) : null;
@@ -1944,6 +1994,12 @@ app.post('/api/bidders/address', h(async (req, res) => {
   if (!bidder) throw new HttpError(401, 'Please join first');
   if (rlCount('addr:' + bidder.id, 3600e3) >= 10) throw new HttpError(429, 'Too many tries. Please wait a bit.');
   rlAdd('addr:' + bidder.id);
+  // Shipping for a win is worked out from this address, so it can't be swapped while the bidder is in a running lot or owes for a win.
+  if (bidder.address_json) {
+    const live = db.prepare("SELECT 1 FROM bids b JOIN auctions a ON a.id=b.auction_id WHERE b.bidder_id=? AND a.status='open' LIMIT 1").get(bidder.id);
+    const owes = db.prepare("SELECT 1 FROM orders o JOIN auctions a ON a.id=o.auction_id JOIN bids b ON b.id=a.winner_bid_id WHERE b.bidder_id=? AND o.channel='auction' AND o.status='pending' LIMIT 1").get(bidder.id);
+    if (live || owes) throw new HttpError(409, 'Your address is locked while you have a bid on a running lot or a win to pay for. Message the seller if it has to change.');
+  }
   const addr = cleanAddress({ ...(req.body.address || {}), name: bidder.name, email: bidder.email });
   shippingFor(addr, 0);
   db.prepare('UPDATE bidders SET address_json=? WHERE id=?').run(JSON.stringify(addr), bidder.id);
