@@ -476,6 +476,7 @@ tr:last-child td { border-bottom: 0; }
 .sociallist { display: flex; flex-wrap: wrap; gap: 10px; }
 .social { display: inline-flex; align-items: center; padding: 11px 18px; border-radius: 12px; background: var(--forest); color: var(--on-forest); text-decoration: none; font: inherit; font-weight: 600; transition: filter .15s; }
 .social:hover { filter: brightness(.95); }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px 10px; align-items: end; margin-bottom: 10px; } @media (max-width: 640px) { .lrow { grid-template-columns: minmax(0, 1fr) auto; } .lrow .lkf { grid-column: 1 / -1; order: 3; } }
 .sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; } @media (max-width: 640px) { .sgrid { grid-template-columns: 1fr; } }
 
 /* staff pages: one centered, padded content column */

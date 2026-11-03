@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/safe.test.js test/ratelimit.test.js test/housekeeping.test.js test/server.test.js test/limits.test.js test/signin.test.js test/startup.test.js test/money.test.js test/auction-charge.test.js test/orders-refunds.test.js test/logging-backup.test.js test/security-log.test.js test/data-privacy.test.js test/screens-and-orders.test.js test/proxytrust.test.js"
+    "test": "node --test test/safe.test.js test/ratelimit.test.js test/housekeeping.test.js test/server.test.js test/limits.test.js test/signin.test.js test/startup.test.js test/money.test.js test/auction-charge.test.js test/orders-refunds.test.js test/logging-backup.test.js test/security-log.test.js test/social-links.test.js test/data-privacy.test.js test/screens-and-orders.test.js test/proxytrust.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

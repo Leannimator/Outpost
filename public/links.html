@@ -43,7 +43,6 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const LABEL = { website: 'Website', instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook', youtube: 'YouTube', pinterest: 'Pinterest', bluesky: 'Bluesky', threads: 'Threads', email: 'Email' };
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const isExt = (u) => /^https?:\/\//i.test(u);
@@ -56,7 +55,7 @@
     const today = todayStr();
     const events = links.filter((l) => l.kind === 'event' && (!l.date || l.date >= today)).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
     const buttons = links.filter((l) => l.kind !== 'event');
-    const soc = Object.entries(s.social || {}).filter(([k]) => LABEL[k]);
+    const soc = (s.social_links || []).map((l) => [l.name, l.url]).concat((s.social || {}).email ? [['Email', (s.social || {}).email, true]] : []);
     const evHtml = (e) => {
       let when = '';
       if (e.date) { const [y, m, d] = e.date.split('-').map(Number); when = `<div class="when"><b>${d}</b><span>${MON[m - 1]}</span></div>`; }
@@ -72,7 +71,7 @@
         <div class="row2"><input class="input" id="jem" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required maxlength="200"><button class="btn btn-primary" id="jgo">Join</button></div>
         <input class="hp" id="jhp" tabindex="-1" autocomplete="off" aria-hidden="true">
         <label class="check"><input type="checkbox" id="jok" required> <span>Yes, email me news from ${esc(s.store_name)}. I can unsubscribe any time.</span></label><div id="jmsg" style="margin-top:8px"></div></form>` : ''}
-      ${soc.length ? `<div class="sociallist">${soc.map(([k, v]) => `<a class="social" href="${esc(k === 'email' ? 'mailto:' + v : v)}" ${k === 'email' ? '' : 'target="_blank" rel="noopener noreferrer me"'}>${LABEL[k]}</a>`).join('')}</div>` : ''}
+      ${soc.length ? `<div class="sociallist">${soc.map(([name, v, mail]) => `<a class="social" href="${esc(mail ? 'mailto:' + v : v)}" ${mail ? '' : 'target="_blank" rel="noopener noreferrer me"'}>${esc(name)}</a>`).join('')}</div>` : ''}
       <div class="lpfoot"><a href="store.html">Visit the shop</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></div>`;
     OutpostBrand.apply(s);
     let jstart = ''; fetch('/api/form-token').then((r) => r.json()).then((j) => { jstart = j.token; }).catch(() => {});

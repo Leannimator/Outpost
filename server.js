@@ -423,6 +423,33 @@ const bidCardOn = () => !!stripe && getSetting('bid_card_required', '1') === '1'
 const handmadeText = () => getSetting('handmade_statement', '');
 const SOCIALS = ['website', 'instagram', 'tiktok', 'facebook', 'youtube', 'pinterest', 'bluesky', 'threads', 'email'];
 const socialLinks = () => { try { const o = JSON.parse(getSetting('social_json', '{}')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
+// The owner's own list of links, each with a name and an address. Shops that used the old fixed boxes (Instagram, TikTok...) are carried over once, in the old order.
+const SOCIAL_NAMES = { website: 'Website', instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook', youtube: 'YouTube', pinterest: 'Pinterest', bluesky: 'Bluesky', threads: 'Threads' };
+function socialList() {
+  const raw = getSetting('social_links_json', null);
+  if (raw != null) { try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return []; } }
+  const old = socialLinks();
+  const list = Object.keys(SOCIAL_NAMES).filter((k) => old[k]).map((k) => ({ name: SOCIAL_NAMES[k], url: String(old[k]) }));
+  if (list.length) setSetting('social_links_json', JSON.stringify(list));   // an empty answer is not saved, so nothing is decided until there is something to keep
+  return list;
+}
+function cleanSocialList(inp) {
+  if (!Array.isArray(inp)) throw new HttpError(400, 'Links must be a list');
+  if (inp.length > 30) throw new HttpError(400, 'You can have up to 30 links');
+  const out = [];
+  for (const row of inp) {
+    const name = String((row && row.name) || '').trim().slice(0, 40);
+    let v = String((row && row.url) || '').trim().slice(0, 300);
+    if (!name && !v) continue;   // an empty row is just left out
+    if (!name) throw new HttpError(400, 'Give each link a name, like Website or Instagram');
+    if (!v) throw new HttpError(400, `Add the address for “${name}”, or remove that row`);
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
+    let u; try { u = new URL(v); } catch { throw new HttpError(400, `The link for “${name}” doesn’t look right. Paste the full address from your browser.`); }
+    if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.')) throw new HttpError(400, `The link for “${name}” must be a web address starting with https://`);
+    out.push({ name, url: u.toString() });
+  }
+  return out;
+}
 function cleanSocial(inp) {
   const out = {};
   if (!inp || typeof inp !== 'object') return out;
@@ -1097,7 +1124,7 @@ const settingsPayload = () => ({
   break_on: breakOn(), break_message: breakMessage(),
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
-  handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: socialLinks(), ship_days: shipDays(), reviews_on: reviewsOn(),
+  handmade_statement: handmadeText(), about_text: getSetting('about_text', ''), social: (({ email }) => (email ? { email } : {}))(socialLinks()), social_links: socialList(), ship_days: shipDays(), reviews_on: reviewsOn(),
   bid_card_required: bidCardOn(), bid_card_manual: getSetting('bid_card_required', '1') === '1', stripe_ready: !!stripe, block_ai: aiShieldOn(),
   links: linksAll().filter((l) => !l.hidden).map(({ hidden, ...l }) => l), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1',
   policy: policyObj(), shipping: shippingCfg(), tax_mode: taxMode(), tax_home: getSetting('tax_home', ''), needs_address: needsAddress(),
@@ -1406,7 +1433,7 @@ app.get('/api/admin/tax-status', requireAdmin, h(async (req, res) => {
 }));
 
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { timezone, links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required, block_ai } = req.body;
+  const { social_links, timezone, links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required, block_ai } = req.body;
   if (timezone !== undefined) {
     const z = String(timezone || '').trim();
     if (z && !validTz(z)) throw new HttpError(400, 'That timezone is not one I know. Use a name like America/Los_Angeles or America/New_York.');
@@ -1485,7 +1512,8 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
   }
   if (handmade_statement !== undefined) setSetting('handmade_statement', String(handmade_statement).trim().slice(0, 600));
   if (about_text !== undefined) setSetting('about_text', String(about_text).trim().slice(0, 2000));
-  if (social !== undefined) setSetting('social_json', JSON.stringify(cleanSocial(social)));
+  if (social !== undefined) { socialList(); setSetting('social_json', JSON.stringify(cleanSocial(social))); }   // socialList() first, so the old boxes are carried over before they are replaced
+  if (social_links !== undefined) setSetting('social_links_json', JSON.stringify(cleanSocialList(social_links)));
   if (ship_days !== undefined) {
     const n = Number(ship_days);
     if (!Number.isInteger(n) || n < 0 || n > 90) throw new HttpError(400, 'Shipping time must be 0 to 90 days (0 turns it off)');

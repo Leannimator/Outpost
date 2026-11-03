@@ -1445,8 +1445,9 @@
             <label class="field"><span class="label">Your “made by hand” promise</span><textarea class="input" id="hand" rows="3" maxlength="600" placeholder="Everything in this shop is designed and made by me, by hand, in my studio. I never use AI-generated images or print-on-demand.">${esc(cur.handmade_statement || '')}</textarea>
               <div class="hint">Shown at the bottom of your shop. Leave it blank to show nothing.</div></label>
             <div class="label" style="margin-top:6px">Your links (all optional)</div>
-            <div class="hint" style="margin:0 0 8px">Paste the full address from your browser, like https://instagram.com/yourname.</div>
-            <div class="sgrid">${[['website', 'Website'], ['instagram', 'Instagram'], ['tiktok', 'TikTok'], ['facebook', 'Facebook'], ['youtube', 'YouTube'], ['pinterest', 'Pinterest'], ['bluesky', 'Bluesky'], ['threads', 'Threads']].map(([k, l]) => `<label class="field" style="margin:0"><span class="label small">${l}</span><input class="input" data-soc="${k}" inputmode="url" autocomplete="off" placeholder="https://" value="${esc((cur.social || {})[k] || '')}"></label>`).join('')}</div>
+            <div class="hint" style="margin:0 0 8px">Add any link you like. Give it a name, then paste the full address from your browser.</div>
+            <div id="llist"></div>
+            <button class="btn btn-sm" id="ladd" type="button" style="margin-top:4px">+ Add link</button>
             <button class="btn btn-primary mt" id="asave">Save</button><div id="amsg"></div>`)}
           <h2 class="sgroup">Selling</h2>
           ${card('Sales tax: in person', `
@@ -1608,13 +1609,18 @@
       } catch (e) { $('#stmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
+    // Your links: one row per link, a name and an address. Remove or add as many as you like.
+    const lrow = (n, u) => `<div class="lrow"><label class="field" style="margin:0"><span class="label small">Name</span><input class="input lname" maxlength="40" autocomplete="off" placeholder="Website" value="${esc(n)}"></label><label class="field lkf" style="margin:0"><span class="label small">Link</span><input class="input lurl" inputmode="url" autocomplete="off" placeholder="https://" value="${esc(u)}"></label><button class="btn btn-sm lx" type="button" aria-label="Remove this link">Remove</button></div>`;
+    const paintLinks = (list) => { $('#llist').innerHTML = list.map((l) => lrow(l.name, l.url)).join(''); };
+    paintLinks(cur.social_links || []);
+    $('#llist').onclick = (e) => { const x = e.target.closest('.lx'); if (x) x.closest('.lrow').remove(); };
+    $('#ladd').onclick = () => { $('#llist').insertAdjacentHTML('beforeend', lrow('', '')); const rows = document.querySelectorAll('#llist .lname'); rows[rows.length - 1].focus(); };
     $('#asave').onclick = async () => {
-      const social = {}; document.querySelectorAll('[data-soc]').forEach((i) => { social[i.dataset.soc] = i.value.trim(); });
+      const social_links = [...document.querySelectorAll('#llist .lrow')].map((r) => ({ name: $('.lname', r).value, url: $('.lurl', r).value }));
       try {
-        const fresh = await fetch('/api/settings').then((x) => x.json()); soc = fresh.social || {};
-        const r = await put('/api/admin/settings', { about_text: $('#about').value, handmade_statement: $('#hand').value, social: { ...soc, ...social } });
-        settings = { ...settings, ...r }; if (r.social) soc = r.social; $('#amsg').innerHTML = '<div class="msg">Saved. Your About page is in the shop menu.</div>';
-        document.querySelectorAll('[data-soc]').forEach((i) => { i.value = (r.social || {})[i.dataset.soc] || ''; });
+        const r = await put('/api/admin/settings', { about_text: $('#about').value, handmade_statement: $('#hand').value, social_links });
+        settings = { ...settings, ...r }; $('#amsg').innerHTML = '<div class="msg">Saved. Your About page is in the shop menu.</div>';
+        paintLinks(r.social_links || []);
       } catch (e) { $('#amsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
 
