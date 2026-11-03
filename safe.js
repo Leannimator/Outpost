@@ -71,4 +71,11 @@ function ipGroup(ip) {
   return groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':') + '::/64';
 }
 
-module.exports = { cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };
+// Compares two texts without revealing, through timing, how long the right one is (both are hashed to the same length first).
+const crypto = require('node:crypto');
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest(), hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+module.exports = { safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };

@@ -19,7 +19,7 @@ async function startServer(extraEnv = {}) {
   let up = false;
   for (let i = 0; i < 100 && !up; i++) { try { up = (await fetch(base + '/api/settings')).ok; } catch { /* not up yet */ } if (!up) await sleep(100); }
   if (!up) { proc.kill('SIGKILL'); throw new Error('server did not start'); }
-  const stop = () => { proc.kill('SIGKILL'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } };
+  const stop = (keepDir) => { proc.kill('SIGKILL'); if (!keepDir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } } };
   const alive = () => proc.exitCode === null && proc.signalCode === null;
   async function j(method, url, body, headers = {}) {
     const t = Date.now();

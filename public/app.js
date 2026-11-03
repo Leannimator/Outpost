@@ -24,6 +24,11 @@
     set(k, v) { try { sessionStorage.setItem(k, v); } catch { mem[k] = v; } },
     del(k) { try { sessionStorage.removeItem(k); } catch { delete mem[k]; } },
   };
+  // Remembers this browser as the owner's, so strangers' failed guesses can't lock the owner out of it (kept longer than a tab).
+  const device = {
+    get() { try { return localStorage.getItem('outpost_device') || ''; } catch { return ''; } },
+    set(v) { try { localStorage.setItem('outpost_device', v); } catch { /* not remembered */ } },
+  };
 
   const ICONS = {
     sell: '<path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/>',
@@ -106,7 +111,7 @@
         <span class="wordmark" data-brand="name">Outpost</span>${inner}
       </div>
       <div class="login-shop"><div>Looking to shop?</div><a class="btn btn-block" href="/shop">Take me to the shop →</a></div></div></div>`;
-    const finish = (d) => { token = d.token; store.set('outpost_token', token); init(); };
+    const finish = (d) => { token = d.token; store.set('outpost_token', token); if (d.device_token) device.set(d.device_token); init(); };
     function passwordStep(m) {
       pending = null;
       document.body.innerHTML = shell(`
@@ -120,7 +125,7 @@
         const password = $('#pw').value;
         $('#go').disabled = true;
         try {
-          const d = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Something went wrong'); return j; });
+          const d = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-device-token': device.get() }, body: JSON.stringify({ password }) }).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Something went wrong'); return j; });
           if (d.need_code) { pending = password; return codeStep(); }
           finish(d);
         } catch (e) { $('#lerr').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#go').disabled = false; }
@@ -141,7 +146,7 @@
       const go = async () => {
         const v = $('#cd').value; $('#go').disabled = true;
         try {
-          const d = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pending, [recovery ? 'recovery' : 'code']: v }) }).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j.error || 'Something went wrong'); e.status = r.status; throw e; } return j; });
+          const d = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-device-token': device.get() }, body: JSON.stringify({ password: pending, [recovery ? 'recovery' : 'code']: v }) }).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j.error || 'Something went wrong'); e.status = r.status; throw e; } return j; });
           finish(d);
         } catch (e) { if (e.status === 429) return passwordStep(e.message); codeStep(recovery, e.message); }
       };

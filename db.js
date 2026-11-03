@@ -118,6 +118,14 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   ip TEXT NOT NULL DEFAULT ''
 );
 
+-- Devices the owner has signed in from before. A device that proves it (long secret kept in that browser) is not
+-- locked out by strangers' failed guesses. Only a hash is stored here.
+CREATE TABLE IF NOT EXISTS trusted_devices (
+  token_hash TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
   at INTEGER NOT NULL,
   ip TEXT NOT NULL DEFAULT ''
@@ -189,6 +197,7 @@ const addCol = (t, name, def) => {
   if (!cols(t).some((c) => c.name === name)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${def}`);
 };
 
+addCol('admin_sessions', 'pw_ver', "TEXT NOT NULL DEFAULT ''");   // which password the session was opened with
 addCol('products', 'description', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'category', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'tags', "TEXT NOT NULL DEFAULT ''");

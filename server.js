@@ -69,10 +69,7 @@ class HttpError extends Error {
 const rid = (n = 16) => crypto.randomBytes(n).toString('hex');
 const money = (c) => '$' + (c / 100).toFixed(2);
 
-function safeEqual(a, b) {
-  const ab = Buffer.from(String(a)), bb = Buffer.from(String(b));
-  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
-}
+const safeEqual = Safe.safeEqual;
 
 // wrap async handlers: HttpError -> its status, Stripe errors -> 400 with message, anything else -> 500
 const h = (fn) => async (req, res, next) => {
@@ -140,17 +137,26 @@ app.use('/api', (req, res, next) => {
 });
 
 // ---------- staff sign-in: password (+ optional authenticator code) -> expiring session ----------
-const SESSION_MS = 12 * 3600e3;
+const SESSION_MS = 12 * 3600e3, DEVICE_MS = 30 * 24 * 3600e3;
 const LOGIN_WINDOW = 15 * 60e3, LOGIN_PER_IP = 10, LOGIN_ALL = 60;
+// A session is only good for the password it was opened with: change ADMIN_PASSWORD and every old session stops working.
+const pwVersion = () => crypto.createHash('sha256').update('outpost-session:' + ADMIN_PASSWORD).digest('hex').slice(0, 32);
+const deviceFor = (token) => token ? db.prepare('SELECT 1 FROM trusted_devices WHERE token_hash=? AND expires_at > ?').get(Auth.hashToken(token), Date.now()) : null;
+// Strangers' failed guesses lock the sign-in page, but a browser the owner has signed in from before is let through
+// (the password is still checked). The lock is per visitor, and across everyone as a ceiling on total guessing.
 function loginLocked(req) {
+  if (deviceFor(req.get('x-device-token'))) return false;
   const since = Date.now() - LOGIN_WINDOW;
-  const mine = db.prepare('SELECT COUNT(*) c FROM login_attempts WHERE at > ? AND ip = ?').get(since, req.ip || '').c;
+  const mine = db.prepare('SELECT COUNT(*) c FROM login_attempts WHERE at > ? AND ip = ?').get(since, ipKey(req)).c;
   const all = db.prepare('SELECT COUNT(*) c FROM login_attempts WHERE at > ?').get(since).c;
   return mine >= LOGIN_PER_IP || all >= LOGIN_ALL;
 }
-function loginFailed(req, why) {
-  db.prepare('INSERT INTO login_attempts (at, ip) VALUES (?,?)').run(Date.now(), req.ip || '');
+const countLoginAttempt = (req) => {
+  db.prepare('INSERT INTO login_attempts (at, ip) VALUES (?,?)').run(Date.now(), ipKey(req));
   db.prepare('DELETE FROM login_attempts WHERE at < ?').run(Date.now() - 24 * 3600e3);
+};
+function loginFailed(req, why) {
+  countLoginAttempt(req);
   logSecurity('admin_login_failed', req, why);
   if (loginLocked(req)) logSecurity('admin_lockout', req);
 }
@@ -159,18 +165,28 @@ function startSession(req) {
   const now = Date.now();
   db.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').run(now);
   db.prepare('DELETE FROM admin_sessions WHERE token_hash IN (SELECT token_hash FROM admin_sessions ORDER BY created_at DESC LIMIT -1 OFFSET 19)').run();
-  db.prepare('INSERT INTO admin_sessions (token_hash, created_at, expires_at, ip) VALUES (?,?,?,?)').run(Auth.hashToken(token), now, now + SESSION_MS, req.ip || '');
+  db.prepare('INSERT INTO admin_sessions (token_hash, created_at, expires_at, ip, pw_ver) VALUES (?,?,?,?,?)').run(Auth.hashToken(token), now, now + SESSION_MS, req.ip || '', pwVersion());
   return { token, expires_at: now + SESSION_MS };
 }
-const sessionFor = (token) => token ? db.prepare('SELECT * FROM admin_sessions WHERE token_hash=? AND expires_at > ?').get(Auth.hashToken(token), Date.now()) : null;
+// Remember this browser as the owner's (or keep the one it already has) and hand back its secret once.
+function trustDevice(req) {
+  const have = req.get('x-device-token');
+  const now = Date.now();
+  db.prepare('DELETE FROM trusted_devices WHERE expires_at < ?').run(now);
+  if (deviceFor(have)) { db.prepare('UPDATE trusted_devices SET expires_at=? WHERE token_hash=?').run(now + DEVICE_MS, Auth.hashToken(have)); return have; }
+  const t = crypto.randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO trusted_devices (token_hash, created_at, expires_at) VALUES (?,?,?)').run(Auth.hashToken(t), now, now + DEVICE_MS);
+  db.prepare('DELETE FROM trusted_devices WHERE token_hash IN (SELECT token_hash FROM trusted_devices ORDER BY created_at DESC LIMIT -1 OFFSET 19)').run();
+  return t;
+}
+const sessionFor = (token) => token ? db.prepare('SELECT * FROM admin_sessions WHERE token_hash=? AND expires_at > ? AND pw_ver=?').get(Auth.hashToken(token), Date.now(), pwVersion()) : null;
 
 function requireAdmin(req, res, next) {
   const token = req.get('x-admin-token') || '';
-  const key = 'adminfail:' + req.ip;
-  if (rlCount(key, 10 * 60 * 1000) >= 60) {
-    return res.status(429).json({ error: 'Too many failed requests. Try again in a few minutes.' });
-  }
+  // A valid session always gets through; only wrong tokens are counted and limited, so junk requests can't block the owner.
   if (ADMIN_PASSWORD && sessionFor(token)) return next();
+  const key = 'adminfail:' + ipKey(req);
+  if (rlCount(key, 10 * 60 * 1000) >= 60) return res.status(429).json({ error: 'Too many failed requests. Try again in a few minutes.' });
   if (token) rlAdd(key);
   res.status(401).json({ error: 'Unauthorized' });
 }
@@ -1003,7 +1019,7 @@ app.post('/api/admin/login', h(async (req, res) => {
   const secret = getSetting('totp_secret', '');
   if (secret) {
     const code = String(b.code || '').trim(), rec = String(b.recovery || '').trim();
-    if (!code && !rec) return res.json({ need_code: true });
+    if (!code && !rec) { countLoginAttempt(req); return res.json({ need_code: true }); }   // a right password with no code still counts, so it can't be used to test passwords for free
     if (rec) {
       const list = JSON.parse(getSetting('totp_recovery', '') || '[]');
       const hash = Auth.hashRecovery(rec);
@@ -1017,35 +1033,53 @@ app.post('/api/admin/login', h(async (req, res) => {
       setSetting('totp_last_step', String(step));
     }
   }
-  db.prepare('DELETE FROM login_attempts WHERE ip = ?').run(req.ip || '');
+  // (failed attempts are no longer wiped by a success: otherwise the owner signing in would reset a stranger's count on a shared connection)
   logSecurity('admin_login', req);
-  res.json(startSession(req));
+  res.json({ ...startSession(req), device_token: trustDevice(req) });
 }));
 app.post('/api/admin/logout', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM admin_sessions WHERE token_hash=?').run(Auth.hashToken(req.get('x-admin-token')));
   res.json({ ok: true });
 });
-app.post('/api/admin/logout-all', requireAdmin, (req, res) => {
+// Sensitive actions (signing out everywhere, changing two-step sign-in) need the password again, and the current
+// authenticator code if two-step is on, so a stolen session alone can't lock the owner out or take over.
+const tfaGuard = (req) => { if (rlCount('tfa:' + ipKey(req), 10 * 60e3) >= 10) throw new HttpError(429, 'Too many tries. Wait a few minutes.'); };
+function confirmOwner(req) {
+  tfaGuard(req);
+  const b = req.body || {};
+  const fail = (msg, why) => { rlAdd('tfa:' + ipKey(req)); logSecurity('admin_confirm_failed', req, why); throw new HttpError(400, msg); };
+  if (!ADMIN_PASSWORD || !safeEqual(String(b.password || ''), ADMIN_PASSWORD)) fail('Enter your password to do this.', 'wrong password');
+  const secret = getSetting('totp_secret', '');
+  if (secret) {
+    const step = Auth.checkTotp(secret, b.code);
+    if (step === null || step <= Number(getSetting('totp_last_step', '0'))) fail('Enter a new code from your authenticator app. If you just used one, wait for the next code.', 'wrong code');
+    setSetting('totp_last_step', String(step));
+  }
+}
+app.post('/api/admin/logout-all', requireAdmin, h(async (req, res) => {
+  confirmOwner(req);
   db.prepare('DELETE FROM admin_sessions').run();
+  db.prepare('DELETE FROM trusted_devices').run();
   logSecurity('admin_logout_all', req);
   res.json({ ok: true });
-});
+}));
 
 // Two-step sign-in (authenticator app)
-const tfaGuard = (req) => { if (rlCount('tfa:' + req.ip, 10 * 60e3) >= 10) throw new HttpError(429, 'Too many tries. Wait a few minutes.'); };
 app.post('/api/admin/2fa/start', requireAdmin, h(async (req, res) => {
   if (getSetting('totp_secret', '')) throw new HttpError(400, 'Two-step sign-in is already on.');
+  confirmOwner(req);
   const secret = Auth.newSecret();
   setSetting('totp_pending', secret);
   const url = Auth.otpauthUrl(secret, getSetting('store_name', 'Outpost') || 'Outpost', 'Outpost');
   res.json({ secret, qr: await QRCode.toDataURL(url, { width: 220, margin: 1 }) });
 }));
 app.post('/api/admin/2fa/enable', requireAdmin, h(async (req, res) => {
-  tfaGuard(req);
+  if (getSetting('totp_secret', '')) throw new HttpError(400, 'Two-step sign-in is already on.');
+  confirmOwner(req);
   const secret = getSetting('totp_pending', '');
   if (!secret) throw new HttpError(400, 'Start setup again.');
   const step = Auth.checkTotp(secret, (req.body || {}).code);
-  if (step === null) { rlAdd('tfa:' + req.ip); throw new HttpError(400, 'That code didn’t match. Check the 6 digits and try again.'); }
+  if (step === null) { rlAdd('tfa:' + ipKey(req)); throw new HttpError(400, 'That code didn’t match. Check the 6 digits and try again.'); }
   const codes = Auth.newRecoveryCodes(8);
   setSetting('totp_secret', secret); setSetting('totp_pending', ''); setSetting('totp_last_step', String(step));
   setSetting('totp_recovery', JSON.stringify(codes.map(Auth.hashRecovery)));
@@ -1053,13 +1087,8 @@ app.post('/api/admin/2fa/enable', requireAdmin, h(async (req, res) => {
   res.json({ recovery_codes: codes });
 }));
 app.post('/api/admin/2fa/disable', requireAdmin, h(async (req, res) => {
-  tfaGuard(req);
-  const b = req.body || {};
-  const secret = getSetting('totp_secret', '');
-  if (!secret) return res.json({ ok: true });
-  const okPw = safeEqual(String(b.password || ''), ADMIN_PASSWORD);
-  const step = Auth.checkTotp(secret, b.code);
-  if (!okPw || step === null) { rlAdd('tfa:' + req.ip); throw new HttpError(400, 'Enter your password and a current code to turn this off.'); }
+  if (!getSetting('totp_secret', '')) return res.json({ ok: true });
+  confirmOwner(req);   // password + a code that hasn't been used yet
   for (const k of ['totp_secret', 'totp_pending', 'totp_recovery', 'totp_last_step']) setSetting(k, '');
   logSecurity('admin_2fa_off', req);
   res.json({ ok: true });
