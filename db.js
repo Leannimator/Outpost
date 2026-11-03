@@ -242,7 +242,22 @@ addCol('bidders', 'stripe_payment_method', 'TEXT');
 addCol('bidders', 'card_brand', 'TEXT');
 addCol('bidders', 'card_last4', 'TEXT');
 addCol('bidders', 'card_at', 'INTEGER');
-db.exec("UPDATE orders SET charge_status='' WHERE charge_status='charging'");
+// Details of an automatic charge are written down BEFORE Stripe is asked, so a restart in the middle can be finished safely:
+// the same attempt is looked up at Stripe (and re-sent with the same key and amount) instead of being started over.
+addCol('orders', 'charge_attempt', "TEXT NOT NULL DEFAULT ''");
+addCol('orders', 'charge_amount', 'INTEGER');
+addCol('orders', 'charge_calc', 'TEXT');
+addCol('orders', 'charge_started', 'INTEGER');
+addCol('orders', 'duplicate_payments', "TEXT NOT NULL DEFAULT ''");   // payment ids of any extra payments on an order that was already paid
+// A charge that was in progress when the app stopped: if nothing had reached Stripe yet it just starts again, otherwise it is "recover" (checked at Stripe first).
+db.exec("UPDATE orders SET charge_status = CASE WHEN charge_attempt = '' THEN '' ELSE 'recover' END WHERE charge_status = 'charging'");
+// Every Stripe payment page ever made for an order, so all of them can be closed when the order is canceled or paid another way.
+db.exec(`CREATE TABLE IF NOT EXISTS order_sessions (
+  order_id INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (order_id, session_id)
+)`);
 
 // order_items.product_id used to be NOT NULL; auction lots have no product row.
 const pid = cols('order_items').find((c) => c.name === 'product_id');

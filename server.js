@@ -636,7 +636,14 @@ function fulfillOrder(orderId, extra = {}) {
   db.transaction(() => {
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
     if (!order) return;
-    if (order.status === 'paid') return;
+    if (order.status === 'paid') {
+      // The same payment arriving again (a webhook retry) is normal. A DIFFERENT payment means the buyer paid twice: write it down for the owner.
+      if (extra.payment_intent && order.stripe_payment_intent && extra.payment_intent !== order.stripe_payment_intent && !String(order.duplicate_payments || '').includes(extra.payment_intent)) {
+        db.prepare("UPDATE orders SET duplicate_payments = TRIM(duplicate_payments || ' ' || ?) WHERE id=?").run(extra.payment_intent, orderId);
+        logSecurity('double_payment', null, `order #${orderId} was paid twice (${order.stripe_payment_intent} and ${extra.payment_intent}). Refund one in Stripe.`);
+      }
+      return;
+    }
     if (order.status !== 'pending') {
       console.warn(`Payment arrived for order #${orderId} which is "${order.status}" — check Stripe and refund if needed.`);
       return;
@@ -723,7 +730,29 @@ async function createStripeSession(orderId, priced, { collectShipping = false, c
     throw err;
   }
   db.prepare('UPDATE orders SET stripe_session_id = ? WHERE id = ?').run(session.id, orderId);
+  db.prepare('INSERT OR IGNORE INTO order_sessions (order_id, session_id, created_at) VALUES (?,?,?)').run(orderId, session.id, Date.now());
   return session;
+}
+
+// Closes every Stripe payment page ever made for an order (not just the latest), so none can still be paid.
+// Returns { paid: true } if one of them turns out to have been paid already. A page that refuses to close is logged for the owner.
+async function closeOrderPages(orderId) {
+  const out = { paid: false, failed: 0 };
+  if (!stripe) return out;
+  const ids = new Set(db.prepare('SELECT session_id FROM order_sessions WHERE order_id=?').all(orderId).map((r) => r.session_id));
+  const last = db.prepare('SELECT stripe_session_id FROM orders WHERE id=?').get(orderId);
+  if (last && last.stripe_session_id) ids.add(last.stripe_session_id);
+  for (const id of ids) {
+    try {
+      const cs = await stripe.checkout.sessions.retrieve(id);
+      if (cs.status === 'complete') { if (cs.payment_status === 'paid') out.paid = true; continue; }
+      if (cs.status === 'open') await stripe.checkout.sessions.expire(id);
+    } catch (e) {
+      out.failed++;
+      logSecurity('page_not_closed', null, `order #${orderId}: payment page ${id} could not be closed (${String((e && e.message) || e).slice(0, 80)}). Check it in Stripe.`);
+    }
+  }
+  return out;
 }
 
 // Cancel a pending order and (best effort) expire its Stripe page so it can't be paid later.
@@ -731,7 +760,7 @@ function cancelPendingOrder(orderId) {
   const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
   if (!o || o.status !== 'pending') return false;
   db.prepare("UPDATE orders SET status='canceled' WHERE id=?").run(orderId);
-  if (stripe && o.stripe_session_id) stripe.checkout.sessions.expire(o.stripe_session_id).catch(() => {});
+  if (stripe) closeOrderPages(orderId).catch((e) => console.error('closing payment pages:', e && e.message));
   return true;
 }
 
@@ -774,7 +803,8 @@ app.post('/webhook', express.raw({ type: 'application/json', inflate: false }), 
     fulfillOrder(orderId, { email: s.customer_details?.email, shipping: addr, payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null });
     if (s.automatic_tax && s.automatic_tax.enabled && s.total_details && Number.isInteger(s.amount_total)) {
       // Stripe Tax worked out the tax: record the real amounts on the order.
-      db.prepare("UPDATE orders SET tax_cents=?, total_cents=? WHERE id=? AND channel='online'").run(s.total_details.amount_tax || 0, s.amount_total, orderId);
+      // Online and auction orders (a lot paid through its payment link has no tax or shipping from Stripe worked in yet). Never rewrites a canceled order.
+      db.prepare("UPDATE orders SET tax_cents=?, total_cents=? WHERE id=? AND channel IN ('online','auction') AND status='paid'").run(s.total_details.amount_tax || 0, s.amount_total, orderId);
     }
   } else if (event.type === 'checkout.session.expired' && orderId) {
     // Auction orders stay pending: the winner can come back to the same payment link and start a fresh page.
@@ -1926,7 +1956,7 @@ function shapeAuction(a, { admin = false, bidder = null } = {}) {
     const watching = !!db.prepare('SELECT 1 FROM watches WHERE bidder_id=? AND auction_id=?').get(bidder.id, a.id);
     out.you = { name: bidder.name, is_high: isHigh, has_bid: mine > 0, my_bid_cents: top || null, watching, has_card: !!bidder.stripe_payment_method, card_last4: bidder.card_last4 || null, card_brand: bidder.card_brand || null };
     if (isHigh && order && (phase === 'sold' || phase === 'paid')) {
-      out.you.charge = order.charge_status || '';
+      out.you.charge = order.charge_status === 'recover' ? 'charging' : (order.charge_status || '');
       if (phase === 'paid') out.you.receipt_url = `${BASE_URL}/thanks.html?order=${order.id}&k=${order.public_token}`;
     }
     if (phase === 'sold' && isHigh) out.pay_url = `${BASE_URL}/pay/${a.pay_token}`;
@@ -2022,46 +2052,90 @@ function chargeError(e) {
   if (code === 'card_declined' || code === 'insufficient_funds' || code === 'expired_card') return 'The card was declined. (' + code.replace(/_/g, ' ') + ')';
   return String((e && e.message) || 'The charge did not go through').slice(0, 200);
 }
-const markChargeFailed = (orderId, msg) => db.prepare("UPDATE orders SET charge_status='failed', charge_error=? WHERE id=?").run(msg, orderId);
+// A charge counts as "in progress" while it is running, while it is being finished after a restart, and when the card WAS charged but the order has not been marked paid yet.
+const chargeBusy = (o) => o.charge_status === 'charging' || o.charge_status === 'recover' || (o.charge_status === 'paid' && o.status === 'pending');
+// A definite failure (declined card and so on) closes the attempt: any later try is a fresh one with its own key.
+const markChargeFailed = (orderId, msg) => db.prepare("UPDATE orders SET charge_status='failed', charge_error=?, charge_attempt='' WHERE id=?").run(msg, orderId);
+
+// The card was charged. Write that down FIRST (in one small step), then mark the order paid. If marking it paid fails, the charge
+// stays recorded as taken, nothing is retried, and the next sweep finishes the job (review item 57).
+function recordCharged(r, piId) {
+  db.prepare("UPDATE orders SET stripe_payment_intent=?, charge_status='paid', charge_error=NULL, charge_attempt='' WHERE id=?").run(piId, r.id);
+  try { fulfillOrder(r.id, { email: r.email, payment_intent: piId }); }
+  catch (e) { console.error(`order #${r.id} was charged but could not be marked paid yet: ${e && e.message}`); logSecurity('charged_not_recorded', null, `order #${r.id} was charged (${piId}) but not yet marked paid. It will be retried.`); }
+}
+const AFTER_CHARGE_STATES = new Set(['succeeded', 'processing']);
+// Look for a payment already made for this order (used after a restart, when we can't be sure whether the first try went through).
+async function findIntentForOrder(customer, orderId, sinceMs) {
+  const list = await stripe.paymentIntents.list({ customer, limit: 20, created: { gte: Math.max(0, Math.floor(sinceMs / 1000) - 120) } });
+  return (list.data || []).find((p) => p.metadata && p.metadata.order_id === String(orderId) && AFTER_CHARGE_STATES.has(p.status)) || null;
+}
 
 let chargingNow = false;
+const chargeWait = new Map();   // order id -> don't look at it again before this time (so a problem is retried gently, not every 5 seconds)
 async function autoChargeDue() {
   if (!bidCardOn() || chargingNow) return;
   chargingNow = true;
   try {
+    // Finish orders whose card was charged but which are not marked paid yet.
+    for (const o of db.prepare("SELECT id, stripe_payment_intent pi, customer_email email FROM orders WHERE channel='auction' AND status='pending' AND charge_status='paid'").all()) {
+      try { fulfillOrder(o.id, { email: o.email, payment_intent: o.pi }); } catch (e) { console.error(`order #${o.id}: still could not be marked paid: ${e && e.message}`); }
+    }
     const needAddr = needsAddress() ? 1 : 0;
-    const rows = db.prepare(`SELECT o.id, o.total_cents, o.subtotal_cents, o.shipping_cents, o.shipping_json, a.id AS aid, a.title, bd.email, bd.stripe_customer_id AS cust, bd.stripe_payment_method AS pm
+    const rows = db.prepare(`SELECT o.id, o.total_cents, o.subtotal_cents, o.shipping_cents, o.shipping_json, o.charge_status, o.charge_attempt, o.charge_amount, o.charge_calc, o.charge_started,
+        a.id AS aid, a.title, bd.email, bd.stripe_customer_id AS cust, bd.stripe_payment_method AS pm
       FROM orders o JOIN auctions a ON a.order_id = o.id JOIN bids b ON b.id = a.winner_bid_id JOIN bidders bd ON bd.id = b.bidder_id
-      WHERE o.channel='auction' AND o.status='pending' AND o.charge_status='' AND a.status='closed'
+      WHERE o.channel='auction' AND o.status='pending' AND o.charge_status IN ('','recover') AND a.status='closed'
         AND (? = 0 OR o.shipping_json IS NOT NULL)
         AND bd.stripe_payment_method IS NOT NULL AND bd.stripe_customer_id IS NOT NULL`).all(needAddr);
     for (const r of rows) {
-      if (!db.prepare("UPDATE orders SET charge_status='charging' WHERE id=? AND charge_status='' AND status='pending'").run(r.id).changes) continue;
+      if ((chargeWait.get(r.id) || 0) > Date.now()) continue;
+      if (!db.prepare("UPDATE orders SET charge_status='charging' WHERE id=? AND charge_status IN ('','recover') AND status='pending'").run(r.id).changes) continue;
       try {
-        let amount = r.total_cents, hooks;
-        if (taxMode() === 'stripe' && r.shipping_json) {
-          // Stripe Tax: ask Stripe what tax this address owes, then charge exactly that.
-          const ad = (JSON.parse(r.shipping_json) || {}).address || {};
-          const calc = await stripe.tax.calculations.create({
-            currency: CURRENCY,
-            line_items: [{ amount: r.subtotal_cents, reference: `lot-${r.aid}`, tax_behavior: 'exclusive' }],
-            ...(r.shipping_cents > 0 ? { shipping_cost: { amount: r.shipping_cents, tax_behavior: 'exclusive' } } : {}),
-            customer_details: { address: { line1: ad.line1, line2: ad.line2 || undefined, city: ad.city, state: ad.state, postal_code: ad.postal_code, country: ad.country }, address_source: 'shipping' },
-          });
-          amount = calc.amount_total;
-          hooks = { inputs: { tax: { calculation: calc.id } } };
-          db.prepare('UPDATE orders SET tax_cents=?, total_cents=? WHERE id=?').run(calc.tax_amount_exclusive, amount, r.id);
+        // A payment page for this order might be open (the buyer used the payment link): close them, and if one was paid, do not charge again.
+        const pages = await closeOrderPages(r.id);
+        if (pages.paid || pages.failed) { chargeWait.set(r.id, Date.now() + 60e3); db.prepare("UPDATE orders SET charge_status=? WHERE id=?").run(r.charge_attempt ? 'recover' : '', r.id); continue; }
+        let amount, hooks, attempt = r.charge_attempt;
+        if (r.charge_status === 'recover' && attempt) {
+          // The app stopped in the middle of this charge. First see whether Stripe already took the money.
+          const done = await findIntentForOrder(r.cust, r.id, r.charge_started || Date.now() - 24 * 3600e3);
+          if (done) { recordCharged(r, done.id); continue; }
+          amount = r.charge_amount;
+          if (r.charge_calc) hooks = { inputs: { tax: { calculation: r.charge_calc } } };
+        } else {
+          amount = r.total_cents;
+          let calcId = null;
+          if (taxMode() === 'stripe' && r.shipping_json) {
+            // Stripe Tax: ask Stripe what tax this address owes, then charge exactly that.
+            const ad = (JSON.parse(r.shipping_json) || {}).address || {};
+            const calc = await stripe.tax.calculations.create({
+              currency: CURRENCY,
+              line_items: [{ amount: r.subtotal_cents, reference: `lot-${r.aid}`, tax_behavior: 'exclusive' }],
+              ...(r.shipping_cents > 0 ? { shipping_cost: { amount: r.shipping_cents, tax_behavior: 'exclusive' } } : {}),
+              customer_details: { address: { line1: ad.line1, line2: ad.line2 || undefined, city: ad.city, state: ad.state, postal_code: ad.postal_code, country: ad.country }, address_source: 'shipping' },
+            });
+            amount = calc.amount_total; calcId = calc.id;
+            hooks = { inputs: { tax: { calculation: calc.id } } };
+            db.prepare('UPDATE orders SET tax_cents=?, total_cents=? WHERE id=?').run(calc.tax_amount_exclusive, amount, r.id);
+          }
+          attempt = rid(8);
+          // Written down BEFORE Stripe is asked, so a restart can pick this exact attempt up again.
+          db.prepare('UPDATE orders SET charge_attempt=?, charge_amount=?, charge_calc=?, charge_started=? WHERE id=?').run(attempt, amount, calcId, Date.now(), r.id);
         }
         const pi = await stripe.paymentIntents.create({
           amount, currency: CURRENCY, customer: r.cust, payment_method: r.pm, off_session: true, confirm: true,
           payment_method_types: ['card'], receipt_email: r.email, description: `${r.title} (Lot ${r.aid})`,
           metadata: { order_id: String(r.id), auction_id: String(r.aid) }, ...(hooks ? { hooks } : {}),
-        }, { idempotencyKey: `outpost-lot-order-${r.id}-${amount}` });
-        if (pi.status === 'succeeded') {
-          fulfillOrder(r.id, { email: r.email, payment_intent: pi.id });
-          db.prepare("UPDATE orders SET charge_status='paid', charge_error=NULL WHERE id=?").run(r.id);
-        } else markChargeFailed(r.id, 'The bank wants the buyer to confirm this payment.');
-      } catch (e) { markChargeFailed(r.id, chargeError(e)); }
+        }, { idempotencyKey: `outpost-lot-order-${r.id}-${attempt}` });
+        if (pi.status === 'succeeded') recordCharged(r, pi.id);
+        else markChargeFailed(r.id, 'The bank wants the buyer to confirm this payment.');
+      } catch (e) {
+        // Only a clear answer from Stripe (declined, refused...) counts as a failed charge. A network problem or crash while the
+        // outcome is unknown stays "recover", so it is checked at Stripe next time instead of being charged or dropped blindly.
+        const clear = e && (e.type === 'StripeCardError' || e.type === 'StripeInvalidRequestError' || e.type === 'StripePermissionError' || e.type === 'StripeAuthenticationError');
+        if (clear || !r.charge_attempt && !db.prepare('SELECT charge_attempt a FROM orders WHERE id=?').get(r.id).a) markChargeFailed(r.id, chargeError(e));
+        else { chargeWait.set(r.id, Date.now() + 30e3); db.prepare("UPDATE orders SET charge_status='recover' WHERE id=? AND charge_status='charging'").run(r.id); }
+      }
     }
   } catch (e) { console.error('auto-charge error', e.message); }
   finally { chargingNow = false; }
@@ -2185,7 +2259,7 @@ app.get('/pay/:token', async (req, res) => {
     if (order.status !== 'pending' || a.status !== 'closed') return text(410, 'This payment link is no longer active.');
     if (!stripe) return text(503, 'Card payments are not set up yet.');
     // The saved card is being charged right now: a second payment page would risk paying twice.
-    if (order.charge_status === 'charging') return text(409, 'Your saved card is being charged right now. Please check back in a minute.');
+    if (chargeBusy(order)) return text(409, 'Your saved card is being charged right now. Please check back in a minute.');
     // If a payment page for this order is still open, send the buyer back to it instead of making another one.
     if (order.stripe_session_id) {
       try {
@@ -2193,6 +2267,10 @@ app.get('/pay/:token', async (req, res) => {
         if (open.status === 'open' && open.url && open.expires_at * 1000 > Date.now() + 10 * 60e3) return res.redirect(303, open.url);
       } catch { /* can't reuse it, so a new page is made below */ }
     }
+    // Close any older payment pages for this order first, so only ever one can be paid (and say so if one already was).
+    const closed = await closeOrderPages(order.id);
+    if (closed.paid) return text(409, 'A payment for this order has just gone through. Please check back in a minute.');
+    if (closed.failed) return text(503, 'Could not safely start a new payment page right now. Please try again in a few minutes.');
     const items = db.prepare('SELECT * FROM order_items WHERE order_id=?').all(order.id);
     const priced = {
       lines: items.map((i) => ({ name: i.name, unit_price_cents: i.unit_price_cents, quantity: i.quantity })),
@@ -2262,9 +2340,9 @@ app.post('/api/admin/auctions/:id/cancel', requireAdmin, h(async (req, res) => {
   if (!a) throw new HttpError(404, 'Not found');
   if (a.status === 'canceled') return res.json({ ok: true });
   if (a.order_id) {
-    const o = db.prepare('SELECT status FROM orders WHERE id=?').get(a.order_id);
+    const o = db.prepare('SELECT status, charge_status FROM orders WHERE id=?').get(a.order_id);
     if (o && o.status === 'paid') throw new HttpError(400, 'This lot has already been paid for');
-    if (o && o.charge_status === 'charging') throw new HttpError(409, 'A card payment is being processed. Try again in a moment.');
+    if (o && chargeBusy(o)) throw new HttpError(409, 'A card payment is being processed. Try again in a moment.');
     cancelPendingOrder(a.order_id);
   }
   db.prepare("UPDATE auctions SET status='canceled', pay_token=NULL WHERE id=?").run(a.id);
@@ -2279,7 +2357,7 @@ app.post('/api/admin/auctions/:id/next-bidder', requireAdmin, h(async (req, res)
   if (a.status !== 'closed' || !order || order.status !== 'pending') {
     throw new HttpError(400, 'Only a sold, unpaid lot can move to the next bidder');
   }
-  if (order.charge_status === 'charging') throw new HttpError(409, 'A card payment is being processed. Try again in a moment.');
+  if (chargeBusy(order)) throw new HttpError(409, 'A card payment is being processed (or went through). Check Stripe and the order before moving on. Try again in a moment.');
   cancelPendingOrder(order.id);
   db.prepare('UPDATE bids SET voided=1 WHERE id=?').run(a.winner_bid_id);
   settleAuction(a.id);
