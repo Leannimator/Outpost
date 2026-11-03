@@ -4,7 +4,7 @@ services:
     name: outpost
     runtime: node
     plan: starter
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/settings
     disk:
@@ -13,7 +13,7 @@ services:
       sizeGB: 1
     envVars:
       - key: NODE_VERSION
-        value: 22
+        value: "22"
       - key: DATA_DIR
         value: /var/data
       - key: TRUST_PROXY
