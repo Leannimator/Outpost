@@ -137,7 +137,7 @@ body { overflow-wrap: anywhere; }
 </table>
 <div class="note"><b>Can the whole thing live on Cloudflare?</b>Not today, not as-is. Cloudflare’s normal hosting (Workers and Pages) can’t run a program that keeps a database file and photos on a disk. Their newer “Containers” product was still in beta when I checked, and its disk is wiped whenever it goes to sleep, so a shop’s data wouldn’t be safe there. Moving Outpost fully onto Cloudflare would mean rewriting how it stores data. What <i>does</i> work well: buy your domain at Cloudflare, use their free Turnstile human check (Part 6), and, if you like, their Tunnel to serve a home computer.</div>
 <div class="warn"><b>Whatever you pick, it needs a permanent disk.</b>Free hosting plans wipe their files on every restart, which would delete your products, orders and photos. Outpost wants the host’s permanent disk, and you point <code>DATA_DIR</code> at it. Don’t try to save money here.</div>
-<p><b>The steps below use Render.</b> If you choose another host, the same settings apply: <code>DATA_DIR</code> (your permanent disk’s folder), <code>TRUST_PROXY=1</code>, <code>BASE_URL</code> (your shop’s address), <code>ADMIN_PASSWORD</code>, the two Stripe values, start command <code>npm start</code>, and Node 20 or newer.</p>
+<p><b>The steps below use Render.</b> If you choose another host, the same settings apply: <code>DATA_DIR</code> (your permanent disk’s folder), <code>TRUST_PROXY=cloudflare</code> (or <code>1</code>), <code>BASE_URL</code> (your shop’s address), <code>ADMIN_PASSWORD</code>, the two Stripe values, start command <code>npm start</code>, and Node 20 or newer.</p>
 
 <div class="step"><div class="num">1</div><div>
   <h3>Make your own copy on GitHub</h3>
@@ -329,7 +329,7 @@ body { overflow-wrap: anywhere; }
   <p>1. At <b>dash.cloudflare.com</b>, add your shop’s domain and follow its steps to point the domain at Cloudflare.<br>
   2. In Cloudflare’s <b>DNS</b> page, make sure the record for your shop is set to go through Cloudflare (the orange cloud), and under <b>SSL/TLS</b> choose <b>Full (strict)</b>.<br>
   3. Open <b>Security → Settings</b> and choose <b>Configure AI bot policies</b> (older accounts may show a single <b>Block AI bots</b> switch). Set <b>Training</b> to <b>Block</b>. Cloudflare’s screens change often, so go by what you see.<br>
-  4. In Render’s Environment, change <code>TRUST_PROXY</code> from <code>1</code> to <code>2</code>, so Outpost can still tell visitors apart. I haven’t been able to test this on every setup. If customers start seeing “too many requests,” set it back to <code>1</code> and ask for help on the Outpost GitHub page.</p>
+  4. In Render’s Environment, set <code>TRUST_PROXY</code> to <code>cloudflare</code> (not <code>2</code>) <i>before</i> you turn the orange cloud on, so Outpost can still tell visitors apart. It works with the orange cloud on or off. Afterwards open Outpost’s Security tab: “Visitor addresses” should show your own address. If customers start seeing “too many requests,” ask for help on the Outpost GitHub page.</p>
   <p>A few days later, search for your shop’s name in Google to confirm you still show up. You can also paste your shop’s address into <b>Google Search Console</b> (search.google.com/search-console) and use its <b>URL inspection</b>, which tells you whether Google can read the page.</p>
 </details>
 

@@ -47,15 +47,17 @@ else if (PW_PROBLEM) console.warn(`NOTE: your ADMIN_PASSWORD is easy to guess ($
 if (!stripe) console.warn('WARNING: STRIPE_SECRET_KEY is not set; card payments are disabled (cash still works).');
 
 const app = express();
-// Behind a proxy or host (Render, Fly, nginx...), set TRUST_PROXY=1 so each visitor keeps their own IP for rate limits.
-if (!process.env.TRUST_PROXY && process.env.RENDER) process.env.TRUST_PROXY = '1'; // Render always sits behind a proxy; without this every visitor shares one IP
+// Behind a proxy or host (Render, Fly, nginx...), set TRUST_PROXY=1 (or =cloudflare if Cloudflare's orange cloud may be in front) so each visitor keeps their own IP for rate limits.
+if (!process.env.TRUST_PROXY && process.env.RENDER) process.env.TRUST_PROXY = 'cloudflare'; // Render always sits behind a proxy; without this every visitor shares one IP. 'cloudflare' also works if the orange cloud is on.
 // TRUST_PROXY=true would believe whatever address a visitor writes in their request, which switches off every per-visitor limit. It is refused.
 if (/^(true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim())) {
   console.warn(`WARNING: TRUST_PROXY=${process.env.TRUST_PROXY} is not allowed (it lets anyone fake their address). Ignoring it; use a number, such as 1, for how many proxies sit in front of the app.`);
   delete process.env.TRUST_PROXY;
-  if (process.env.RENDER) process.env.TRUST_PROXY = '1';
+  if (process.env.RENDER) process.env.TRUST_PROXY = 'cloudflare';
 }
-if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
+// TRUST_PROXY=cloudflare: believe the host's front door, and anything behind it only if it is a real Cloudflare address (see proxytrust.js).
+if (String(process.env.TRUST_PROXY || '').trim().toLowerCase() === 'cloudflare') app.set('trust proxy', require('./proxytrust').cloudflareTrust());
+else if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 app.disable('x-powered-by');
 const OWNER_PAGES = new Set(['/', '/index.html', '/admin.html']);
 app.use((req, res, next) => {

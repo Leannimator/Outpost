@@ -26,7 +26,7 @@ npm start                # http://localhost:3000
 
 Set `ADMIN_PASSWORD` (and your Stripe **test** keys when you're ready for card payments) in `.env`. Restart after changing `.env`. Online, Outpost refuses to start with a missing or obvious admin password.
 
-**Hosting.** Set `DATA_DIR` to a persistent disk so the database (`outpost.db`) and uploaded photos survive redeploys, set `TRUST_PROXY=1` behind a proxy, and set `BASE_URL` to your public address. The included `render.yaml` sets this up on Render; Railway, Fly.io or any host with a persistent volume works the same way. Cloudflare Workers/Pages can't run Outpost as-is (no persistent local disk).
+**Hosting.** Set `DATA_DIR` to a persistent disk so the database (`outpost.db`) and uploaded photos survive redeploys, set `TRUST_PROXY=cloudflare` behind a proxy (it also works with Cloudflare's orange cloud on; use a plain number such as `1` for other hosts), and set `BASE_URL` to your public address. The included `render.yaml` sets this up on Render; Railway, Fly.io or any host with a persistent volume works the same way. Cloudflare Workers/Pages can't run Outpost as-is (no persistent local disk).
 
 ## Screens
 
@@ -85,7 +85,7 @@ Strongly recommended:
 
 1. **Turn on the human check (free).** Make a Cloudflare Turnstile widget, then put the two keys in `.env` as `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` and restart. Visitors then pass a quick check before checkout and before joining to bid. If the check can't be verified, Outpost says no (it fails closed).
 2. **Turn on Radar in Stripe** (Settings → Radar) to screen stolen cards.
-3. When you put Outpost online behind a host, set `TRUST_PROXY=1` so limits count each visitor separately. (If you also put Cloudflare in front of the host, use `2`.)
+3. When you put Outpost online behind a host, set `TRUST_PROXY=cloudflare` (or `1` on a host that is not behind Cloudflare) so limits count each visitor separately. It is safe with Cloudflare's orange cloud on or off: addresses are believed only when they really came from Cloudflare. Don't use `2`: someone who skips Cloudflare and goes straight to the host could then fake their address.
 
 ## Signing in to the staff side
 
