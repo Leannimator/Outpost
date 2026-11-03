@@ -1008,7 +1008,7 @@
       $('#crows').innerHTML = rows.map((c) => `<tr><td><b>${esc(c.name || '—')}</b><br><span class="small muted">${esc(c.email)}</span></td>
         <td>${c.orders}</td><td><b>${fmt(c.spent_cents)}</b></td><td>${c.bids}</td><td>${c.won}</td>
         <td class="small">${c.last_order ? esc(new Date(c.last_order.replace(' ', 'T') + 'Z').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })) : '—'}</td>
-        <td><a class="btn btn-sm" href="mailto:${esc(c.email)}">Email</a> <button class="btn btn-sm btn-ghost" data-block="${esc(c.email)}">Block</button></td></tr>`).join('') ||
+        <td><a class="btn btn-sm" href="mailto:${esc(encodeURIComponent(c.email).replace(/%40/g, '@'))}">Email</a> <button class="btn btn-sm btn-ghost" data-block="${esc(c.email)}">Block</button></td></tr>`).join('') ||
         `<tr><td colspan="7" class="empty">${list.length ? 'No matches' : 'No customers yet.'}</td></tr>`;
     };
     $('#cq').oninput = paint;
@@ -1550,7 +1550,7 @@
         const kind = $('#dkind').value;
         const value = kind === 'percent' ? Number($('#dval').value) : toCents($('#dval').value);
         const min = $('#dmin').value.trim() ? toCents($('#dmin').value) : 0;
-        await post('/api/admin/discounts', { code: $('#dcode').value, kind, value, min_subtotal_cents: min, max_uses: $('#dmax').value.trim() || null, starts_on: $('#dstart').value || null, expires_on: $('#dexp').value || null });
+        await post('/api/admin/discounts', { code: $('#dcode').value, kind, value, min_subtotal_cents: min, max_uses: $('#dmax').value.trim() ? Number($('#dmax').value.trim()) : null, starts_on: $('#dstart').value || null, expires_on: $('#dexp').value || null });
         dlist = await api('/api/admin/discounts'); dPaint();
         ['dcode', 'dval', 'dmin', 'dmax', 'dstart', 'dexp'].forEach((id) => { $('#' + id).value = ''; });
         $('#dmsg').innerHTML = '<div class="msg">Code added.</div>';

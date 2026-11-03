@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startFakeStripe() {
-  const st = { intents: [], sessions: new Map(), calls: [], keys: new Map(), n: 0, delayIntentMs: 0, hangIntent: false, onIntentCreated: null, declineNext: false, taxPercent: 10, refunds: [], customers: [], sessionDelayMs: 0, hangRefund: false, onRefundCreated: null, refundDelayMs: 0 };
+  const st = { intents: [], sessions: new Map(), calls: [], keys: new Map(), n: 0, delayIntentMs: 0, hangIntent: false, onIntentCreated: null, declineNext: false, taxPercent: 10, refunds: [], failSessions: false, failRefund: false, customers: [], sessionDelayMs: 0, hangRefund: false, onRefundCreated: null, refundDelayMs: 0 };
   const parse = (body) => { const o = {}; for (const [k, v] of new URLSearchParams(body)) o[k] = v; return o; };
   const send = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'request-id': 'req_fake' }); res.end(JSON.stringify(obj)); };
   const err = (res, code, type, message) => send(res, code, { error: { type, message, code: type === 'card_error' ? 'card_declined' : undefined } });
@@ -44,6 +44,7 @@ function startFakeStripe() {
         return send(res, 200, { object: 'list', has_more: false, data: st.intents.filter((i) => !cust || i.customer === cust) });
       }
       if (req.method === 'POST' && p === '/v1/refunds') {
+        if (st.failRefund) return err(res, 400, 'invalid_request_error', 'No such payment_intent: pi_secret_account_acct_1ABC');
         const key = req.headers['idempotency-key'];
         if (key && st.keys.has(key)) { const prev = st.keys.get(key); if (prev.body !== raw) return err(res, 400, 'idempotency_error', 'Keys for idempotent requests can only be used with the same parameters they were first used with.'); return send(res, 200, prev.pi); }
         if (st.hangRefund) { if (st.onRefundCreated) st.onRefundCreated(null); return; }   // never answers; nothing was refunded
@@ -58,6 +59,7 @@ function startFakeStripe() {
         return send(res, 200, { object: 'list', has_more: false, data: st.refunds.filter((r) => !pi || r.payment_intent === pi) });
       }
       if (req.method === 'POST' && p === '/v1/checkout/sessions') {
+        if (st.failSessions) return err(res, 400, 'invalid_request_error', 'Invalid API Key provided: sk_live_****WXYZ for account acct_1ABC');
         const cs = { id: 'cs_' + (++st.n), object: 'checkout.session', status: 'open', payment_status: 'unpaid', url: 'https://checkout.stripe.com/c/pay/cs_' + st.n, expires_at: Number(b.expires_at) || Math.floor(Date.now() / 1000) + 2100 };
         st.sessions.set(cs.id, cs); return send(res, 200, cs);
       }

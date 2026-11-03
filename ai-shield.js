@@ -35,9 +35,12 @@ const ROBOTS_ONLY_TOKENS = ['Google-Extended', 'Applebot-Extended', 'Webzio-Exte
 
 const AI_LOWER = AI_AGENTS.map((a) => a.toLowerCase());
 
+// A crawler's name must appear as a whole word in the User-Agent (so "youbot" does not block a browser whose name merely contains those letters).
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const AI_RES = AI_LOWER.map((a) => new RegExp('(^|[^a-z0-9])' + esc(a) + '(?![a-z0-9])'));
 function isAiAgent(userAgent) {
-  const ua = String(userAgent || '').toLowerCase();
-  return !!ua && AI_LOWER.some((a) => ua.includes(a));
+  const ua = String(userAgent || '').toLowerCase().slice(0, 300);
+  return !!ua && AI_RES.some((re) => re.test(ua));
 }
 
 function robotsTxt(on) {
@@ -62,6 +65,7 @@ function aiShield({ enabled, onBlock }) {
     if (PRIVATE_PATHS.has(req.path)) res.set('X-Robots-Tag', 'noindex, nofollow' + (enabled() ? ', noai, noimageai' : ''));
     if (!enabled()) return next();
     if (!res.get('X-Robots-Tag')) res.set('X-Robots-Tag', 'noai, noimageai');
+    res.vary('User-Agent');   // the answer depends on who asks, so a shared cache (a CDN) must not hand one visitor's answer to another
     if (req.path === '/robots.txt') return next();
     const ua = req.get('user-agent');
     if (isAiAgent(ua)) {

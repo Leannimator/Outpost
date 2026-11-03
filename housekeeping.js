@@ -17,4 +17,10 @@ function pruneAbandoned(db, nowMs = Date.now()) {
   return { orders, bidders };
 }
 
-module.exports = { pruneAbandoned, ORDER_DAYS, SIGNUP_DAYS };
+// Security log entries (they hold visitors' addresses) are kept for 90 days.
+const LOG_DAYS = 90;
+function pruneSecurityLog(db, nowMs = Date.now()) {
+  return db.prepare('DELETE FROM security_events WHERE at < ?').run(nowMs - LOG_DAYS * 24 * 3600e3).changes;
+}
+
+module.exports = { pruneAbandoned, pruneSecurityLog, ORDER_DAYS, SIGNUP_DAYS, LOG_DAYS };

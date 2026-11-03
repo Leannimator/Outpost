@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
+const Database = require('better-sqlite3');
 const os = require('os');
 const express = require('express');
 const QRCode = require('qrcode');
@@ -18,7 +21,14 @@ const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const CURRENCY = (process.env.CURRENCY || 'usd').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-// STRIPE_API_HOST/PORT/PROTOCOL only exist so the automated tests can point at a fake Stripe. Leave them unset.
+const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(BASE_URL);
+// "On the internet" no longer depends on BASE_URL alone: a host like Render with BASE_URL left blank still counts.
+const ON_INTERNET = !IS_LOCAL || !!process.env.RENDER || process.env.NODE_ENV === 'production';
+// STRIPE_API_HOST/PORT/PROTOCOL and TURNSTILE_VERIFY_URL only exist so the automated tests can point at fake services. They are IGNORED on the internet,
+// because set by mistake they would send the Stripe key (over plain http) or the captcha secret to the wrong place.
+for (const v of ['STRIPE_API_HOST', 'STRIPE_API_PORT', 'STRIPE_API_PROTOCOL', 'TURNSTILE_VERIFY_URL']) {
+  if (ON_INTERNET && process.env[v]) { console.warn(`WARNING: ${v} is a testing setting and is ignored here. Remove it from your environment.`); delete process.env[v]; }
+}
 const stripeOpts = process.env.STRIPE_API_HOST ? { host: process.env.STRIPE_API_HOST, port: process.env.STRIPE_API_PORT, protocol: process.env.STRIPE_API_PROTOCOL || 'http' } : {};
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY, { timeout: 30000, ...stripeOpts }) : null;   // a call that gets no answer gives up after 30 seconds (the default is 80)
 
@@ -27,9 +37,6 @@ const MAX_BID_CENTS = 99999999;            // $999,999.99: the largest amount St
 const SOFT_CLOSE_MAX = 30;                 // a lot can be pushed out by late bids at most this many times (about an hour), so two bidders can't keep it open forever
 const MAX_AUCTION_MS = 90 * 24 * 3600 * 1000;
 
-const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(BASE_URL);
-// "On the internet" no longer depends on BASE_URL alone: a host like Render with BASE_URL left blank still counts.
-const ON_INTERNET = !IS_LOCAL || !!process.env.RENDER || process.env.NODE_ENV === 'production';
 const PW_PROBLEM = Safe.passwordProblem(ADMIN_PASSWORD, [(() => { try { return new URL(BASE_URL).hostname.split('.')[0]; } catch { return ''; } })()]);
 if (PW_PROBLEM && PW_PROBLEM.level === 'hard' && ON_INTERNET) {
   console.error(`\nOutpost will not start on the internet with this ADMIN_PASSWORD (${PW_PROBLEM.why}).\nSet ADMIN_PASSWORD to something long that only you know (12 or more characters is best), then start again.\n`);
@@ -50,6 +57,7 @@ if (/^(true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim())) {
 }
 if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 app.disable('x-powered-by');
+const OWNER_PAGES = new Set(['/', '/index.html', '/admin.html']);
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'SAMEORIGIN');
@@ -59,7 +67,16 @@ app.use((req, res, next) => {
   if (req.secure || /^https:/i.test(BASE_URL)) res.set('Strict-Transport-Security', 'max-age=31536000' + (process.env.HSTS_SUBDOMAINS === '1' ? '; includeSubDomains' : ''));
   // The owner's screens carry private data (orders, customers, backups): never let a browser or proxy keep a copy.
   if (req.path.startsWith('/api/admin') || req.path.startsWith('/api/register')) { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); }
-  if (!req.path.startsWith('/api/') && !req.path.startsWith('/images/')) {
+  if (OWNER_PAGES.has(req.path)) {
+    // The owner's app has no inline scripts, so it can refuse them all: even if a bad piece of text ever got into a screen, it could not run.
+    res.set('Content-Security-Policy', [
+      "default-src 'self'", "base-uri 'self'", "object-src 'none'", "frame-ancestors 'none'", "script-src 'self'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: blob: https:", "connect-src 'self'", "form-action 'self'",
+    ].join('; '));
+  } else if (req.path.startsWith('/api/')) {
+    res.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  } else if (!req.path.startsWith('/images/')) {
     res.set('Content-Security-Policy', [
       "default-src 'self'", "base-uri 'self'", "object-src 'none'", "frame-ancestors 'self'",
       "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
@@ -90,7 +107,12 @@ const h = (fn) => async (req, res, next) => {
     await fn(req, res, next);
   } catch (e) {
     if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.extra || {}) });
-    if (e && String(e.type || '').startsWith('Stripe')) return res.status(400).json({ error: e.message });
+    if (e && String(e.type || '').startsWith('Stripe')) {
+      // Stripe's own wording can include details of the account. The owner sees it (it helps); a visitor gets a plain message.
+      console.error('Stripe error:', e.type, e.message);
+      const staff = req.path.startsWith('/api/admin') || req.path.startsWith('/api/register');
+      return res.status(staff ? 400 : 502).json({ error: staff ? String(e.message).slice(0, 300) : 'We could not start the payment just now. Please try again in a moment.' });
+    }
     console.error(e);
     res.status(500).json({ error: 'Server error' });
   }
@@ -108,10 +130,33 @@ setInterval(RL.sweep, 60 * 1000).unref();
 const DISPOSABLE = new Set(['mailinator.com', 'guerrillamail.com', 'guerrillamail.net', '10minutemail.com', 'tempmail.com', 'temp-mail.org', 'trashmail.com', 'yopmail.com', 'sharklasers.com', 'getnada.com', 'maildrop.cc', 'dispostable.com', 'throwawaymail.com', 'fakeinbox.com', 'mintemail.com', 'mohmal.com', 'emailondeck.com', 'burnermail.io', 'spamgourmet.com', 'tempail.com', 'moakt.com', 'mailnesia.com', 'tempr.email', 'discard.email', 'grr.la', 'inboxkitten.com', 'mail.tm', 'mailsac.com']);
 const GENERIC_REJECT = "We couldn't process that. Please refresh the page and try again.";
 
+// The security log is kept in three separate piles, so a flood of one kind can't push out the others: staff sign-in events (admin_*), money events,
+// and everything else (the noisy ones). Noisy events from one address are written at most once per 20 seconds, and each noisy kind at most 60 a minute
+// overall, so a flood costs a few database writes, not thousands. Email addresses are written masked (j***@example.com). Entries older than 90 days are removed hourly.
+const SEC_MONEY = new Set(['oversold', 'double_payment', 'paid_after_cancel', 'payment_mismatch', 'refund_outside', 'dispute', 'charged_not_recorded', 'page_not_closed']);
+const SEC_AUTH_SQL = "kind LIKE 'admin\\_%' ESCAPE '\\'";
+const SEC_MONEY_SQL = `kind IN (${[...SEC_MONEY].map((k) => `'${k}'`).join(',')})`;
+const SEC_PILES = [{ where: SEC_AUTH_SQL, keep: 500 }, { where: SEC_MONEY_SQL, keep: 500 }, { where: `NOT (${SEC_AUTH_SQL}) AND NOT (${SEC_MONEY_SQL})`, keep: 1000 }];
+const secSeen = new Map(), secKind = new Map();
+let secWrites = 0;
+const maskEmails = (t) => String(t).replace(/([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '$1***@$2');
 function logSecurity(kind, req, detail = '') {
   try {
-    db.prepare('INSERT INTO security_events (at, kind, ip, detail) VALUES (?,?,?,?)').run(Date.now(), kind, (req && req.ip) || '', String(detail).slice(0, 200));
-    db.prepare('DELETE FROM security_events WHERE id <= (SELECT MAX(id) FROM security_events) - 1000').run();
+    const now = Date.now(), ip = (req && req.ip) || '';
+    if (!kind.startsWith('admin_') && !SEC_MONEY.has(kind)) {
+      const k1 = kind + '|' + ip;
+      if (now - (secSeen.get(k1) || 0) < 20e3) return;
+      const w = secKind.get(kind);
+      if (w && now - w.t < 60e3 && w.n >= 60) return;
+      secSeen.set(k1, now); if (secSeen.size > 5000) secSeen.clear();
+      secKind.set(kind, w && now - w.t < 60e3 ? { t: w.t, n: w.n + 1 } : { t: now, n: 1 });
+    }
+    db.prepare('INSERT INTO security_events (at, kind, ip, detail) VALUES (?,?,?,?)').run(now, kind, ip, maskEmails(String(detail).slice(0, 300)).slice(0, 200));
+    if (++secWrites % 25 === 0) {
+      for (const pile of SEC_PILES) {
+        db.prepare(`DELETE FROM security_events WHERE ${pile.where} AND id <= COALESCE((SELECT id FROM security_events WHERE ${pile.where} ORDER BY id DESC LIMIT 1 OFFSET ?), -1)`).run(pile.keep);
+      }
+    }
   } catch { /* never let logging break a request */ }
 }
 const isBlocked = (kind, value) => !!value && !!db.prepare('SELECT 1 FROM blocks WHERE kind=? AND value=?').get(kind, String(value).toLowerCase());
@@ -120,7 +165,7 @@ async function verifyCaptcha(token, ip) {
   if (!TURNSTILE_SECRET) return true;
   if (!token) return false;
   try {
-    const r = await fetch(process.env.TURNSTILE_VERIFY_URL || 'https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    const r = await fetch(process.env.TURNSTILE_VERIFY_URL || 'https://challenges.cloudflare.com/turnstile/v0/siteverify', {   // the override is removed above when on the internet
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ secret: TURNSTILE_SECRET, response: String(token), remoteip: ip || '' }),
@@ -328,6 +373,7 @@ function cleanLinks(inp) {
       if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       let u; try { u = new URL(url); } catch { throw new HttpError(400, 'That web address doesn’t look right: ' + url); }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new HttpError(400, 'Web addresses must start with http or https');
+      url = u.toString();   // stored in its cleaned-up form
     } else if (kind === 'link') throw new HttpError(400, 'Add a web address for “' + title + '”');
     return { kind, title, url, note: String(l.note || '').trim().slice(0, 100), date: kind === 'event' && DATE_RE.test(l.date || '') ? l.date : '', place: kind === 'event' ? String(l.place || '').trim().slice(0, 80) : '', hidden: !!l.hidden };
   });
@@ -335,6 +381,7 @@ function cleanLinks(inp) {
 function cleanPolicy(q) {
   q = q && typeof q === 'object' ? q : {};
   const t = (k, n) => String(q[k] || '').trim().slice(0, n);
+  if (t('contact_email', 120) && !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(t('contact_email', 120))) throw new HttpError(400, 'That contact email address doesn’t look right');
   return { contact_email: t('contact_email', 120), ship_regions: ['us', 'usca', 'world'].includes(q.ship_regions) ? q.ship_regions : '', ship_note: t('ship_note', 400), governing_law: t('governing_law', 80), privacy_extra: t('privacy_extra', 1500), terms_extra: t('terms_extra', 1500), privacy_custom: t('privacy_custom', 20000), terms_custom: t('terms_custom', 20000), privacy_own: !!q.privacy_own, terms_own: !!q.terms_own, updated: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) };
 }
 function cleanShipping(b) {
@@ -364,7 +411,7 @@ function cleanSocial(inp) {
   for (const k of SOCIALS) {
     let v = String(inp[k] || '').trim().slice(0, 200);
     if (!v) continue;
-    if (k === 'email') { if (!/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(v)) throw new HttpError(400, 'That email address doesn’t look right'); out[k] = v; continue; }
+    if (k === 'email') { if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(v)) throw new HttpError(400, 'That email address doesn’t look right'); out[k] = v; continue; }
     if (!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
     let u; try { u = new URL(v); } catch { throw new HttpError(400, `The ${k} link doesn’t look right. Paste the full address from your browser.`); }
     if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.')) throw new HttpError(400, `The ${k} link must be a web address starting with https://`);
@@ -377,7 +424,7 @@ const breakMessage = () => getSetting('break_message', '') || 'Back soon! You ca
 // ---------- products ----------
 // Only allow image URLs we host ourselves or plain http(s) links.
 const BADGES = ['', 'new', 'last_chance', 'discontinued', 'staff_pick'];
-const validImageUrl = (u) => u == null || u === '' || /^(\/images\/[\w.-]+|https?:\/\/\S+)$/.test(u);
+const validImageUrl = (u) => u == null || u === '' || (typeof u === 'string' && u.length <= 1000 && /^(\/images\/[\w.-]+|https?:\/\/[^\s"'<>\\`]+)$/.test(u));   // quotes and angle brackets are never part of a real photo address
 
 const activeVariants = (pid) => db.prepare('SELECT * FROM variants WHERE product_id=? AND active=1 ORDER BY position, id').all(pid);
 // A product with options keeps its own stock number equal to the total of its options, so every other screen keeps working.
@@ -886,6 +933,7 @@ setInterval(sweepPendingOrders, SWEEP_EVERY_MS).unref();
 const LIST_MAX = { subscribers: 25000, bidders: 20000 };   // hard ceilings; the shop owner can still remove entries
 function runHousekeeping() {
   try {
+    Housekeeping.pruneSecurityLog(db);
     const r = Housekeeping.pruneAbandoned(db);
     if (r.orders || r.bidders) console.log(`housekeeping: removed ${r.orders} abandoned checkouts and ${r.bidders} unused sign-ups`);
   } catch (e) { console.error('housekeeping error:', e && e.message); }
@@ -994,6 +1042,7 @@ function sniffImage(b) {
 app.post('/api/admin/upload', requireAdmin, express.raw({ type: 'image/*', limit: '8mb', inflate: false }), (req, res) => {
   const ext = sniffImage(req.body);
   if (!ext) return res.status(400).json({ error: 'That file is not a PNG, JPG, GIF, WebP or SVG image' });
+  if (ext === 'svg' && Safe.svgProblem(req.body.toString('utf8'))) return res.status(400).json({ error: 'That SVG contains scripts or embedded content, which is not allowed. Re-export it as a plain SVG, or use a PNG.' });
   const name = rid(8) + '.' + ext;
   fs.writeFileSync(path.join(UPLOAD_DIR, name), req.body);
   res.json({ url: '/images/' + name });
@@ -1725,7 +1774,7 @@ app.get('/api/admin/orders/:id/evidence', requireAdmin, (req, res) => {
   const row = (k, v) => (v ? `<tr><th>${escH(k)}</th><td>${v}</td></tr>` : '');
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Order #${o.id} evidence</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:760px;margin:30px auto;padding:0 18px;color:#222}h1{font-size:24px;margin:0 0 4px}h2{font-size:17px;margin:24px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}table{border-collapse:collapse;width:100%}th{text-align:left;vertical-align:top;width:210px;color:#555;font-weight:600;padding:4px 10px 4px 0}td{padding:4px 0}.note{background:#f4f1ea;padding:10px 14px;border-radius:8px;margin:14px 0}.no-print button{font:inherit;padding:8px 16px;margin:0 0 10px}@media print{.no-print{display:none}}</style></head><body>
-<div class="no-print"><button onclick="window.print()">Print or save as PDF</button></div>
+<div class="no-print note">To print this page or save it as a PDF, press Ctrl+P (Command+P on a Mac).</div>
 <h1>${escH(storeName())}: order #${o.id}</h1><div>Evidence summary generated ${escH(new Date().toUTCString())}</div>
 <div class="note"><b>How to use this.</b> If a buyer disputes the charge, open the dispute in your Stripe dashboard (Payments → Disputes), choose “Submit evidence”, and upload this page as a PDF. Add the carrier's tracking page if you have it. Answer calmly and stick to the facts here.</div>
 <h2>The order</h2><table>
@@ -1743,33 +1792,48 @@ ${row('Their bids', bids.map((b) => money2(b.amount_cents) + ' at ' + escH(new D
 });
 
 // ---------- backup: database + uploaded photos in one .tar.gz ----------
-function makeTar(files) {
-  const blocks = [];
-  for (const f of files) {
-    const h = Buffer.alloc(512);
-    h.write(f.name.slice(0, 99), 0, 'utf8');
-    h.write('0000644\0', 100); h.write('0000000\0', 108); h.write('0000000\0', 116);
-    h.write(f.data.length.toString(8).padStart(11, '0') + '\0', 124);
-    h.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0', 136);
-    h.write('        ', 148); h.write('0', 156); h.write('ustar\0', 257); h.write('00', 263);
-    let sum = 0; for (const b of h) sum += b;
-    h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
-    blocks.push(h, f.data, Buffer.alloc((512 - (f.data.length % 512)) % 512));
+// Streams a tar of the files one after another (nothing is read into memory whole).
+async function* tarStream(entries) {
+  const now = Math.floor(Date.now() / 1000);
+  for (const f of entries) {
+    const hd = Buffer.alloc(512);
+    hd.write(f.name.slice(0, 99), 0, 'utf8');
+    hd.write('0000600\0', 100); hd.write('0000000\0', 108); hd.write('0000000\0', 116);
+    hd.write(f.size.toString(8).padStart(11, '0') + '\0', 124);
+    hd.write(now.toString(8).padStart(11, '0') + '\0', 136);
+    hd.write('        ', 148); hd.write('0', 156); hd.write('ustar\0', 257); hd.write('00', 263);
+    let sum = 0; for (const b of hd) sum += b;
+    hd.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
+    yield hd;
+    let sent = 0;
+    if (f.size > 0) for await (const chunk of fs.createReadStream(f.file, { start: 0, end: f.size - 1 })) { sent += chunk.length; yield chunk; }
+    if (sent < f.size) yield Buffer.alloc(f.size - sent);   // the file got shorter while backing up: pad, so the archive stays valid
+    yield Buffer.alloc((512 - (f.size % 512)) % 512);
   }
-  blocks.push(Buffer.alloc(1024));
-  return Buffer.concat(blocks);
+  yield Buffer.alloc(1024);
 }
+
+// The backup is a copy of the database plus the photos. The copy is cleaned first: it does NOT contain the two-step sign-in secret and recovery codes,
+// signed-in sessions, sign-in attempts or the security log (which holds visitors' addresses). Restoring it therefore turns two-step sign-in off; turn it on again afterwards.
 app.get('/api/admin/backup', requireAdmin, h(async (req, res) => {
-  const tmp = path.join(os.tmpdir(), `outpost-${rid(4)}.db`);
-  await db.backup(tmp);
-  const files = [{ name: 'outpost.db', data: fs.readFileSync(tmp) }];
-  fs.unlinkSync(tmp);
-  for (const f of fs.readdirSync(UPLOAD_DIR)) {
-    const p = path.join(UPLOAD_DIR, f);
-    if (/^[\w.-]+$/.test(f) && fs.statSync(p).isFile()) files.push({ name: 'images/' + f, data: fs.readFileSync(p) });
-  }
-  res.set({ 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="outpost-backup-${todayStr()}.tar.gz"` });
-  res.send(zlib.gzipSync(makeTar(files)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'outpost-bk-'));   // a private folder (only this program can open it), removed whatever happens
+  try {
+    const tmp = path.join(dir, 'outpost.db');
+    await db.backup(tmp);
+    const copy = new Database(tmp);
+    try {
+      copy.exec(`DELETE FROM settings WHERE key IN ('totp_secret','totp_pending','totp_recovery','totp_last_step','form_secret');
+        DELETE FROM admin_sessions; DELETE FROM trusted_devices; DELETE FROM login_attempts; DELETE FROM security_events; VACUUM;`);
+    } finally { copy.close(); }
+    const entries = [{ name: 'outpost.db', file: tmp, size: fs.statSync(tmp).size }];
+    for (const f of fs.readdirSync(UPLOAD_DIR)) {
+      const p = path.join(UPLOAD_DIR, f);
+      if (/^[\w.-]+$/.test(f) && fs.statSync(p).isFile()) entries.push({ name: 'images/' + f, file: p, size: fs.statSync(p).size });
+    }
+    res.set({ 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="outpost-backup-${todayStr()}.tar.gz"` });
+    try { await pipeline(Readable.from(tarStream(entries)), zlib.createGzip(), res); }
+    catch (e) { console.error('backup stopped part-way:', e && e.message); res.destroy(); }   // headers are already sent: the download just ends
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
 }));
 
 app.get('/api/admin/security', requireAdmin, (req, res) => {
@@ -1819,8 +1883,10 @@ function cleanDiscount(b) {
   const code = String(b.code || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
   if (code.length < 3) throw new HttpError(400, 'Codes need at least 3 letters or numbers');
   if (!['percent', 'amount'].includes(b.kind)) throw new HttpError(400, 'Choose percent or dollar amount');
-  const value = Number(b.value);
-  if (!Number.isInteger(value) || value < 1) throw new HttpError(400, 'Enter a discount amount');
+  const value = b.value;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) throw new HttpError(400, 'Enter a discount amount');   // a number, not text like "10"
+  if (b.min_subtotal_cents != null && b.min_subtotal_cents !== '' && typeof b.min_subtotal_cents !== 'number') throw new HttpError(400, 'Minimum must be a number');
+  if (b.max_uses != null && b.max_uses !== '' && typeof b.max_uses !== 'number') throw new HttpError(400, 'Max uses must be a number');
   if (b.kind === 'percent' && value > 100) throw new HttpError(400, 'Percent must be 100 or less');
   if (b.kind === 'amount' && value > MAX_BID_CENTS) throw new HttpError(400, 'That discount is too large');
   const min = Number(b.min_subtotal_cents || 0);

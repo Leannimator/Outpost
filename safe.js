@@ -100,4 +100,13 @@ function passwordProblem(pw, extraWords = []) {
   return null;
 }
 
-module.exports = { passwordProblem, safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };
+// An uploaded SVG is only ever shown through an <img> tag, under a locked-down policy. As a second lock, SVGs that carry scripts or embedded
+// content are refused at upload, so they would be harmless even if a proxy stripped the policy. Plain checks only (no backtracking patterns).
+function svgProblem(text) {
+  const t = String(text || '').toLowerCase();
+  for (const bad of ['<script', 'javascript:', '<foreignobject', '<iframe', '<embed', '<object', '<!entity', 'data:text/html']) if (t.includes(bad)) return bad;
+  if (/\son[a-z]+\s*=/.test(t)) return 'event handler';
+  return null;
+}
+
+module.exports = { svgProblem, passwordProblem, safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };
