@@ -1763,7 +1763,12 @@
               <input class="input" id="bval" placeholder="someone@example.com" style="flex:1;min-width:160px"><button class="btn" id="badd">Block</button></div>
             <div id="blist" style="margin-top:8px"></div><div id="bmsg"></div>
             <h3 style="font-size:18px;margin:18px 0 6px">Recent blocked attempts</h3>
-            <div id="sevents"></div>`)}
+            <div class="row" id="evf" style="flex-wrap:wrap;gap:6px;margin-bottom:6px">
+              <button class="btn btn-sm" data-g="all">All</button><button class="btn btn-sm" data-g="bots">Bots and scammers</button><button class="btn btn-sm" data-g="money">Payment problems</button></div>
+            <div id="sevents"></div>
+            <div class="row" style="margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" id="evmore" hidden>Show 25 more</button><button class="btn btn-sm" id="evcsv">Download log (CSV)</button></div>
+            <p class="hint" id="evfoot"></p>`)}
+          ${card('Staff sign-ins', `<div id="staffev"></div><p class="hint">Your own sign-ins and any failed tries. They are kept apart from the blocked attempts so they never look like attacks.</p>`)}
         </div>
       </div>`;
     // ---- check your setup ----
@@ -1832,6 +1837,26 @@
     paintTfa();
     // --- protection ---
     let sdata = sec;
+    // Blocked attempts: newest first, 25 more at a time, filtered by kind. Staff sign-ins sit in their own box.
+    const evState = { group: 'all', list: sec.attempts || [], more: (sec.attempts || []).length >= 25, busy: false };
+    const evRow = (ev) => `<div class="ev"><b>${esc(evLabel(ev.kind))}</b><span class="small muted">${esc(new Date(ev.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${ev.ip ? ' · ' + esc(ev.ip) : ''}</span>${ev.detail ? `<div class="small muted">${esc(String(ev.detail).slice(0, 120))}</div>` : ''}</div>`;
+    const evPaint = () => {
+      $('#sevents').innerHTML = evState.list.length ? `<div class="evs">${evState.list.map(evRow).join('')}</div>` : '<div class="muted small">Nothing suspicious so far.</div>';
+      $('#evmore').hidden = !evState.more;
+      document.querySelectorAll('#evf [data-g]').forEach((b) => b.classList.toggle('btn-primary', b.dataset.g === evState.group));
+      $('#evfoot').textContent = `Showing ${evState.list.length}. Entries are kept up to 90 days. The download has everything, staff sign-ins included.`;
+      $('#staffev').innerHTML = (sdata.staff || []).length ? `<div class="evs">${sdata.staff.map(evRow).join('')}</div>` : '<div class="muted small">No sign-ins yet.</div>';
+    };
+    const evLoad = async (group, more) => {
+      if (evState.busy) return; evState.busy = true;
+      try {
+        const last = more && evState.list.length ? evState.list[evState.list.length - 1].id : 0;
+        const d = await api('/api/admin/security/events?group=' + encodeURIComponent(group) + (last ? '&before=' + last : ''));
+        evState.group = group; evState.list = more ? evState.list.concat(d.events) : d.events; evState.more = d.more;
+        evPaint();
+      } catch (err) { $('#bmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+      finally { evState.busy = false; }
+    };
     const sPaint = () => {
       const on = (t, d) => `<div class="prow"><span class="pdot ok"></span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`;
       const off = (t, d) => `<div class="prow"><span class="pdot warn"></span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`;
@@ -1843,9 +1868,12 @@
         `<p class="small" style="margin-top:10px"><b>${sdata.last_24h}</b> suspicious attempt${sdata.last_24h === 1 ? '' : 's'} turned away in the last 24 hours.</p>
          <p class="hint">Also turn on Radar in your Stripe dashboard (Settings → Radar). It screens stolen cards for you.</p>`;
       $('#blist').innerHTML = sdata.blocks.length ? sdata.blocks.map((b) => `<div class="drow"><div><b>${esc(b.value)}</b> <span class="badge">${b.kind === 'ip' ? 'IP' : 'Email'}</span>${b.note ? `<div class="small muted">${esc(b.note)}</div>` : ''}</div><button class="btn btn-sm" data-bx="${b.id}">Unblock</button></div>`).join('') : '<div class="muted small">Nobody is blocked.</div>';
-      $('#sevents').innerHTML = sdata.recent.length ? `<div class="evs">${sdata.recent.slice(0, 10).map((ev) => `<div class="ev"><b>${esc(evLabel(ev.kind))}</b><span class="small muted">${esc(new Date(ev.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${ev.ip ? ' · ' + esc(ev.ip) : ''}</span>${ev.detail ? `<div class="small muted">${esc(String(ev.detail).slice(0, 120))}</div>` : ''}</div>`).join('')}</div>` : '<div class="muted small">Nothing suspicious so far.</div>';
+      evPaint();
     };
     sPaint();
+    document.querySelectorAll('#evf [data-g]').forEach((b) => { b.onclick = () => evLoad(b.dataset.g, false); });
+    $('#evmore').onclick = () => evLoad(evState.group, true);
+    $('#evcsv').onclick = () => download('/api/admin/security/log.csv', 'outpost-security-log.csv').catch((e) => { $('#bmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; });
     $('#bkind').onchange = () => { $('#bval').placeholder = $('#bkind').value === 'ip' ? '203.0.113.7' : 'someone@example.com'; };
     $('#badd').onclick = async () => {
       try { await post('/api/admin/blocks', { kind: $('#bkind').value, value: $('#bval').value }); $('#bval').value = ''; sdata = await api('/api/admin/security'); sPaint(); $('#bmsg').innerHTML = ''; }

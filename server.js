@@ -139,6 +139,7 @@ const SEC_MONEY = new Set(['oversold', 'double_payment', 'paid_after_cancel', 'p
 const SEC_AUTH_SQL = "kind LIKE 'admin\\_%' ESCAPE '\\'";
 const SEC_MONEY_SQL = `kind IN (${[...SEC_MONEY].map((k) => `'${k}'`).join(',')})`;
 const SEC_PILES = [{ where: SEC_AUTH_SQL, keep: 500 }, { where: SEC_MONEY_SQL, keep: 500 }, { where: `NOT (${SEC_AUTH_SQL}) AND NOT (${SEC_MONEY_SQL})`, keep: 1000 }];
+const SEC_GROUPS = { staff: SEC_AUTH_SQL, money: SEC_MONEY_SQL, bots: `NOT (${SEC_AUTH_SQL}) AND NOT (${SEC_MONEY_SQL})`, all: `NOT (${SEC_AUTH_SQL})` };
 const secSeen = new Map(), secKind = new Map();
 let secWrites = 0;
 const maskEmails = (t) => String(t).replace(/([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '$1***@$2');
@@ -2009,9 +2010,29 @@ app.get('/api/admin/backup', requireAdmin, h(async (req, res) => {
 app.get('/api/admin/security', requireAdmin, (req, res) => {
   const since = Date.now() - 24 * 3600e3;
   const counts = db.prepare('SELECT kind, COUNT(*) n FROM security_events WHERE at >= ? GROUP BY kind ORDER BY n DESC').all(since);
-  const recent = db.prepare('SELECT at, kind, ip, detail FROM security_events ORDER BY id DESC LIMIT 25').all();
+  const recent = db.prepare('SELECT id, at, kind, ip, detail FROM security_events ORDER BY id DESC LIMIT 25').all();
+  // The screen shows blocked attempts and staff sign-ins in separate boxes, so staff sign-ins never look like attacks.
+  const attempts = db.prepare(`SELECT id, at, kind, ip, detail FROM security_events WHERE ${SEC_GROUPS.all} ORDER BY id DESC LIMIT 25`).all();
+  const staff = db.prepare(`SELECT id, at, kind, ip, detail FROM security_events WHERE ${SEC_GROUPS.staff} ORDER BY id DESC LIMIT 10`).all();
   const blocks = db.prepare('SELECT * FROM blocks ORDER BY id DESC').all();
-  res.json({ last_24h: counts.reduce((a, c) => a + c.n, 0), counts, recent, blocks, captcha: !!TURNSTILE_SECRET, trust_proxy: !!process.env.TRUST_PROXY });
+  res.json({ last_24h: counts.reduce((a, c) => a + c.n, 0), counts, recent, attempts, staff, blocks, captcha: !!TURNSTILE_SECRET, trust_proxy: !!process.env.TRUST_PROXY });
+});
+// Older log entries, 25 at a time, for the "Show more" button. group: all (blocked attempts and payment problems), bots, money, staff.
+app.get('/api/admin/security/events', requireAdmin, (req, res) => {
+  const where = SEC_GROUPS[String(req.query.group || 'all')];
+  if (!where) throw new HttpError(400, 'Unknown group');
+  const before = Number(req.query.before);
+  const rows = db.prepare(`SELECT id, at, kind, ip, detail FROM security_events WHERE ${where} AND id < ? ORDER BY id DESC LIMIT 26`).all(Number.isFinite(before) && before > 0 ? before : Number.MAX_SAFE_INTEGER);
+  res.json({ events: rows.slice(0, 25), more: rows.length > 25 });
+});
+// The whole log as a spreadsheet file (it keeps up to about 2,000 entries, 90 days at most).
+app.get('/api/admin/security/log.csv', requireAdmin, (req, res) => {
+  const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const rows = db.prepare('SELECT at, kind, ip, detail FROM security_events ORDER BY id DESC').all();
+  const group = (k) => (k.startsWith('admin_') ? 'staff' : SEC_MONEY.has(k) ? 'payment problem' : 'blocked attempt');
+  const lines = ['when (UTC),group,what,address,details'].concat(rows.map((r) => [new Date(r.at).toISOString().replace('T', ' ').slice(0, 19), group(r.kind), r.kind, r.ip, r.detail].map(q).join(',')));
+  res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="outpost-security-log-${todayStr()}.csv"` });
+  res.send(lines.join('\n') + '\n');
 });
 // What the "check your setup" list on the Security page needs. Nothing secret: the password is described, never shown.
 app.get('/api/admin/setup-check', requireAdmin, (req, res) => {
