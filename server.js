@@ -11,6 +11,8 @@ const db = require('./db');
 const AiShield = require('./ai-shield');
 const Auth = require('./auth');
 const Safe = require('./safe');
+const { createLimiter } = require('./ratelimit');
+const Housekeeping = require('./housekeeping');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -84,19 +86,13 @@ const h = (fn) => async (req, res, next) => {
   }
 };
 
-// tiny in-memory rate limiter
-const hits = new Map();
-const rlCount = (key, windowMs) => {
-  const now = Date.now();
-  const arr = (hits.get(key) || []).filter((t) => now - t < windowMs);
-  hits.set(key, arr);
-  return arr.length;
-};
-const rlAdd = (key) => { const a = hits.get(key) || []; a.push(Date.now()); hits.set(key, a); };
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of hits) if (!v.length || now - v[v.length - 1] > 25 * 3600e3) hits.delete(k);
-}, 10 * 60 * 1000).unref();
+// Who a visitor is counted as in the limits below (IPv6 visitors are grouped by their /64 block).
+const ipKey = (req) => Safe.ipGroup(req.ip);
+
+// In-memory rate limiter (see ratelimit.js: its memory is capped, so strangers can't fill the server).
+const RL = createLimiter();
+const rlCount = RL.count, rlAdd = RL.add;
+setInterval(RL.sweep, 60 * 1000).unref();
 
 // ---------- protection against bots and abuse ----------
 const DISPOSABLE = new Set(['mailinator.com', 'guerrillamail.com', 'guerrillamail.net', '10minutemail.com', 'tempmail.com', 'temp-mail.org', 'trashmail.com', 'yopmail.com', 'sharklasers.com', 'getnada.com', 'maildrop.cc', 'dispostable.com', 'throwawaymail.com', 'fakeinbox.com', 'mintemail.com', 'mohmal.com', 'emailondeck.com', 'burnermail.io', 'spamgourmet.com', 'tempail.com', 'moakt.com', 'mailnesia.com', 'tempr.email', 'discard.email', 'grr.la', 'inboxkitten.com', 'mail.tm', 'mailsac.com']);
@@ -118,6 +114,7 @@ async function verifyCaptcha(token, ip) {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ secret: TURNSTILE_SECRET, response: String(token), remoteip: ip || '' }),
+      signal: AbortSignal.timeout(5000),   // if Cloudflare doesn't answer in 5 seconds the check fails closed instead of hanging the request
     });
     const j = await r.json();
     return !!j.success;
@@ -137,8 +134,8 @@ async function guardPublicForm(req, what) {
 // Overall request flood limit for the public API (staff screens are not counted).
 app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/admin') || req.path.startsWith('/register')) return next();
-  if (rlCount('flood:' + req.ip, 60e3) >= 300) { logSecurity('flood', req); return res.status(429).json({ error: 'Too many requests. Please slow down.' }); }
-  rlAdd('flood:' + req.ip);
+  if (rlCount('flood:' + ipKey(req), 60e3) >= 300) { logSecurity('flood', req); return res.status(429).json({ error: 'Too many requests. Please slow down.' }); }
+  rlAdd('flood:' + ipKey(req));
   next();
 });
 
@@ -692,6 +689,17 @@ setInterval(() => {
   } catch { /* ignore */ }
 }, 10 * 60 * 1000).unref();
 
+// Housekeeping (see housekeeping.js): shortly after start and then hourly, junk rows that strangers could pile up are removed.
+const LIST_MAX = { subscribers: 25000, bidders: 20000 };   // hard ceilings; the shop owner can still remove entries
+function runHousekeeping() {
+  try {
+    const r = Housekeeping.pruneAbandoned(db);
+    if (r.orders || r.bidders) console.log(`housekeeping: removed ${r.orders} abandoned checkouts and ${r.bidders} unused sign-ups`);
+  } catch (e) { console.error('housekeeping error:', e && e.message); }
+}
+setTimeout(runHousekeeping, 30e3).unref();
+setInterval(runHousekeeping, 3600e3).unref();
+
 // ---------- Stripe webhook (raw body — must come BEFORE express.json) ----------
 app.post('/webhook', express.raw({ type: 'application/json', inflate: false }), (req, res) => {
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).end();
@@ -746,10 +754,9 @@ fs.mkdirSync(path.join(db.dataDir || __dirname, db.dataDir ? 'images' : path.joi
 // room above "10 a minute", which would block real shoppers. Lower it with IMAGE_LIMIT_PER_MIN if you want it stricter.
 const IMAGE_LIMIT_PER_MIN = Math.max(20, parseInt(process.env.IMAGE_LIMIT_PER_MIN, 10) || 600);
 app.use('/images', (req, res, next) => {
-  if (!aiShieldOn()) return next();
-  const key = 'img:' + req.ip;
+  const key = 'img:' + ipKey(req);   // always on (it used to run only with the AI shield), so bulk downloading is slowed either way
   if (rlCount(key, 60e3) >= IMAGE_LIMIT_PER_MIN) {
-    if (rlCount('imglog:' + req.ip, 10 * 60e3) === 0) { rlAdd('imglog:' + req.ip); logSecurity('image_flood', req); }   // log it once, not on every refused request
+    if (rlCount('imglog:' + ipKey(req), 10 * 60e3) === 0) { rlAdd('imglog:' + ipKey(req)); logSecurity('image_flood', req); }   // log it once, not on every refused request
     return res.status(429).type('text/plain').send('Too many requests. Please slow down.');
   }
   rlAdd(key);
@@ -812,25 +819,30 @@ app.get('/api/products', (req, res) => {
 
 // Price a cart (with an optional discount code) without creating anything.
 function quoteWithCodeGuard(req) {
-  if (req.body.code && rlCount('code:' + req.ip, 10 * 60e3) >= 10) { logSecurity('code_guessing', req); throw new HttpError(429, 'Too many code attempts. Try again in a few minutes.'); }
+  if (req.body.code && rlCount('code:' + ipKey(req), 10 * 60e3) >= 10) { logSecurity('code_guessing', req); throw new HttpError(429, 'Too many code attempts. Try again in a few minutes.'); }
   try { return priceCart(req.body.items, req.body.code, { limits: true, online: true, address: req.body.address }); }
-  catch (e) { if (req.body.code && e instanceof HttpError && /discount code/.test(e.message)) rlAdd('code:' + req.ip); throw e; }
+  catch (e) { if (req.body.code && e instanceof HttpError && /discount code/.test(e.message)) rlAdd('code:' + ipKey(req)); throw e; }
 }
 app.post('/api/quote', h(async (req, res) => {
   const p = quoteWithCodeGuard(req);
   res.json({ subtotal_cents: p.subtotal, discount_cents: p.discount, discount_code: p.discount_code, tax_cents: p.tax, tax_label: p.tax_label, shipping_cents: p.shipping, shipping_label: p.shipping_label, total_cents: p.total });
 }));
 
+// Shared ceilings (everyone together). They only exist to protect Stripe and the database from a flood, so they sit well
+// above any real shop's traffic: the per-visitor limits do the everyday work. Raise them with these settings if you ever need to.
+const CHECKOUT_ALL_PER_HOUR = Math.max(150, parseInt(process.env.CHECKOUT_ALL_PER_HOUR, 10) || 600);
+const SUBSCRIBE_ALL_PER_HOUR = Math.max(300, parseInt(process.env.SUBSCRIBE_ALL_PER_HOUR, 10) || 1000);
+
 // Online checkout -> Stripe-hosted page (card data never touches your server)
 app.post('/api/checkout', h(async (req, res) => {
   if (breakOn()) throw new HttpError(503, breakMessage());
   await guardPublicForm(req, 'checkout');
-  if (rlCount('co1:' + req.ip, 60e3) >= 3 || rlCount('co2:' + req.ip, 3600e3) >= 12 || rlCount('coall', 3600e3) >= 150) {
+  if (rlCount('co1:' + ipKey(req), 60e3) >= 3 || rlCount('co2:' + ipKey(req), 3600e3) >= 12 || rlCount('coall', 3600e3) >= CHECKOUT_ALL_PER_HOUR) {
     logSecurity('checkout_rate', req); throw new HttpError(429, 'Too many checkout attempts. Please wait a few minutes and try again.');
   }
   if (needsAddress() && !req.body.address) throw new HttpError(400, 'Please enter your delivery address first.');
   const priced = quoteWithCodeGuard(req);
-  rlAdd('co1:' + req.ip); rlAdd('co2:' + req.ip); rlAdd('coall');
+  rlAdd('co1:' + ipKey(req)); rlAdd('co2:' + ipKey(req)); rlAdd('coall');
   const orderId = createOrder('online', 'card', 'pending', priced);
   const a = priced.address;
   if (a) {
@@ -881,7 +893,7 @@ app.post('/api/receipt/:id/review', h(async (req, res) => {
   if (!o) throw new HttpError(404, 'Receipt not found');
   if (req.body.website) { logSecurity('honeypot', req, 'review'); throw new HttpError(400, GENERIC_REJECT); }
   if (isBlocked('ip', req.ip) || isBlocked('email', o.customer_email)) throw new HttpError(403, GENERIC_REJECT);
-  if (rlCount('rev:' + req.ip, 3600e3) >= 6) throw new HttpError(429, 'Too many reviews from this connection. Try again later.');
+  if (rlCount('rev:' + ipKey(req), 3600e3) >= 6) throw new HttpError(429, 'Too many reviews from this connection. Try again later.');
   const st = reviewState(o);
   if (!st.reviews_on) throw new HttpError(400, 'Reviews are turned off for this shop');
   if (st.review_wait) throw new HttpError(400, 'You can review once your order has shipped. Check back then!');
@@ -890,7 +902,7 @@ app.post('/api/receipt/:id/review', h(async (req, res) => {
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new HttpError(400, 'Choose 1 to 5 stars');
   const body = Safe.cleanReviewBody(req.body.body);
   const items = db.prepare('SELECT name FROM order_items WHERE order_id=?').all(o.id).map((i) => i.name).join(', ').slice(0, 200);
-  rlAdd('rev:' + req.ip);
+  rlAdd('rev:' + ipKey(req));
   const now = Date.now();
   if (st.review) db.prepare('UPDATE reviews SET rating=?, body=?, edited_at=? WHERE order_id=?').run(rating, body, now, o.id);
   else db.prepare('INSERT INTO reviews (order_id, rating, body, name, items, created_at) VALUES (?,?,?,?,?,?)').run(o.id, rating, body, reviewerName(o), items, now);
@@ -902,8 +914,8 @@ app.post('/api/receipt/:id/shipping', h(async (req, res) => {
   const o = orderByToken(req.params.id, req.query.k);
   if (!o) throw new HttpError(404, 'Receipt not found');
   if (req.body.website) throw new HttpError(400, GENERIC_REJECT);
-  if (rlCount('ship:' + req.ip, 3600e3) >= 10) throw new HttpError(429, 'Too many tries. Please wait a bit.');
-  rlAdd('ship:' + req.ip);
+  if (rlCount('ship:' + ipKey(req), 3600e3) >= 10) throw new HttpError(429, 'Too many tries. Please wait a bit.');
+  rlAdd('ship:' + ipKey(req));
   if (o.status !== 'paid') throw new HttpError(400, 'This order is not paid yet');
   if (['shipped', 'delivered'].includes(o.fulfillment)) throw new HttpError(400, 'This order has already shipped. Message the seller to change the address.');
   const f = (k, n) => String(req.body[k] || '').trim().slice(0, n);
@@ -1164,8 +1176,8 @@ app.get('/api/admin/links', requireAdmin, (req, res) => {
 // ---------- email list (download as CSV and import into your own email service; Outpost sends no email) ----------
 const subscribeLimit = (req) => {
   if (isBlocked('ip', req.ip)) { logSecurity('blocked_ip', req, 'subscribe'); throw new HttpError(403, GENERIC_REJECT); }
-  if (rlCount('sub1:' + req.ip, 3600e3) >= 8 || rlCount('suball', 3600e3) >= 300) { logSecurity('subscribe_rate', req); throw new HttpError(429, 'Too many tries. Please wait a bit and try again.'); }
-  rlAdd('sub1:' + req.ip); rlAdd('suball');
+  if (rlCount('sub1:' + ipKey(req), 3600e3) >= 8 || rlCount('suball', 3600e3) >= SUBSCRIBE_ALL_PER_HOUR) { logSecurity('subscribe_rate', req); throw new HttpError(429, 'Too many tries. Please wait a bit and try again.'); }
+  rlAdd('sub1:' + ipKey(req)); rlAdd('suball');
 };
 app.post('/api/subscribe', h(async (req, res) => {
   if (getSetting('mailing_list_on', '') !== '1') throw new HttpError(404, 'The email list is not open right now.');
@@ -1174,6 +1186,7 @@ app.post('/api/subscribe', h(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase().slice(0, 200);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Please enter a valid email address');
   if (req.body.consent !== true) throw new HttpError(400, 'Please tick the box so we know you want emails');
+  if (db.prepare('SELECT COUNT(*) c FROM subscribers').get().c >= LIST_MAX.subscribers) { logSecurity('list_full', req, 'subscribers'); throw new HttpError(503, 'The email list is not taking sign-ups right now.'); }
   const source = String(req.body.source || 'links').replace(/[^a-z0-9_-]/gi, '').slice(0, 20) || 'links';
   db.prepare('INSERT INTO subscribers (email, source, created_at, unsubscribed) VALUES (?,?,?,0) ON CONFLICT(email) DO UPDATE SET unsubscribed=0').run(email, source, Date.now());
   res.json({ ok: true });
@@ -1744,12 +1757,26 @@ function settleAuction(auctionId) {
   })();
 }
 
+const sweepFailedAt = new Map();   // auction id -> when settling it last threw, so one bad lot is retried gently
 function sweepAuctions() {
   const due = db.prepare("SELECT id FROM auctions WHERE status='open' AND end_at <= ?").all(Date.now());
-  for (const a of due) settleAuction(a.id);
+  for (const a of due) {
+    if (Date.now() - (sweepFailedAt.get(a.id) || 0) < 60e3) continue;
+    try { settleAuction(a.id); sweepFailedAt.delete(a.id); }
+    catch (e) { sweepFailedAt.set(a.id, Date.now()); console.error(`could not close lot ${a.id}: ${e && e.message}`); }
+  }
   if (due.length) setImmediate(autoChargeDue);
 }
-setInterval(() => { sweepAuctions(); autoChargeDue(); }, 5000);
+// Runs every 5 seconds. A problem in here is logged, never allowed to stop the shop.
+setInterval(() => {
+  try { sweepAuctions(); } catch (e) { console.error('auction sweep error:', e && e.message); }
+  autoChargeDue().catch((e) => console.error('auto-charge error:', e && e.message));
+}, 5000);
+
+// Last-resort safety nets. A forgotten promise is logged and the shop keeps running; a truly
+// unexpected crash is logged first (so the reason is in your Render logs) and then the app restarts.
+process.on('unhandledRejection', (e) => console.error('unhandled promise rejection:', e && e.stack || e));
+process.on('uncaughtException', (e) => { console.error('uncaught exception:', e && e.stack || e); process.exit(1); });
 
 function shapeAuction(a, { admin = false, bidder = null } = {}) {
   const now = Date.now();
@@ -1836,8 +1863,8 @@ app.post('/api/bidders/card', h(async (req, res) => {
   if (!bidder) throw new HttpError(401, 'Please join first');
   if (!bidCardOn()) throw new HttpError(400, 'This shop does not need a card to bid');
   if (isBlocked('email', bidder.email) || isBlocked('ip', req.ip)) throw new HttpError(403, GENERIC_REJECT);
-  if (rlCount('card:' + bidder.id, 10 * 60e3) >= 5 || rlCount('cardip:' + req.ip, 3600e3) >= 15) throw new HttpError(429, 'Too many tries. Please wait a few minutes.');
-  rlAdd('card:' + bidder.id); rlAdd('cardip:' + req.ip);
+  if (rlCount('card:' + bidder.id, 10 * 60e3) >= 5 || rlCount('cardip:' + ipKey(req), 3600e3) >= 15) throw new HttpError(429, 'Too many tries. Please wait a few minutes.');
+  rlAdd('card:' + bidder.id); rlAdd('cardip:' + ipKey(req));
   let cust = bidder.stripe_customer_id;
   if (!cust) {
     const c = await stripe.customers.create({ email: bidder.email, name: bidder.name, metadata: { bidder_id: String(bidder.id) } });
@@ -1870,6 +1897,9 @@ app.post('/api/bidders/address', h(async (req, res) => {
 app.get('/card-saved', async (req, res) => {
   const lot = Number(req.query.lot) > 0 ? Number(req.query.lot) : '';
   let ok = false;
+  // Each visit can cost a Stripe call, so each visitor gets a small allowance (a real card save needs one visit).
+  if (rlCount('cardsaved:' + ipKey(req), 10 * 60e3) >= 20) return res.status(429).type('text/plain').send('Too many requests. Please wait a few minutes.');
+  rlAdd('cardsaved:' + ipKey(req));
   try { ok = !!(stripe && req.query.session_id && (await saveCardFromSessionId(String(req.query.session_id)))); } catch (e) { console.error(e.message); }
   res.redirect(303, `/auction.html${lot ? '?lot=' + lot + '&' : '?'}card=${ok ? 'ok' : 'fail'}`);
 });
@@ -1928,9 +1958,10 @@ async function autoChargeDue() {
 // --- public ---
 app.post('/api/bidders', h(async (req, res) => {
   await guardPublicForm(req, 'signup');
-  if (rlCount('reg:' + req.ip, 3600e3) >= 5 || rlCount('regday:' + req.ip, 24 * 3600e3) >= 12) { logSecurity('signup_rate', req); throw new HttpError(429, 'Too many sign-ups from this connection. Try again later.'); }
+  if (rlCount('reg:' + ipKey(req), 3600e3) >= 5 || rlCount('regday:' + ipKey(req), 24 * 3600e3) >= 12) { logSecurity('signup_rate', req); throw new HttpError(429, 'Too many sign-ups from this connection. Try again later.'); }
   // Rejected sign-ups are counted too (separately from successful ones), so junk can't be sent for free.
-  if (rlCount('regbad:' + req.ip, 3600e3) >= 30) { logSecurity('signup_rate', req, 'many rejected'); throw new HttpError(429, 'Too many sign-ups from this connection. Try again later.'); }
+  if (rlCount('regbad:' + ipKey(req), 3600e3) >= 30) { logSecurity('signup_rate', req, 'many rejected'); throw new HttpError(429, 'Too many sign-ups from this connection. Try again later.'); }
+  if (db.prepare('SELECT COUNT(*) c FROM bidders').get().c >= LIST_MAX.bidders) { logSecurity('list_full', req, 'bidders'); throw new HttpError(503, 'Bidder sign-ups are paused right now. Please try again later.'); }
   let name, email, addrJson = null;
   try {
     name = String(req.body.name || '').slice(0, 200).trim();
@@ -1947,8 +1978,8 @@ app.post('/api/bidders', h(async (req, res) => {
       shippingFor(addr, 0);   // refuses addresses outside the regions you ship to
       addrJson = JSON.stringify(addr);
     }
-  } catch (e) { rlAdd('regbad:' + req.ip); throw e; }
-  rlAdd('reg:' + req.ip); rlAdd('regday:' + req.ip);
+  } catch (e) { rlAdd('regbad:' + ipKey(req)); throw e; }
+  rlAdd('reg:' + ipKey(req)); rlAdd('regday:' + ipKey(req));
   const token = rid(24);
   db.prepare('INSERT INTO bidders (name, email, token, created_at, address_json) VALUES (?,?,?,?,?)').run(name, email, token, Date.now(), addrJson);
   res.json({ token, name });
@@ -1998,8 +2029,8 @@ app.post('/api/auctions/:id/bids', h(async (req, res) => {
   if (needsAddress() && !bidder.address_json) {
     const e = new HttpError(428, 'Please add your delivery address to bid.'); e.extra = { need_address: true }; throw e;
   }
-  if (rlCount('bidip:' + req.ip, 60e3) >= 90) { logSecurity('bid_rate', req); throw new HttpError(429, 'Slow down a little'); }
-  rlAdd('bidip:' + req.ip);
+  if (rlCount('bidip:' + ipKey(req), 60e3) >= 90) { logSecurity('bid_rate', req); throw new HttpError(429, 'Slow down a little'); }
+  rlAdd('bidip:' + ipKey(req));
   if (rlCount('bid:' + bidder.id, 60e3) >= 30) throw new HttpError(429, 'Slow down a little');
   rlAdd('bid:' + bidder.id);
   const amount = req.body.amount_cents;
@@ -2030,6 +2061,10 @@ app.post('/api/auctions/:id/bids', h(async (req, res) => {
 // Winner's payment link: always valid until paid; starts a fresh Stripe page each visit.
 app.get('/pay/:token', async (req, res) => {
   const text = (code, msg) => res.status(code).type('text/plain').send(msg);
+  // Each visit can make Stripe calls, so limit it per visitor and per link.
+  const tokKey = 'paytok:' + String(req.params.token).slice(0, 64);
+  if (rlCount('pay:' + ipKey(req), 10 * 60e3) >= 30 || rlCount(tokKey, 10 * 60e3) >= 20) return text(429, 'Too many tries. Please wait a few minutes and try again.');
+  rlAdd('pay:' + ipKey(req)); rlAdd(tokKey);
   try {
     const a = db.prepare('SELECT * FROM auctions WHERE pay_token=?').get(req.params.token);
     if (!a || !a.order_id) return text(404, 'This payment link is not valid.');
@@ -2037,6 +2072,15 @@ app.get('/pay/:token', async (req, res) => {
     if (order.status === 'paid') return res.redirect(303, `/thanks.html?order=${order.id}&k=${order.public_token}`);
     if (order.status !== 'pending' || a.status !== 'closed') return text(410, 'This payment link is no longer active.');
     if (!stripe) return text(503, 'Card payments are not set up yet.');
+    // The saved card is being charged right now: a second payment page would risk paying twice.
+    if (order.charge_status === 'charging') return text(409, 'Your saved card is being charged right now. Please check back in a minute.');
+    // If a payment page for this order is still open, send the buyer back to it instead of making another one.
+    if (order.stripe_session_id) {
+      try {
+        const open = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
+        if (open.status === 'open' && open.url && open.expires_at * 1000 > Date.now() + 10 * 60e3) return res.redirect(303, open.url);
+      } catch { /* can't reuse it, so a new page is made below */ }
+    }
     const items = db.prepare('SELECT * FROM order_items WHERE order_id=?').all(order.id);
     const priced = {
       lines: items.map((i) => ({ name: i.name, unit_price_cents: i.unit_price_cents, quantity: i.quantity })),

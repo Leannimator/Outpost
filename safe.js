@@ -55,4 +55,20 @@ function looksLikeSvg(head) {
   return low.startsWith('<svg', i) && i + 4 < n && /[\s>]/.test(text[i + 4]);
 }
 
-module.exports = { cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, EMAIL_MAX, REVIEW_MAX };
+// The name a visitor is counted under for rate limits. IPv4 addresses are used as they are.
+// An IPv6 visitor normally owns a whole /64 block (billions of addresses), so those are grouped
+// by their first 64 bits. Otherwise one person could look like endless different visitors.
+function ipGroup(ip) {
+  const raw = String(ip == null ? '' : ip).split('%')[0].toLowerCase();
+  if (!raw.includes(':') || raw.startsWith('::ffff:')) return raw;   // IPv4 (or IPv4 inside IPv6): keep as is
+  const [head, tail] = raw.split('::');
+  const h = head ? head.split(':') : [];
+  let groups = h;
+  if (raw.includes('::')) {
+    const t = tail ? tail.split(':') : [];
+    groups = [...h, ...Array(Math.max(8 - h.length - t.length, 0)).fill('0'), ...t];
+  }
+  return groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':') + '::/64';
+}
+
+module.exports = { cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };

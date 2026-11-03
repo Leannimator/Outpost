@@ -3,7 +3,21 @@
 // Checks the three slow-pattern fixes (review items 1, 2, 3) without starting the server.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { cleanEmail, validEmail, cleanReviewBody, looksLikeSvg } = require('../safe');
+const { cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup } = require('../safe');
+
+test('ip grouping: IPv4 kept, IPv6 grouped by /64 (item 7)', () => {
+  assert.equal(ipGroup('203.0.113.7'), '203.0.113.7');
+  assert.equal(ipGroup('::ffff:203.0.113.7'), '::ffff:203.0.113.7');
+  assert.equal(ipGroup(''), '');
+  assert.equal(ipGroup(undefined), '');
+  const a = ipGroup('2001:db8:abcd:12::1'), b = ipGroup('2001:db8:abcd:12:ffff:ffff:ffff:ffff'), c = ipGroup('2001:0db8:abcd:0012:1:2:3:4');
+  assert.equal(a, '2001:0db8:abcd:0012::/64');
+  assert.equal(a, b); assert.equal(a, c);
+  assert.notEqual(a, ipGroup('2001:db8:abcd:13::1'));
+  assert.equal(ipGroup('::1'), '0000:0000:0000:0000::/64');
+  assert.equal(ipGroup('fe80::1%eth0'), 'fe80:0000:0000:0000::/64');
+  assert.equal(ipGroup('2001:db8::'), '2001:0db8:0000:0000::/64');
+});
 
 const ms = (fn) => { const t = process.hrtime.bigint(); const out = fn(); return { out, ms: Number(process.hrtime.bigint() - t) / 1e6 }; };
 const FAST = 100; // every hostile input below used to take seconds; it must now take well under this
