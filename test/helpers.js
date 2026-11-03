@@ -28,7 +28,13 @@ async function startServer(extraEnv = {}) {
     let data; try { data = JSON.parse(text); } catch { data = text; }
     return { status: res.status, data, ms: Date.now() - t };
   }
-  return { base, dir, proc, stop, alive, j };
+  // The signed "page loaded" time that forms must send (it must be at least 1.2 seconds old). Fetched once and reused.
+  let tok = null;
+  async function formToken() {
+    if (!tok) { const t = Date.now(); tok = (await j('GET', '/api/form-token')).data.token; const w = 1400 - (Date.now() - t); if (w > 0) await sleep(w); }
+    return tok;
+  }
+  return { base, dir, proc, stop, alive, j, formToken };
 }
 
 module.exports = { startServer, sleep, PASSWORD };

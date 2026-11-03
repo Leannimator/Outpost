@@ -20,10 +20,11 @@ const CURRENCY = (process.env.CURRENCY || 'usd').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 // STRIPE_API_HOST/PORT/PROTOCOL only exist so the automated tests can point at a fake Stripe. Leave them unset.
 const stripeOpts = process.env.STRIPE_API_HOST ? { host: process.env.STRIPE_API_HOST, port: process.env.STRIPE_API_PORT, protocol: process.env.STRIPE_API_PROTOCOL || 'http' } : {};
-const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY, stripeOpts) : null;
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY, { timeout: 30000, ...stripeOpts }) : null;   // a call that gets no answer gives up after 30 seconds (the default is 80)
 
 const SOFT_CLOSE_MS = 2 * 60 * 1000;       // a bid in the last 2 minutes extends the lot by 2 minutes
-const MAX_BID_CENTS = 100000000;           // $1,000,000 sanity cap
+const MAX_BID_CENTS = 99999999;            // $999,999.99: the largest amount Stripe can charge in one go, so a bigger "bid" could never be collected
+const SOFT_CLOSE_MAX = 30;                 // a lot can be pushed out by late bids at most this many times (about an hour), so two bidders can't keep it open forever
 const MAX_AUCTION_MS = 90 * 24 * 3600 * 1000;
 
 const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(BASE_URL);
@@ -130,13 +131,25 @@ async function verifyCaptcha(token, ip) {
   } catch { return false; }
 }
 
+// "Started" time for forms: the SERVER hands out a signed time when the page loads, so a bot can't just claim it has been there a while.
+// A real form needs between 1.2 seconds and 7 days between loading the page and sending it.
+const formSecret = () => { let k = getSetting('form_secret', ''); if (!k) { k = crypto.randomBytes(24).toString('hex'); setSetting('form_secret', k); } return k; };
+const formSig = (ts) => crypto.createHmac('sha256', formSecret()).update('form:' + ts).digest('hex').slice(0, 32);
+const newFormToken = () => { const ts = Date.now(); return `${ts}.${formSig(ts)}`; };
+function formTokenOk(t) {
+  if (typeof t !== 'string' || t.length > 80) return false;
+  const [ts, sig] = t.split('.');
+  if (!/^\d{10,15}$/.test(ts || '') || !sig || !safeEqual(sig, formSig(ts))) return false;
+  const age = Date.now() - Number(ts);
+  return age >= 1200 && age <= 7 * 24 * 3600e3;
+}
+
 // Checks shared by every public form that creates something (checkout, sign-up).
 async function guardPublicForm(req, what) {
   if (isBlocked('ip', req.ip)) { logSecurity('blocked_ip', req, what); throw new HttpError(403, GENERIC_REJECT); }
   const b = req.body || {};
   if (b.website) { logSecurity('honeypot', req, what); throw new HttpError(400, GENERIC_REJECT); }
-  const started = Number(b.started);
-  if (!Number.isFinite(started) || Date.now() - started < 1200) { logSecurity('too_fast', req, what); throw new HttpError(429, GENERIC_REJECT); }
+  if (!formTokenOk(b.started)) { logSecurity('too_fast', req, what); throw new HttpError(429, GENERIC_REJECT); }
   if (!(await verifyCaptcha(b.captcha, req.ip))) { logSecurity('captcha_failed', req, what); throw new HttpError(400, 'Please complete the human check and try again.'); }
 }
 
@@ -147,6 +160,7 @@ app.use('/api', (req, res, next) => {
   rlAdd('flood:' + ipKey(req));
   next();
 });
+app.get('/api/form-token', (req, res) => { res.set('Cache-Control', 'no-store'); res.json({ token: newFormToken() }); });
 
 // ---------- staff sign-in: password (+ optional authenticator code) -> expiring session ----------
 const SESSION_MS = 12 * 3600e3, DEVICE_MS = 30 * 24 * 3600e3;
@@ -202,6 +216,9 @@ function requireAdmin(req, res, next) {
   if (token) rlAdd(key);
   res.status(401).json({ error: 'Unauthorized' });
 }
+
+// After a slow step (a call to Stripe, say) check the sign-in is still good, so a request that began before "sign out everywhere" can't go on to finish what it started.
+const stillSignedIn = (req) => { if (!(ADMIN_PASSWORD && sessionFor(req.get('x-admin-token') || ''))) throw new HttpError(401, 'You were signed out. Please sign in again.'); };
 
 // ---------- settings & tax ----------
 const getSetting = (k, d) => {
@@ -645,19 +662,26 @@ function fulfillOrder(orderId, extra = {}) {
       return;
     }
     if (order.status !== 'pending') {
-      console.warn(`Payment arrived for order #${orderId} which is "${order.status}" — check Stripe and refund if needed.`);
+      // Money arrived for an order that is no longer open (canceled while the buyer was still paying, or the payment was very late).
+      // The order is left as it is, but the payment is written down on it and the owner is told, so the buyer is not left out of pocket.
+      if (order.status === 'canceled' && extra.payment_intent && order.late_payment !== extra.payment_intent) {
+        const cents = Number.isInteger(extra.amount_cents) ? extra.amount_cents : order.total_cents;
+        db.prepare('UPDATE orders SET late_payment=?, late_paid_cents=?, stripe_payment_intent=COALESCE(stripe_payment_intent, ?) WHERE id=?').run(extra.payment_intent, cents, extra.payment_intent, orderId);
+        logSecurity('paid_after_cancel', null, `order #${orderId} was canceled but ${money(cents)} was paid (${extra.payment_intent}). Refund it in Stripe, or ship the order yourself.`);
+      } else console.warn(`Payment arrived for order #${orderId} which is "${order.status}" — check Stripe and refund if needed.`);
       return;
     }
     const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
-    for (const i of items) {   // paid for more than is left (for example a register sale took the last one meanwhile): tell the owner
-      const have = i.variant_id ? (db.prepare('SELECT stock FROM variants WHERE id=?').get(i.variant_id) || {}).stock : i.product_id ? (db.prepare('SELECT stock FROM products WHERE id=?').get(i.product_id) || {}).stock : null;
-      if (have != null && have < i.quantity) logSecurity('oversold', null, `order #${orderId}: ${i.name} x${i.quantity}, only ${have} left`);
-    }
-    const dec = db.prepare('UPDATE products SET stock = MAX(stock - ?, 0) WHERE id = ?');
-    const decV = db.prepare('UPDATE variants SET stock = MAX(stock - ?, 0) WHERE id = ?');
+    const stockOf = (i) => i.variant_id ? (db.prepare('SELECT stock FROM variants WHERE id=?').get(i.variant_id) || {}).stock : i.product_id ? (db.prepare('SELECT stock FROM products WHERE id=?').get(i.product_id) || {}).stock : null;
     for (const i of items) {
-      if (i.variant_id) { decV.run(i.quantity, i.variant_id); if (i.product_id) syncStock(i.product_id); }
-      else if (i.product_id) dec.run(i.quantity, i.product_id);
+      const have = stockOf(i);
+      // Paid for more than is left (for example a register sale took the last one meanwhile): tell the owner.
+      if (have != null && have < i.quantity) logSecurity('oversold', null, `order #${orderId}: ${i.name} x${i.quantity}, only ${have} left`);
+      // Write down how many were REALLY taken out of stock, so a later refund puts back exactly that many (and not more than ever existed).
+      const taken = have == null ? 0 : Math.min(have, i.quantity);
+      db.prepare('UPDATE order_items SET stock_taken=? WHERE id=?').run(taken, i.id);
+      if (i.variant_id) { db.prepare('UPDATE variants SET stock = MAX(stock - ?, 0) WHERE id = ?').run(i.quantity, i.variant_id); if (i.product_id) syncStock(i.product_id); }
+      else if (i.product_id) db.prepare('UPDATE products SET stock = MAX(stock - ?, 0) WHERE id = ?').run(i.quantity, i.product_id);
     }
     db.prepare(
       `UPDATE orders SET status='paid', customer_email=COALESCE(?, customer_email),
@@ -665,6 +689,66 @@ function fulfillOrder(orderId, extra = {}) {
     ).run(extra.email || null, extra.shipping ? JSON.stringify(extra.shipping) : null, extra.payment_intent || null, orderId);
     if (order.discount_code) db.prepare('UPDATE discounts SET uses = uses + 1 WHERE code = ?').run(order.discount_code);
   })();
+}
+
+// Put an order's items back in stock: exactly the number that were taken out when it was paid (older orders: the full quantity). Only ever once.
+function restockOrder(orderId) {
+  db.transaction(() => {
+    for (const i of db.prepare('SELECT * FROM order_items WHERE order_id=?').all(orderId)) {
+      const n = i.stock_taken == null ? i.quantity : i.stock_taken;
+      if (n > 0) {
+        if (i.variant_id) { db.prepare('UPDATE variants SET stock = stock + ? WHERE id = ?').run(n, i.variant_id); if (i.product_id) syncStock(i.product_id); }
+        else if (i.product_id) db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(n, i.product_id);
+      }
+      db.prepare('UPDATE order_items SET stock_taken=0 WHERE id=?').run(i.id);
+    }
+    db.prepare('UPDATE orders SET restock_requested=2 WHERE id=?').run(orderId);
+  })();
+}
+
+// Bring an order's refunded total up to `cents` (never down, never past the order total). When that makes it fully refunded, the items go back
+// in stock if that was asked for on ANY of the refunds. Returns the order as it is afterwards.
+function applyRefundedTotal(orderId, cents) {
+  return db.transaction(() => {
+    db.prepare("UPDATE orders SET refunded_cents = MAX(refunded_cents, MIN(?, total_cents)), status = CASE WHEN status='paid' AND MAX(refunded_cents, MIN(?, total_cents)) >= total_cents THEN 'refunded' ELSE status END, refund_intent_cents=0, refund_key='', refunded_at=datetime('now') WHERE id=?").run(cents, cents, orderId);
+    const o = db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
+    if (o && o.status === 'refunded' && o.restock_requested === 1) restockOrder(orderId);
+    return db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
+  })();
+}
+
+// Is this "paid" checkout session really the payment for this order? It must be one of the pages made for the order, and must not be for LESS than the order costs
+// (Stripe signs these messages, so this is a second lock, not the first). Paying more than expected (Stripe Tax added tax) is fine.
+const mismatchLogged = new Set();
+function checkPaidSession(orderId, s) {
+  const o = db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
+  if (!o) return { ok: false, why: 'no such order' };
+  const known = o.stripe_session_id === s.id || !!db.prepare('SELECT 1 FROM order_sessions WHERE order_id=? AND session_id=?').get(orderId, s.id);
+  if (!known) return { ok: false, why: `payment page ${s.id} was not made for this order` };
+  if (s.currency && String(s.currency).toLowerCase() !== CURRENCY) return { ok: false, why: `paid in ${String(s.currency).toUpperCase()}, not ${CURRENCY.toUpperCase()}` };
+  // With Stripe Tax on the page, tax is added by Stripe, so the least it can be is the order without its tax.
+  const least = s.automatic_tax && s.automatic_tax.enabled ? Math.max(o.total_cents - (o.tax_cents || 0), 0) : o.total_cents;
+  if (Number.isInteger(s.amount_total) && s.amount_total < least) return { ok: false, why: `${money(s.amount_total)} was paid but the order is ${money(least)}` };
+  if (s.payment_status === 'no_payment_required' && s.amount_total !== 0) return { ok: false, why: 'marked as needing no payment, but the amount is not zero' };
+  return { ok: true };
+}
+// The one place a paid checkout session is turned into a paid order (used by the Stripe message and by the check on old unpaid orders).
+function applyPaidSession(orderId, s) {
+  const chk = checkPaidSession(orderId, s);
+  if (!chk.ok) {
+    const key = orderId + ':' + s.id;
+    if (!mismatchLogged.has(key)) { mismatchLogged.add(key); logSecurity('payment_mismatch', null, `order #${orderId}: ${chk.why}. It was NOT marked paid. Look at ${typeof s.payment_intent === 'string' ? s.payment_intent : s.id} in Stripe.`); }
+    return false;
+  }
+  const addr = s.shipping_details || s.collected_information?.shipping_details || null;
+  const pi = typeof s.payment_intent === 'string' ? s.payment_intent : (s.payment_intent && s.payment_intent.id) || null;
+  fulfillOrder(orderId, { email: s.customer_details?.email, shipping: addr, payment_intent: pi, amount_cents: Number.isInteger(s.amount_total) ? s.amount_total : undefined });
+  if (s.automatic_tax && s.automatic_tax.enabled && s.total_details && Number.isInteger(s.amount_total)) {
+    // Stripe Tax worked out the tax: record the real amounts on the order.
+    // Online and auction orders (a lot paid through its payment link has no tax or shipping from Stripe worked in yet). Never rewrites a canceled order.
+    db.prepare("UPDATE orders SET tax_cents=?, total_cents=? WHERE id=? AND channel IN ('online','auction') AND status='paid'").run(s.total_details.amount_tax || 0, s.amount_total, orderId);
+  }
+  return true;
 }
 
 async function createStripeSession(orderId, priced, { collectShipping = false, cancelUrl, keepOnFail = false } = {}) {
@@ -765,11 +849,38 @@ function cancelPendingOrder(orderId) {
 }
 
 // Unpaid online/register-card orders older than 2 hours are canceled so abandoned or fake ones don't pile up.
-setInterval(() => {
+// But first Stripe is asked about each one: if the buyer actually paid (the message from Stripe was just late or lost) the order is marked paid instead of canceled,
+// and every payment page is closed so it can't be paid afterwards. If Stripe can't be asked, the order is left alone and looked at again later.
+const SWEEP_EVERY_MS = Math.max(1000, parseInt(process.env.SWEEP_EVERY_MS, 10) || 10 * 60 * 1000);   // only the automated tests change this
+let sweepingOrders = false;
+const sweepSkip = new Map();
+async function sweepPendingOrders() {
+  if (sweepingOrders) return;
+  sweepingOrders = true;
   try {
-    db.prepare("UPDATE orders SET status='canceled' WHERE status='pending' AND channel IN ('online','register') AND created_at < datetime('now','-2 hours')").run();
-  } catch { /* ignore */ }
-}, 10 * 60 * 1000).unref();
+    const rows = db.prepare("SELECT id FROM orders WHERE status='pending' AND channel IN ('online','register') AND created_at < datetime('now','-2 hours') ORDER BY id LIMIT 50").all();
+    for (const r of rows) {
+      if ((sweepSkip.get(r.id) || 0) > Date.now()) continue;
+      const ids = new Set(db.prepare('SELECT session_id FROM order_sessions WHERE order_id=?').all(r.id).map((x) => x.session_id));
+      const last = db.prepare('SELECT stripe_session_id FROM orders WHERE id=?').get(r.id);
+      if (last && last.stripe_session_id) ids.add(last.stripe_session_id);
+      if (!stripe || !ids.size) { db.prepare("UPDATE orders SET status='canceled' WHERE id=? AND status='pending'").run(r.id); continue; }
+      let paid = null, unsure = false;
+      for (const sid of ids) {
+        try {
+          const cs = await stripe.checkout.sessions.retrieve(sid);
+          if (cs.status === 'complete' && (cs.payment_status === 'paid' || cs.payment_status === 'no_payment_required')) { paid = cs; break; }
+          if (cs.status === 'open') await stripe.checkout.sessions.expire(sid);
+        } catch (e) { unsure = true; }
+      }
+      if (paid) { if (!applyPaidSession(r.id, paid)) sweepSkip.set(r.id, Date.now() + 6 * 3600e3); continue; }
+      if (unsure) { sweepSkip.set(r.id, Date.now() + 30 * 60e3); continue; }
+      db.prepare("UPDATE orders SET status='canceled' WHERE id=? AND status='pending'").run(r.id);
+    }
+  } catch (e) { console.error('order sweep error:', e && e.message); }
+  finally { sweepingOrders = false; }
+}
+setInterval(sweepPendingOrders, SWEEP_EVERY_MS).unref();
 
 // Housekeeping (see housekeeping.js): shortly after start and then hourly, junk rows that strangers could pile up are removed.
 const LIST_MAX = { subscribers: 25000, bidders: 20000 };   // hard ceilings; the shop owner can still remove entries
@@ -798,17 +909,24 @@ app.post('/webhook', express.raw({ type: 'application/json', inflate: false }), 
   const orderId = Number(s.metadata && s.metadata.order_id);
   if (event.type === 'checkout.session.completed' && s.mode === 'setup') {
     saveCardFromSessionId(s.id).catch((e) => console.error('card save failed', e.message));
-  } else if (event.type === 'checkout.session.completed' && orderId && s.payment_status === 'paid') {
-    const addr = s.shipping_details || s.collected_information?.shipping_details || null;
-    fulfillOrder(orderId, { email: s.customer_details?.email, shipping: addr, payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null });
-    if (s.automatic_tax && s.automatic_tax.enabled && s.total_details && Number.isInteger(s.amount_total)) {
-      // Stripe Tax worked out the tax: record the real amounts on the order.
-      // Online and auction orders (a lot paid through its payment link has no tax or shipping from Stripe worked in yet). Never rewrites a canceled order.
-      db.prepare("UPDATE orders SET tax_cents=?, total_cents=? WHERE id=? AND channel IN ('online','auction') AND status='paid'").run(s.total_details.amount_tax || 0, s.amount_total, orderId);
-    }
+  } else if (event.type === 'checkout.session.completed' && orderId && (s.payment_status === 'paid' || s.payment_status === 'no_payment_required')) {
+    applyPaidSession(orderId, s);
   } else if (event.type === 'checkout.session.expired' && orderId) {
     // Auction orders stay pending: the winner can come back to the same payment link and start a fresh page.
     db.prepare(`UPDATE orders SET status='canceled' WHERE id=? AND status='pending' AND channel != 'auction'`).run(orderId);
+  } else if (event.type === 'charge.refunded') {
+    // A refund made in the Stripe dashboard (or finished after we lost track of it): bring Outpost's record in line.
+    const pi = typeof s.payment_intent === 'string' ? s.payment_intent : s.payment_intent && s.payment_intent.id;
+    const o = pi && db.prepare('SELECT * FROM orders WHERE stripe_payment_intent=? OR late_payment=?').get(pi, pi);
+    if (o && Number.isInteger(s.amount_refunded) && s.amount_refunded > o.refunded_cents) {
+      const inFlight = o.refund_intent_cents > 0;   // a refund made from Outpost is being recorded right now: it will write its own result
+      applyRefundedTotal(o.id, s.amount_refunded);
+      if (!inFlight) logSecurity('refund_outside', null, `order #${o.id}: Stripe shows ${money(Math.min(s.amount_refunded, o.total_cents))} refunded in total. Outpost's record was updated.`);
+    }
+  } else if (event.type === 'charge.dispute.created') {
+    const pi = typeof s.payment_intent === 'string' ? s.payment_intent : s.payment_intent && s.payment_intent.id;
+    const o = pi && db.prepare('SELECT id FROM orders WHERE stripe_payment_intent=?').get(pi);
+    logSecurity('dispute', null, `${o ? 'order #' + o.id : 'a payment'} (${pi || 'unknown'}) was disputed by the card holder. Respond in Stripe before the deadline.`);
   }
   res.json({ received: true });
 });
@@ -938,14 +1056,21 @@ app.post('/api/checkout', h(async (req, res) => {
     db.prepare('UPDATE orders SET shipping_cents=?, shipping_json=?, customer_email=?, tax_state=? WHERE id=?').run(
       priced.shipping, JSON.stringify({ name: a.name, address: { line1: a.line1, line2: a.line2, city: a.city, state: a.state, postal_code: a.zip, country: a.country } }), a.email, a.state, orderId);
   }
+  if (priced.total === 0) {
+    // Nothing to pay (a 100%-off code and no shipping): Stripe has nothing to charge, so the order is finished here instead of waiting for a payment that never comes.
+    fulfillOrder(orderId, { email: a ? a.email : null });
+    const tok = db.prepare('SELECT public_token t FROM orders WHERE id=?').get(orderId).t;
+    return res.json({ url: `${BASE_URL}/thanks.html?order=${orderId}#k=${tok}` });
+  }
   const session = await createStripeSession(orderId, priced, { collectShipping: !a });
   res.json({ url: session.url });
 }));
 
+// Needs the order's private receipt key: the order numbers are sequential, so without a key anyone could count through every order.
 app.get('/api/order-status/:id', (req, res) => {
-  const o = db.prepare('SELECT id,status,total_cents,fulfillment FROM orders WHERE id=?').get(req.params.id);
+  const o = orderByToken(req.params.id, receiptKey(req));
   if (!o) return res.status(404).json({ error: 'Not found' });
-  res.json(o);
+  res.json({ id: o.id, status: o.status, total_cents: o.total_cents, fulfillment: o.fulfillment });
 });
 
 // ---------- verified reviews ----------
@@ -972,12 +1097,14 @@ function reviewerName(o) {
   }
   return n ? maskName(n) : 'Verified buyer';
 }
+// The receipt key can travel in a header (kept out of web address logs) or, for older links, in the address.
+const receiptKey = (req) => String(req.get('x-receipt-key') || req.query.k || '').slice(0, 100);
 function orderByToken(id, k) {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
   return o && o.public_token && safeEqual(k || '', o.public_token) ? o : null;
 }
 app.post('/api/receipt/:id/review', h(async (req, res) => {
-  const o = orderByToken(req.params.id, req.query.k);
+  const o = orderByToken(req.params.id, receiptKey(req));
   if (!o) throw new HttpError(404, 'Receipt not found');
   if (req.body.website) { logSecurity('honeypot', req, 'review'); throw new HttpError(400, GENERIC_REJECT); }
   if (isBlocked('ip', req.ip) || isBlocked('email', o.customer_email)) throw new HttpError(403, GENERIC_REJECT);
@@ -999,7 +1126,7 @@ app.post('/api/receipt/:id/review', h(async (req, res) => {
 
 // Buyer adds a shipping address after an automatic charge (no Stripe page was shown, so nothing collected it).
 app.post('/api/receipt/:id/shipping', h(async (req, res) => {
-  const o = orderByToken(req.params.id, req.query.k);
+  const o = orderByToken(req.params.id, receiptKey(req));
   if (!o) throw new HttpError(404, 'Receipt not found');
   if (req.body.website) throw new HttpError(400, GENERIC_REJECT);
   if (rlCount('ship:' + ipKey(req), 3600e3) >= 10) throw new HttpError(429, 'Too many tries. Please wait a bit.');
@@ -1051,7 +1178,7 @@ app.put('/api/admin/reviews/:id/hide', requireAdmin, h(async (req, res) => {
 // Customer-facing receipt: needs the order's secret token, shows no email/address.
 app.get('/api/receipt/:id', (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
-  if (!o || !o.public_token || !safeEqual(req.query.k || '', o.public_token)) {
+  if (!o || !o.public_token || !safeEqual(receiptKey(req), o.public_token)) {
     return res.status(404).json({ error: 'Receipt not found' });
   }
   const items = db.prepare('SELECT name, unit_price_cents, quantity, custom_json FROM order_items WHERE order_id=?').all(o.id).map((i) => ({ name: i.name, unit_price_cents: i.unit_price_cents, quantity: i.quantity, custom: parseCustom(i) }));
@@ -1287,9 +1414,10 @@ const subscribeLimit = (req) => {
 app.post('/api/subscribe', h(async (req, res) => {
   if (getSetting('mailing_list_on', '') !== '1') throw new HttpError(404, 'The email list is not open right now.');
   if (req.body.website) return res.json({ ok: true });   // honeypot: pretend it worked
+  if (!formTokenOk(req.body.started)) { logSecurity('too_fast', req, 'subscribe'); throw new HttpError(429, GENERIC_REJECT); }
   subscribeLimit(req);
-  const email = String(req.body.email || '').trim().toLowerCase().slice(0, 200);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Please enter a valid email address');
+  const email = Safe.cleanEmail(req.body.email);
+  if (!Safe.validEmail(email)) throw new HttpError(400, 'Please enter a valid email address');
   if (req.body.consent !== true) throw new HttpError(400, 'Please tick the box so we know you want emails');
   if (db.prepare('SELECT COUNT(*) c FROM subscribers').get().c >= LIST_MAX.subscribers) { logSecurity('list_full', req, 'subscribers'); throw new HttpError(503, 'The email list is not taking sign-ups right now.'); }
   const source = String(req.body.source || 'links').replace(/[^a-z0-9_-]/gi, '').slice(0, 20) || 'links';
@@ -1498,48 +1626,80 @@ app.put('/api/admin/orders/:id/fulfillment', requireAdmin, h(async (req, res) =>
 }));
 
 // Refunds. Card orders are refunded through Stripe; cash/other (or "I already did it in Stripe") are just recorded.
+// The refund is written down as "intended" BEFORE Stripe is asked (guarded in the database, so two at once can't both pass), and Stripe is given a key that is the same
+// for the same refund, so asking twice can't refund twice. If Outpost stops or Stripe doesn't answer, the next try first asks Stripe what really happened.
 const refunding = new Set();
+const stripeSaidNo = (e) => !!e && ['StripeCardError', 'StripeInvalidRequestError', 'StripePermissionError', 'StripeAuthenticationError', 'StripeIdempotencyError'].includes(e.type);
+async function reconcileRefunds(o) {
+  const list = await stripe.refunds.list({ payment_intent: o.stripe_payment_intent, limit: 100 });
+  const total = (list.data || []).filter((r) => r.status !== 'failed' && r.status !== 'canceled').reduce((a, r) => a + (r.amount || 0), 0);
+  return applyRefundedTotal(o.id, total);   // also clears the "refund started" note
+}
 app.post('/api/admin/orders/:id/refund', requireAdmin, h(async (req, res) => {
   const id = Number(req.params.id);
   if (refunding.has(id)) throw new HttpError(409, 'A refund for this order is already in progress');
   refunding.add(id);
+  let claimed = false, keepNote = false;
   try {
-    const o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
+    let o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
     if (!o) throw new HttpError(404, 'Not found');
     if (o.status !== 'paid') throw new HttpError(400, o.status === 'refunded' ? 'This order is already fully refunded' : 'Only paid orders can be refunded');
+    const cardPay = o.payment_method === 'card' && !req.body.already_refunded;
+    let pi = o.stripe_payment_intent;
+    if (stripe && o.payment_method === 'card' && !pi && o.stripe_session_id && (cardPay || o.refund_intent_cents > 0)) {
+      const sess = await stripe.checkout.sessions.retrieve(o.stripe_session_id);
+      pi = typeof sess.payment_intent === 'string' ? sess.payment_intent : sess.payment_intent && sess.payment_intent.id;
+      if (pi) db.prepare('UPDATE orders SET stripe_payment_intent=? WHERE id=?').run(pi, o.id);
+    }
+    if (o.refund_intent_cents > 0) {
+      // A refund was started earlier and we never heard how it ended. Ask Stripe what really happened before doing anything else.
+      const wanted = o.refund_intent_cents, before = o.refunded_cents;
+      if (stripe && pi) await reconcileRefunds({ ...o, stripe_payment_intent: pi });
+      else db.prepare("UPDATE orders SET refund_intent_cents=0, refund_key='' WHERE id=?").run(id);
+      o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
+      // The refund that was started DID go through: it is now recorded, and asking for the same amount again means "that one", not a second refund.
+      if (o.refunded_cents >= before + wanted && Number(req.body.amount_cents) === wanted) {
+        return res.json({ ok: true, via_stripe: true, already_done: true, refunded_cents: o.refunded_cents, status: o.status === 'refunded' ? 'refunded' : 'paid', restocked: o.restock_requested === 2, restock_waiting: o.restock_requested === 1 });
+      }
+      if (o.status !== 'paid') throw new HttpError(400, 'An earlier refund of this order had gone through. It is now fully refunded.');
+    }
     const left = o.total_cents - o.refunded_cents;
-    const amount = req.body.amount_cents === undefined || req.body.amount_cents === null ? left : Number(req.body.amount_cents);
+    if (req.body.amount_cents === undefined || req.body.amount_cents === null || req.body.amount_cents === '') throw new HttpError(400, 'Enter the amount to refund');
+    const amount = Number(req.body.amount_cents);
     if (!Number.isInteger(amount) || amount < 1 || amount > left) throw new HttpError(400, `Refund must be between $0.01 and $${(left / 100).toFixed(2)}`);
     const note = String(req.body.note || '').trim().slice(0, 300);
+    const key = `refund-${id}-${o.refunded_cents}-${amount}`;
+    // The claim: only one refund can be started at a time, and never for more than what is left. Done in one database step.
+    const got = db.prepare("UPDATE orders SET refund_intent_cents=?, refund_key=? WHERE id=? AND status='paid' AND refund_intent_cents=0 AND refunded_cents=? AND refunded_cents + ? <= total_cents").run(amount, key, id, o.refunded_cents, amount);
+    if (!got.changes) throw new HttpError(409, 'This order changed while you were refunding it. Reload and try again.');
+    claimed = true;
     let viaStripe = false;
-    if (o.payment_method === 'card' && !req.body.already_refunded) {
+    if (cardPay) {
       if (!stripe) throw new HttpError(503, 'Stripe is not connected. Refund it in your Stripe dashboard, then tick "I already refunded this elsewhere".');
-      let pi = o.stripe_payment_intent;
-      if (!pi && o.stripe_session_id) {
-        const sess = await stripe.checkout.sessions.retrieve(o.stripe_session_id);
-        pi = typeof sess.payment_intent === 'string' ? sess.payment_intent : sess.payment_intent && sess.payment_intent.id;
-        if (pi) db.prepare('UPDATE orders SET stripe_payment_intent=? WHERE id=?').run(pi, o.id);
-      }
       if (!pi) throw new HttpError(400, 'Could not find the Stripe payment for this order. Refund it in your Stripe dashboard, then tick "I already refunded this elsewhere".');
-      await stripe.refunds.create({ payment_intent: pi, amount, metadata: { order_id: String(o.id) } });
+      stillSignedIn(req);   // signed out everywhere while we were looking things up? Then stop before any money moves
+      try {
+        await stripe.refunds.create({ payment_intent: pi, amount, metadata: { order_id: String(o.id) } }, { idempotencyKey: key });
+      } catch (e) {
+        if (stripeSaidNo(e)) throw e;   // Stripe clearly refused: nothing was refunded
+        keepNote = true;                // no clear answer: the refund may have happened, so the note stays and the next try checks Stripe first
+        throw new HttpError(502, 'Stripe did not answer, so the refund may or may not have gone through. Try again in a minute: Outpost checks Stripe first, so it cannot be refunded twice.');
+      }
       viaStripe = true;
     }
-    const full = amount === left;
+    const newTotal = o.refunded_cents + amount;
+    let after;
     db.transaction(() => {
-      db.prepare("UPDATE orders SET refunded_cents = refunded_cents + ?, status = CASE WHEN refunded_cents + ? >= total_cents THEN 'refunded' ELSE status END, refund_note = ?, refunded_at = datetime('now') WHERE id = ?")
-        .run(amount, amount, note || null, o.id);
-      if (full && o.refunded_cents === 0 && req.body.restock) {
-        const items = db.prepare('SELECT * FROM order_items WHERE order_id=?').all(o.id);
-        const inc = db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
-        const incV = db.prepare('UPDATE variants SET stock = stock + ? WHERE id = ?');
-        for (const i of items) {
-          if (i.variant_id) { incV.run(i.quantity, i.variant_id); if (i.product_id) syncStock(i.product_id); }
-          else if (i.product_id) inc.run(i.quantity, i.product_id);
-        }
-      }
+      db.prepare("UPDATE orders SET refund_note=?, restock_requested=CASE WHEN ? AND restock_requested=0 THEN 1 ELSE restock_requested END WHERE id=?").run(note || null, req.body.restock ? 1 : 0, o.id);
+      after = applyRefundedTotal(o.id, newTotal);
     })();
-    res.json({ ok: true, via_stripe: viaStripe, refunded_cents: o.refunded_cents + amount, status: full ? 'refunded' : 'paid' });
-  } finally { refunding.delete(id); }
+    claimed = false;
+    res.json({ ok: true, via_stripe: viaStripe, refunded_cents: after.refunded_cents, status: after.status === 'refunded' ? 'refunded' : 'paid',
+      restocked: after.restock_requested === 2, restock_waiting: after.restock_requested === 1 });
+  } finally {
+    if (claimed && !keepNote) { try { db.prepare("UPDATE orders SET refund_intent_cents=0, refund_key='' WHERE id=?").run(id); } catch { /* ignore */ } }
+    refunding.delete(id);
+  }
 }));
 
 // ----- protection: blocklist + recent blocked attempts -----
@@ -1754,7 +1914,7 @@ app.get('/api/admin/customers', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/orders.csv', requireAdmin, (req, res) => {
-  const q = (v) => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };   // a leading = + - @ would run as a formula in Excel, so it gets a ' in front
   const rows = db.prepare("SELECT * FROM orders WHERE status IN ('paid','refunded') ORDER BY id").all();
   const lines = [['Order', 'Date', 'Channel', 'Payment', 'Status', 'Subtotal', 'Discount', 'Discount code', 'Shipping', 'Tax', 'Total', 'Refunded', 'Customer email', 'Fulfillment', 'Tracking', 'Items'].join(',')];
   for (const o of rows) {
@@ -1957,7 +2117,7 @@ function shapeAuction(a, { admin = false, bidder = null } = {}) {
     out.you = { name: bidder.name, is_high: isHigh, has_bid: mine > 0, my_bid_cents: top || null, watching, has_card: !!bidder.stripe_payment_method, card_last4: bidder.card_last4 || null, card_brand: bidder.card_brand || null };
     if (isHigh && order && (phase === 'sold' || phase === 'paid')) {
       out.you.charge = order.charge_status === 'recover' ? 'charging' : (order.charge_status || '');
-      if (phase === 'paid') out.you.receipt_url = `${BASE_URL}/thanks.html?order=${order.id}&k=${order.public_token}`;
+      if (phase === 'paid') out.you.receipt_url = `${BASE_URL}/thanks.html?order=${order.id}#k=${order.public_token}`;
     }
     if (phase === 'sold' && isHigh) out.pay_url = `${BASE_URL}/pay/${a.pay_token}`;
   }
@@ -1984,6 +2144,8 @@ async function saveCardFromSessionId(sessionId) {
   const bd = db.prepare('SELECT * FROM bidders WHERE id=?').get(Number(s.metadata && s.metadata.bidder_id));
   const cust = typeof s.customer === 'string' ? s.customer : s.customer && s.customer.id;
   if (!bd || !bd.stripe_customer_id || cust !== bd.stripe_customer_id) return null;
+  // An older card page finished late must not replace a card saved from a newer one.
+  if (bd.card_at && Number(s.created) * 1000 < bd.card_at) return null;
   const si = s.setup_intent;
   if (!si || typeof si === 'string' || si.status !== 'succeeded') return null;
   const pm = si.payment_method;
@@ -2003,9 +2165,10 @@ app.post('/api/bidders/card', h(async (req, res) => {
   rlAdd('card:' + bidder.id); rlAdd('cardip:' + ipKey(req));
   let cust = bidder.stripe_customer_id;
   if (!cust) {
-    const c = await stripe.customers.create({ email: bidder.email, name: bidder.name, metadata: { bidder_id: String(bidder.id) } });
-    cust = c.id;
-    db.prepare('UPDATE bidders SET stripe_customer_id=? WHERE id=?').run(cust, bidder.id);
+    // Two taps of "Add card" at once make ONE Stripe customer (same key), and whichever is stored first is the one both use.
+    const c = await stripe.customers.create({ email: bidder.email, name: bidder.name, metadata: { bidder_id: String(bidder.id) } }, { idempotencyKey: `outpost-bidder-customer-${bidder.id}` });
+    db.prepare('UPDATE bidders SET stripe_customer_id=? WHERE id=? AND stripe_customer_id IS NULL').run(c.id, bidder.id);
+    cust = db.prepare('SELECT stripe_customer_id c FROM bidders WHERE id=?').get(bidder.id).c;
   }
   const lot = Number(req.body.lot) > 0 ? Number(req.body.lot) : '';
   const session = await stripe.checkout.sessions.create({
@@ -2090,6 +2253,7 @@ async function autoChargeDue() {
         AND bd.stripe_payment_method IS NOT NULL AND bd.stripe_customer_id IS NOT NULL`).all(needAddr);
     for (const r of rows) {
       if ((chargeWait.get(r.id) || 0) > Date.now()) continue;
+      if (isBlocked('email', r.email)) { chargeWait.set(r.id, Date.now() + 3600e3); continue; }   // someone you blocked is never charged automatically
       if (!db.prepare("UPDATE orders SET charge_status='charging' WHERE id=? AND charge_status IN ('','recover') AND status='pending'").run(r.id).changes) continue;
       try {
         // A payment page for this order might be open (the buyer used the payment link): close them, and if one was paid, do not charge again.
@@ -2235,8 +2399,8 @@ app.post('/api/auctions/:id/bids', h(async (req, res) => {
     db.prepare('INSERT INTO bids (auction_id, bidder_id, amount_cents, created_at) VALUES (?,?,?,?)')
       .run(a.id, bidder.id, amount, now);
     // soft close: a late bid pushes the end out so nobody can snipe at the last second
-    if (a.end_at - now <= SOFT_CLOSE_MS) {
-      db.prepare('UPDATE auctions SET end_at=? WHERE id=?').run(now + SOFT_CLOSE_MS, a.id);
+    if (a.end_at - now <= SOFT_CLOSE_MS && a.extensions < SOFT_CLOSE_MAX) {
+      db.prepare('UPDATE auctions SET end_at=?, extensions=extensions+1 WHERE id=?').run(now + SOFT_CLOSE_MS, a.id);
     }
   })();
 
@@ -2255,7 +2419,7 @@ app.get('/pay/:token', async (req, res) => {
     const a = db.prepare('SELECT * FROM auctions WHERE pay_token=?').get(req.params.token);
     if (!a || !a.order_id) return text(404, 'This payment link is not valid.');
     const order = db.prepare('SELECT * FROM orders WHERE id=?').get(a.order_id);
-    if (order.status === 'paid') return res.redirect(303, `/thanks.html?order=${order.id}&k=${order.public_token}`);
+    if (order.status === 'paid') return res.redirect(303, `/thanks.html?order=${order.id}#k=${order.public_token}`);
     if (order.status !== 'pending' || a.status !== 'closed') return text(410, 'This payment link is no longer active.');
     if (!stripe) return text(503, 'Card payments are not set up yet.');
     // The saved card is being charged right now: a second payment page would risk paying twice.

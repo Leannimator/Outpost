@@ -26,21 +26,26 @@
 </main>
 <script>
 (() => {
-  const p = new URLSearchParams(location.search), id = p.get('order'), k = p.get('k');
+  // The receipt key is kept out of web address logs where it can be: our own links carry it after the # (never sent to the server). Stripe's return address
+  // still carries it in the ?k= form, so it is read from either place, remembered for this tab, and removed from the address bar.
+  const p = new URLSearchParams(location.search), id = p.get('order');
+  let k = p.get('k') || new URLSearchParams(location.hash.slice(1)).get('k') || '';
+  try { if (k) sessionStorage.setItem('rk' + id, k); else k = sessionStorage.getItem('rk' + id) || ''; } catch { /* storage blocked */ }
+  if (location.search.includes('k=') || location.hash) history.replaceState(null, '', location.pathname + '?order=' + encodeURIComponent(id || ''));
   const $ = (i) => document.getElementById(i);
   fetch('/api/settings').then((r) => r.json()).then((s) => { OutpostBrand.apply(s); }).catch(() => {});
   let tries = 0;
   async function check() {
     try {
-      const o = await (await fetch('/api/order-status/' + encodeURIComponent(id))).json();
+      const o = await (await fetch('/api/order-status/' + encodeURIComponent(id), { headers: { 'x-receipt-key': k } })).json();
       if (o.status === 'paid') {
         $('h').textContent = "That's a wrap!";
         $('msg').textContent = 'Payment received for order #' + o.id + '. Stripe will email you a receipt.';
         const FUL = { packed: 'Your order is packed and getting ready to ship.', shipped: 'Your order has shipped. Tracking is on your receipt.', delivered: 'Your order was delivered.' };
         if (o.fulfillment && FUL[o.fulfillment]) $('msg').textContent += ' ' + FUL[o.fulfillment];
         else if (k) $('msg').textContent += ' Your receipt shows the returns policy and, once shipped, tracking.';
-        if (k) fetch('/api/receipt/' + encodeURIComponent(id) + '?k=' + encodeURIComponent(k)).then((r) => r.json()).then((rc) => { if (rc.needs_shipping) { $('msg').textContent += ' One more step: please add your shipping address from your receipt.'; $('rcpt').textContent = 'Add shipping address'; $('rcpt').classList.add('btn-primary'); } else if (rc.review_wait) { $('msg').textContent += ' When it ships, you can leave a review from your receipt.'; } }).catch(() => {});
-        if (k) { const a = $('rcpt'); a.href = '/receipt.html?order=' + encodeURIComponent(id) + '&k=' + encodeURIComponent(k); a.hidden = false; }
+        if (k) fetch('/api/receipt/' + encodeURIComponent(id), { headers: { 'x-receipt-key': k } }).then((r) => r.json()).then((rc) => { if (rc.needs_shipping) { $('msg').textContent += ' One more step: please add your shipping address from your receipt.'; $('rcpt').textContent = 'Add shipping address'; $('rcpt').classList.add('btn-primary'); } else if (rc.review_wait) { $('msg').textContent += ' When it ships, you can leave a review from your receipt.'; } }).catch(() => {});
+        if (k) { const a = $('rcpt'); a.href = '/receipt.html?order=' + encodeURIComponent(id) + '#k=' + encodeURIComponent(k); a.hidden = false; }
         return;
       }
     } catch { /* retry */ }

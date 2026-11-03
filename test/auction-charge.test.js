@@ -172,6 +172,7 @@ test('item 27: a second, different payment on an already-paid order is written d
   try {
     const dbh = open(s); const a = await admin(s);
     const w = seedWin(dbh, { card: false });
+    dbh.prepare('INSERT INTO order_sessions (order_id, session_id, created_at) VALUES (?,?,0)').run(w.oid, 'cs_x');
     const done = (pi) => ({ id: 'cs_x', mode: 'payment', payment_status: 'paid', payment_intent: pi, metadata: { order_id: String(w.oid) } });
     assert.equal((await webhook(s, 'checkout.session.completed', done('pi_A'))).status, 200);
     assert.equal(orderRow(dbh, w.oid).status, 'paid');
@@ -191,6 +192,7 @@ test('item 26: a lot paid through its payment link is recorded with the amount t
   try {
     const dbh = open(s);
     const w = seedWin(dbh, { card: false, subtotal: 9500 });
+    dbh.prepare('INSERT INTO order_sessions (order_id, session_id, created_at) VALUES (?,?,0)').run(w.oid, 'cs_y');
     const paid = { id: 'cs_y', mode: 'payment', payment_status: 'paid', payment_intent: 'pi_Z', amount_total: 10450, automatic_tax: { enabled: true }, total_details: { amount_tax: 950 }, metadata: { order_id: String(w.oid) } };
     assert.equal((await webhook(s, 'checkout.session.completed', paid)).status, 200);
     const o = orderRow(dbh, w.oid);
@@ -198,6 +200,7 @@ test('item 26: a lot paid through its payment link is recorded with the amount t
     // a canceled order is never rewritten by a late payment event
     const w2 = seedWin(dbh, { card: false, subtotal: 5000 });
     dbh.prepare("UPDATE orders SET status='canceled' WHERE id=?").run(w2.oid);
+    dbh.prepare('INSERT INTO order_sessions (order_id, session_id, created_at) VALUES (?,?,0)').run(w2.oid, 'cs_z');
     await webhook(s, 'checkout.session.completed', { ...paid, id: 'cs_z', payment_intent: 'pi_Q', metadata: { order_id: String(w2.oid) } });
     assert.equal(orderRow(dbh, w2.oid).total_cents, 5000);
     dbh.close();

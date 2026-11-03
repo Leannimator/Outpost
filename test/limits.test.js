@@ -7,7 +7,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { startServer, sleep } = require('./helpers');
 
-const started = () => Date.now() - 5000;   // passes the "too fast" form check
+const started = (s) => s.formToken();   // a signed start time that passes the "too fast" form check
 const statuses = async (srv, method, url, n, body) => { const out = []; for (let i = 0; i < n; i++) out.push((await srv.j(method, url, body)).status); return out; };
 
 test('item 5: /card-saved is rate limited (it used to call Stripe on every visit)', async () => {
@@ -49,11 +49,11 @@ test('items 6 and 7: one IPv6 visitor cannot look like many (grouped by /64)', a
   try {
     let refusedAt = -1;
     for (let i = 0; i < 45 && refusedAt < 0; i++) {
-      const r = await s.j('POST', '/api/bidders', { name: 'x', email: 'nope', started: started() }, { 'x-forwarded-for': `2001:db8:1:1::${i + 1}` });
+      const r = await s.j('POST', '/api/bidders', { name: 'x', email: 'nope', started: await started(s) }, { 'x-forwarded-for': `2001:db8:1:1::${i + 1}` });
       if (r.status === 429) refusedAt = i;
     }
     assert.ok(refusedAt > 20 && refusedAt <= 32, `refused at try ${refusedAt}`);
-    const other = await s.j('POST', '/api/bidders', { name: 'x', email: 'nope', started: started() }, { 'x-forwarded-for': '2001:db8:2:2::1' });
+    const other = await s.j('POST', '/api/bidders', { name: 'x', email: 'nope', started: await started(s) }, { 'x-forwarded-for': '2001:db8:2:2::1' });
     assert.equal(other.status, 400, 'a different /64 block is a different visitor');
   } finally { s.stop(); }
 });
@@ -70,9 +70,9 @@ test('item 8: the email list and bidder list have hard size caps', async () => {
       for (let i = 0; i < 20000; i++) bid.run('n', `b${i}@example.com`, 'tok' + i, Date.now());
     })();
     dbh.close();
-    const sub = await s.j('POST', '/api/subscribe', { email: 'new@example.com', consent: true });
+    const sub = await s.j('POST', '/api/subscribe', { email: 'new@example.com', consent: true, started: await s.formToken() });
     assert.equal(sub.status, 503);
-    const bidder = await s.j('POST', '/api/bidders', { name: 'New Person', email: 'new@example.com', started: started() });
+    const bidder = await s.j('POST', '/api/bidders', { name: 'New Person', email: 'new@example.com', started: await started(s) });
     assert.equal(bidder.status, 503);
   } finally { s.stop(); }
 });
@@ -98,7 +98,7 @@ test('item 10: a captcha check that never answers gives up instead of hanging', 
   const s = await startServer({ TURNSTILE_SECRET_KEY: 'test-secret', TURNSTILE_VERIFY_URL: `http://127.0.0.1:${hang.address().port}/verify` });
   try {
     const t = Date.now();
-    const r = await s.j('POST', '/api/bidders', { name: 'x', email: 'a@example.com', started: started(), captcha: 'token' });
+    const r = await s.j('POST', '/api/bidders', { name: 'x', email: 'a@example.com', started: await started(s), captcha: 'token' });
     assert.equal(r.status, 400);
     assert.ok(Date.now() - t < 9000, `took ${Date.now() - t}ms`);
   } finally { s.stop(); hang.close(); }

@@ -36,12 +36,13 @@ test.before(async () => {
 });
 test.after(() => { if (proc) proc.kill('SIGKILL'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
 
-const started = () => Date.now() - 5000; // passes the "too fast" check
+let tokCache = null;   // a signed "page loaded" time from the server, at least 1.2 seconds old, so the "too fast" check passes
+const started = async () => { if (!tokCache) { tokCache = (await j('GET', '/api/form-token')).data.token; await sleep(1400); } return tokCache; };
 
 test('item 1: a 100 KB hostile email no longer freezes the server', async () => {
   const email = 'a@' + '.'.repeat(90000) + '@';
   const [bad, other] = await Promise.all([
-    j('POST', '/api/bidders', { name: 'x', email, started: started() }),
+    j('POST', '/api/bidders', { name: 'x', email, started: await started() }),
     (async () => { await sleep(50); return j('GET', '/api/settings'); })(),
   ]);
   assert.equal(bad.status, 400);
@@ -51,7 +52,7 @@ test('item 1: a 100 KB hostile email no longer freezes the server', async () => 
 
 test('item 1: rejected sign-ups are counted and eventually refused', async () => {
   let last;
-  for (let i = 0; i < 40; i++) last = await j('POST', '/api/bidders', { name: 'x', email: 'nope', started: started() });
+  for (let i = 0; i < 40; i++) last = await j('POST', '/api/bidders', { name: 'x', email: 'nope', started: await started() });
   assert.equal(last.status, 429);
 });
 

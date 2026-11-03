@@ -16,7 +16,8 @@ function cleanEmail(raw) {
 // True if the email looks right. Length is checked first, so the pattern only ever sees short text.
 function validEmail(email) {
   if (typeof email !== 'string' || email.length === 0 || email.length > EMAIL_MAX) return false;
-  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
+  // A first character of = + - | is refused: spreadsheets treat it as a formula when the list is exported.
+  return /^[^@\s=+\-|][^@\s]*@[^@\s]+\.[^@\s]+$/.test(email);
 }
 
 // Tidy review text: cap the input first, then trim and squash trailing spaces before line breaks.

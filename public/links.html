@@ -75,11 +75,12 @@
       ${soc.length ? `<div class="sociallist">${soc.map(([k, v]) => `<a class="social" href="${esc(k === 'email' ? 'mailto:' + v : v)}" ${k === 'email' ? '' : 'target="_blank" rel="noopener noreferrer me"'}>${LABEL[k]}</a>`).join('')}</div>` : ''}
       <div class="lpfoot"><a href="store.html">Visit the shop</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></div>`;
     OutpostBrand.apply(s);
+    let jstart = ''; fetch('/api/form-token').then((r) => r.json()).then((j) => { jstart = j.token; }).catch(() => {});
     const f = $('join');
     if (f) f.onsubmit = async (e) => {
       e.preventDefault(); $('jgo').disabled = true; $('jmsg').innerHTML = '';
       try {
-        const r = await fetch('/api/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('jem').value, consent: $('jok').checked, source: 'links', website: $('jhp').value }) });
+        const r = await fetch('/api/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('jem').value, consent: $('jok').checked, source: 'links', started: jstart, website: $('jhp').value }) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || 'Something went wrong. Please try again.');
         f.innerHTML = '<h2 style="margin-bottom:4px">You’re on the list</h2><p class="muted" style="margin:0">Thank you! Watch your inbox for news from ' + esc(s.store_name) + '.</p>';

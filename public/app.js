@@ -387,7 +387,7 @@
         $('#mcancel', m.el).onclick = async () => { stop(); m.close(); try { await post(`/api/admin/orders/${r.orderId}/cancel`); } catch { /* ignore */ } };
         timer = setInterval(async () => {
           try {
-            const s = await (await fetch('/api/order-status/' + r.orderId)).json();
+            const s = await api('/api/admin/orders/' + r.orderId);
             if (s.status === 'paid') { stop(); m.close(); saleComplete(await api('/api/admin/orders/' + r.orderId)); }
             else if (s.status === 'canceled') { stop(); const w = $('#wait', m.el); if (w) w.textContent = 'That payment page expired. Cancel and try again.'; }
           } catch { /* keep polling */ }
@@ -404,7 +404,7 @@
           <p class="muted">Payment complete. Thanks for supporting independent artists!</p>
           <p><b style="font-size:22px">${fmt(order.total_cents)}</b></p>
           <div class="row"><button class="btn btn-dark" id="newsale">New Sale</button>
-            <a class="btn" id="rcpt" target="_blank" rel="noopener" href="/receipt.html?order=${order.id}&k=${esc(order.public_token)}">View Receipt</a></div>
+            <a class="btn" id="rcpt" target="_blank" rel="noopener" href="/receipt.html?order=${order.id}#k=${esc(order.public_token)}">View Receipt</a></div>
         </div>`, { wide: true });
       if (window.OutpostBrand) OutpostBrand.apply(settings);
       $('#newsale', m.el).onclick = () => { m.close(); route(); };
@@ -766,7 +766,7 @@
       const act = [];
       if (a.phase === 'live') act.push(`<a class="btn btn-sm" target="_blank" rel="noopener" href="/auction.html?lot=${a.id}">Live screen</a>`, `<button class="btn btn-sm" data-act="end" data-id="${a.id}">End now</button>`);
       if (a.phase === 'sold') act.push(`<button class="btn btn-sm btn-primary" data-act="copy" data-id="${a.id}">Copy payment link</button>`, `<a class="btn btn-sm" href="${esc(mailto(a))}">Email winner</a>`, `<button class="btn btn-sm" data-act="next" data-id="${a.id}">Didn't pay → next bidder</button>`);
-      if (a.phase === 'paid') act.push(`<a class="btn btn-sm" target="_blank" rel="noopener" href="/receipt.html?order=${a.order.id}&k=${esc(a.order.public_token)}">Receipt</a>`);
+      if (a.phase === 'paid') act.push(`<a class="btn btn-sm" target="_blank" rel="noopener" href="/receipt.html?order=${a.order.id}#k=${esc(a.order.public_token)}">Receipt</a>`);
       if (['live', 'scheduled', 'sold'].includes(a.phase)) act.push(`<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${a.id}">Cancel lot</button>`);
       if (a.bids.length) act.push(`<button class="btn btn-sm btn-ghost" data-act="bids" data-id="${a.id}">Bids (${a.bids.filter((b) => !b.voided).length})</button>`);
       const bids = open.has(a.id) ? `<div class="bidlist">${a.bids.map((b) => `<div class="b${b.voided ? ' void' : ''}"><b>${fmt(b.amount_cents)}</b><span>${esc(b.name)}</span><span class="muted">${esc(b.email)}</span><span class="muted small">${fmtDate(b.created_at)}</span><span class="spacer"></span><button class="link-btn" data-act="block" data-email="${esc(b.email)}">Block</button> ${!b.voided && a.phase !== 'sold' && a.phase !== 'paid' && a.phase !== 'unsold' && a.phase !== 'canceled' ? `<button class="link-btn" data-act="void" data-id="${b.id}">Remove bid</button>` : ''}</div>`).join('')}</div>` : '';
@@ -948,7 +948,7 @@
           ${o.payment_method === 'card' ? '<label class="check"><input type="checkbox" id="ralready"> <span>I already refunded this in Stripe</span></label>' : '<div class="hint">This was a cash/other sale, so Outpost records the refund and you hand the money back yourself.</div>'}
           <button class="btn btn-danger" id="rgo">Refund</button>` : '<div class="muted small">Nothing left to refund.</div>'}
         <div id="rmsg"></div></div>
-      <a class="btn btn-ghost btn-block mt" target="_blank" rel="noopener" href="/receipt.html?order=${o.id}&k=${esc(o.public_token || '')}">Open receipt</a>
+      <a class="btn btn-ghost btn-block mt" target="_blank" rel="noopener" href="/receipt.html?order=${o.id}#k=${esc(o.public_token || '')}">Open receipt</a>
       <button class="btn btn-ghost btn-block mt" id="evid">Dispute evidence page</button>
       <div class="hint center">If a buyer disputes the charge, this one page has the receipt, tracking, policy and timestamps to send to Stripe.</div>
       <button class="btn btn-ghost btn-block mt" id="mclose">Close</button></div>`, { wide: true });
@@ -972,7 +972,7 @@
       if (o.customer_email) q('#fmail').onclick = (e) => {
         e.preventDefault();
         const trk = q('#trk').value.trim(), car = q('#car').value.trim();
-        const link = `${location.origin}/receipt.html?order=${o.id}&k=${o.public_token}`;
+        const link = `${location.origin}/receipt.html?order=${o.id}#k=${o.public_token}`;
         const msg = ful === 'shipped' ? [`Your order #${o.id} has shipped`, `Hi ${hi},\n\nGood news, your order is on its way!${trk ? `\n\n${car ? car + ' ' : ''}tracking: ${trk}` : ''}\n\nYour receipt: ${link}\n\nThank you for supporting independent artists!`]
           : ful === 'delivered' ? [`Your order #${o.id} was delivered`, `Hi ${hi},\n\nYour order should have arrived. If anything isn’t right, just reply to this email.\n\nThank you!`]
           : [`About your order #${o.id}`, `Hi ${hi},\n\nThanks for your order #${o.id}.\n\nYour receipt: ${link}\n\n`];
@@ -985,7 +985,7 @@
       const already = q('#ralready') ? q('#ralready').checked : false;
       if (!confirm(`Refund ${fmt(cents)} on order #${o.id}?${o.payment_method === 'card' && !already ? ' This sends the money back to the buyer’s card through Stripe.' : ''}`)) return;
       q('#rgo').disabled = true;
-      try { await post(`/api/admin/orders/${o.id}/refund`, { amount_cents: cents, note: q('#rnote').value, restock: q('#rstock').checked, already_refunded: already }); toast('Refund recorded'); m.close(); done(); }
+      try { const rr = await post(`/api/admin/orders/${o.id}/refund`, { amount_cents: cents, note: q('#rnote').value, restock: q('#rstock').checked, already_refunded: already }); toast(rr && rr.restock_waiting ? 'Refund recorded. The items go back in stock once the order is fully refunded.' : 'Refund recorded'); m.close(); done(); }
       catch (e) { q('#rmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; q('#rgo').disabled = false; }
     };
   }

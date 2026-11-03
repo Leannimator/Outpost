@@ -259,6 +259,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS order_sessions (
   PRIMARY KEY (order_id, session_id)
 )`);
 
+// Refunds: the intent is written down BEFORE Stripe is asked, so a crash in between can be sorted out afterwards (review items 64, 69).
+addCol('orders', 'refund_intent_cents', 'INTEGER NOT NULL DEFAULT 0');
+addCol('orders', 'refund_key', "TEXT NOT NULL DEFAULT ''");
+addCol('orders', 'restock_requested', 'INTEGER NOT NULL DEFAULT 0');   // "put the items back" was ticked on a part refund: done when the order is fully refunded
+addCol('orders', 'late_payment', "TEXT NOT NULL DEFAULT ''");          // payment id of money that arrived AFTER the order was canceled
+addCol('orders', 'late_paid_cents', 'INTEGER');
+addCol('auctions', 'extensions', 'INTEGER NOT NULL DEFAULT 0');        // how many times late bids pushed the end out
+
 // order_items.product_id used to be NOT NULL; auction lots have no product row.
 const pid = cols('order_items').find((c) => c.name === 'product_id');
 if (pid && pid.notnull === 1) {
@@ -279,6 +287,8 @@ if (pid && pid.notnull === 1) {
     COMMIT;
   `);
 }
+
+addCol('order_items', 'stock_taken', 'INTEGER');                       // how many were really taken out of stock when it was paid (NULL on older orders)
 
 // Backfills for rows that existed before the new columns
 db.exec(`UPDATE products SET images = json_array(image_url)

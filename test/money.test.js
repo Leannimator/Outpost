@@ -94,7 +94,8 @@ test('item 62: the price the shopper saw is the price they pay', async () => {
     const pid = await addProduct(a, { stock: 10, price_cents: 1000 });
     const q = (await quote(s, [{ id: pid, qty: 1 }], { address: ADDR })).data;
     await a.put('/api/admin/products/' + pid, { name: 'Thing', price_cents: 1900, stock: 10 });
-    const body = (extra) => ({ items: [{ id: pid, qty: 1 }], address: ADDR, started: Date.now() - 5000, website: '', ...extra });
+    const tk = await s.formToken();
+    const body = (extra) => ({ items: [{ id: pid, qty: 1 }], address: ADDR, started: tk, website: '', ...extra });
     const stale = await s.j('POST', '/api/checkout', body({ expected_total_cents: q.total_cents }));
     assert.equal(stale.status, 409); assert.match(stale.data.error, /Prices changed/); assert.equal(stale.data.total_cents, 1900);
     const fresh = await s.j('POST', '/api/checkout', body({ expected_total_cents: 1900 }));
@@ -184,6 +185,7 @@ test('item 22: if a payment still arrives for more than is left, the owner is to
     const dbh = open(s);
     const oid = holdOrder(dbh, pid, 1, 'late@example.com');
     dbh.prepare('UPDATE products SET stock=0 WHERE id=?').run(pid);   // sold at the register meanwhile
+    dbh.prepare('INSERT INTO order_sessions (order_id, session_id, created_at) VALUES (?,?,0)').run(oid, 'cs_1');
     const payload = JSON.stringify({ id: 'evt_1', object: 'event', type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'payment', payment_status: 'paid', metadata: { order_id: String(oid) }, customer_details: { email: 'late@example.com' } } } });
     const header = Stripe.webhooks.generateTestHeaderString({ payload, secret: 'whsec_test' });
     const res = await fetch(s.base + '/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': header }, body: payload });

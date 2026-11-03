@@ -78,7 +78,7 @@ test('item 17 (code half): TRUST_PROXY=true is refused, so a faked address heade
   try {
     let refusedAt = -1;
     for (let i = 0; i < 45 && refusedAt < 0; i++) {
-      const r = await s.j('POST', '/api/bidders', { name: 'x', email: 'nope', started: Date.now() - 5000 }, { 'x-forwarded-for': `203.0.113.${i + 1}` });
+      const r = await s.j('POST', '/api/bidders', { name: 'x', email: 'nope', started: await s.formToken() }, { 'x-forwarded-for': `203.0.113.${i + 1}` });
       if (r.status === 429) refusedAt = i;
     }
     assert.ok(refusedAt > 20 && refusedAt <= 32, `all the faked addresses counted as one visitor; refused at try ${refusedAt}`);

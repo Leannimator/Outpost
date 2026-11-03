@@ -53,7 +53,7 @@
   let offset = 0, timers = [];
 
   let siteKey = '', cardRequired = false, needsAddr = false, shopName = 'the seller', cardInfo = null;
-  const loadedAt = Date.now();
+  let loadedAt = ''; fetch('/api/form-token').then((r) => r.json()).then((j) => { loadedAt = j.token; }).catch(() => {});   // a signed start time from the server (see form tokens)
   fetch('/api/settings').then((r) => r.json()).then((s) => { siteKey = s.captcha_site_key || ''; cardRequired = !!s.bid_card_required; needsAddr = !!s.needs_address; shopName = s.store_name || shopName; OutpostBrand.apply(s); }).catch(() => {});
   const headers = () => (bidder ? { 'x-bidder-token': bidder.token } : {});
   const bk = isStaff() ? '<a href="/">← Back to Outpost</a>' : `<a href="auction.html">← All lots</a>`;

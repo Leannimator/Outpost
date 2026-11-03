@@ -20,10 +20,15 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const p = new URLSearchParams(location.search);
+  // The receipt key is read from the ?k= form (older links) or after the # (newer links, which never reach the server's logs), remembered for this tab,
+  // sent in a header, and taken out of the address bar.
+  let RK = p.get('k') || new URLSearchParams(location.hash.slice(1)).get('k') || '';
+  try { if (RK) sessionStorage.setItem('rk' + p.get('order'), RK); else RK = sessionStorage.getItem('rk' + p.get('order')) || ''; } catch { /* storage blocked */ }
+  if (location.search.includes('k=') || location.hash) history.replaceState(null, '', location.pathname + '?order=' + encodeURIComponent(p.get('order') || ''));
   const stars = (n) => `<span class="stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(5 - n)}</span></span>`;
   function extras(o) {
     const box = document.getElementById('extra'); let html = '';
-    const q = `/api/receipt/${encodeURIComponent(p.get('order'))}`, k = encodeURIComponent(p.get('k') || '');
+    const q = `/api/receipt/${encodeURIComponent(p.get('order'))}`;
     if (o.needs_shipping) html += `<div class="card xcard" id="addr"><h2>Where should we ship it?</h2><p class="muted small">Your card was charged automatically, so the seller needs your shipping address.</p>
       <div class="hp" aria-hidden="true"><input id="a-web" tabindex="-1" autocomplete="off"></div>
       <label class="field"><span class="label">Full name</span><input class="input" id="a-name" autocomplete="name"></label>
@@ -48,7 +53,7 @@
     if (go) go.onclick = async () => {
       const v = (id) => document.getElementById(id).value;
       try {
-        const r = await fetch(`${q}/shipping?k=${k}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: v('a-name'), line1: v('a-l1'), line2: v('a-l2'), city: v('a-city'), state: v('a-state'), postal_code: v('a-zip'), country: v('a-country'), website: v('a-web') }) });
+        const r = await fetch(`${q}/shipping`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-receipt-key': RK }, body: JSON.stringify({ name: v('a-name'), line1: v('a-l1'), line2: v('a-l2'), city: v('a-city'), state: v('a-state'), postal_code: v('a-zip'), country: v('a-country'), website: v('a-web') }) });
         const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not save');
         document.getElementById('addr').innerHTML = '<h2>Thank you!</h2><p>The seller has your address and will ship your order.</p>';
       } catch (e) { document.getElementById('a-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
@@ -61,14 +66,14 @@
     if (rg) rg.onclick = async () => {
       if (!rating) return (document.getElementById('r-msg').innerHTML = '<div class="msg err">Tap a star rating first</div>');
       try {
-        const r = await fetch(`${q}/review?k=${k}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating, body: document.getElementById('r-body').value, website: document.getElementById('r-web').value }) });
+        const r = await fetch(`${q}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-receipt-key': RK }, body: JSON.stringify({ rating, body: document.getElementById('r-body').value, website: document.getElementById('r-web').value }) });
         const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not post');
         extras({ ...o, review: d.review, can_review: d.can_review, review_wait: false });
         document.getElementById('extra').insertAdjacentHTML('afterbegin', '<div class="msg">Thank you! Your review is up.</div>');
       } catch (e) { document.getElementById('r-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
   }
-  fetch(`/api/receipt/${encodeURIComponent(p.get('order'))}?k=${encodeURIComponent(p.get('k') || '')}`)
+  fetch(`/api/receipt/${encodeURIComponent(p.get('order'))}`, { headers: { 'x-receipt-key': RK } })
     .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error); return d; })
     .then((o) => {
       const when = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });

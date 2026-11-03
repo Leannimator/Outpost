@@ -53,7 +53,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pic = (url, name) => url ? `<img class="pic" src="${esc(url)}" alt="">` : `<div class="pic ph">${esc((name || '?').charAt(0).toUpperCase())}</div>`;
-  const loadedAt = Date.now();
+  let loadedAt = ''; fetch('/api/form-token').then((r) => r.json()).then((j) => { loadedAt = j.token; }).catch(() => {});   // a signed start time from the server (see form tokens)
   let products = [], rate = 0, q = '', cat = 'All', line = '', lines = [], resting = false, settings = {}, maxQty = 10;
   let code = '', quote = null, captchaToken = '', captchaId = null;
   const cart = new Map();   // key "id" or "id:variantId" -> quantity
