@@ -24,6 +24,12 @@ function startFakeStripe() {
         await new Promise((r) => setTimeout(r, 200));   // a little thinking time, so two taps at once overlap
         return send(res, 200, c);
       }
+      if (req.method === 'DELETE' && /^\/v1\/customers\/[^/]+$/.test(p)) {
+        const id = p.split('/').pop();
+        if (st.failCustomerDelete) return err(res, 500, 'api_error', 'boom');
+        st.customers = st.customers.filter((c) => c.id !== id); (st.deletedCustomers || (st.deletedCustomers = [])).push(id);
+        return send(res, 200, { id, object: 'customer', deleted: true });
+      }
       if (req.method === 'POST' && p === '/v1/payment_intents') {
         const key = req.headers['idempotency-key'];
         if (key && st.keys.has(key)) {

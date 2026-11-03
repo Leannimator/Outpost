@@ -6,10 +6,21 @@ const pathx = require('path');
 // DATA_DIR keeps the database and uploaded photos together in one folder (handy for hosts with a single persistent disk).
 const DATA_DIR = process.env.DATA_DIR ? pathx.resolve(process.env.DATA_DIR) : '';
 if (DATA_DIR) fsx.mkdirSync(DATA_DIR, { recursive: true });
-const db = new Database(process.env.DB_PATH || (DATA_DIR ? pathx.join(DATA_DIR, 'outpost.db') : 'pos.db'));
+// The database file is found the same way no matter which folder the app is started from (it used to be relative to the
+// current folder, so starting from elsewhere opened an empty shop and made a new file there; review item 81).
+const DB_FILE = process.env.DB_PATH ? pathx.resolve(process.env.DB_PATH) : (DATA_DIR ? pathx.join(DATA_DIR, 'outpost.db') : pathx.join(__dirname, 'pos.db'));
+const db = new Database(DB_FILE);
 db.dataDir = DATA_DIR;
+db.file = DB_FILE;
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = FULL');     // a power cut can no longer lose the last few saved sales (it was NORMAL)
+db.pragma('secure_delete = ON');     // removed rows (a deleted subscriber, an anonymised customer) are overwritten, not left in the file
+// Only the app's own user may read the database, its journal files and any backup made next to it.
+const lockFiles = () => { for (const f of [DB_FILE, DB_FILE + '-wal', DB_FILE + '-shm']) { try { fsx.chmodSync(f, 0o600); } catch { /* not there, or not supported here */ } } };
+lockFiles();
 db.pragma('foreign_keys = OFF'); // off while migrating; switched on at the bottom
+
+const hadTables = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='orders'").get();   // false on a brand-new database
 
 // ---------- current schema (fresh installs) ----------
 db.exec(`
@@ -192,17 +203,55 @@ CREATE TABLE IF NOT EXISTS watches (
 `);
 
 // ---------- migrations (databases created by earlier versions) ----------
+// Everything below runs in ONE transaction: if any step fails nothing is changed (it used to leave a half-updated database that
+// crashed on every start; review item 75). PRAGMA user_version says which round of changes a database has had.
+const SCHEMA_VERSION = 2;
+const startVersion = db.pragma('user_version', { simple: true });
 const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all();
 const addCol = (t, name, def) => {
-  if (!cols(t).some((c) => c.name === name)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${def}`);
+  if (cols(t).some((c) => c.name === name)) return false;
+  db.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${def}`);
+  return true;
 };
+
+// order_items.product_id used to be NOT NULL (auction lots have no product row). Rebuilding the table is the risky step, so a copy of
+// the whole database is made first (next to it, same private permissions) and the table is rebuilt with every column it has now.
+const needsRebuild = hadTables && (() => { const c = cols('order_items').find((x) => x.name === 'product_id'); return !!(c && c.notnull === 1); })();
+if (needsRebuild) {
+  const copy = DB_FILE + '.before-update.bak';
+  try { fsx.rmSync(copy, { force: true }); db.exec(`VACUUM INTO '${copy.replace(/'/g, "''")}'`); try { fsx.chmodSync(copy, 0o600); } catch { /* ignore */ } console.log('Outpost: a copy of your database was saved as ' + copy + ' before updating it. Delete it once the shop looks right (it holds customer details).'); }
+  catch (e) { console.error('Outpost: could not make a safety copy before updating (' + (e && e.message) + '). Continuing is not safe; stopping.'); process.exit(1); }
+}
+
+try {
+  db.exec('BEGIN IMMEDIATE');
+  if (needsRebuild) {
+    const old = cols('order_items').map((c) => c.name);
+    db.exec(`
+      CREATE TABLE order_items_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id),
+        name TEXT NOT NULL,
+        unit_price_cents INTEGER NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        variant_id INTEGER,
+        custom_json TEXT,
+        stock_taken INTEGER
+      )`);
+    const keep = ['id', 'order_id', 'product_id', 'name', 'unit_price_cents', 'quantity', 'variant_id', 'custom_json', 'stock_taken'].filter((c) => old.includes(c));
+    db.exec(`INSERT INTO order_items_new (${keep.join(',')}) SELECT ${keep.join(',')} FROM order_items`);
+    db.exec('DROP TABLE order_items; ALTER TABLE order_items_new RENAME TO order_items;');
+  }
+  addCol('order_items', 'variant_id', 'INTEGER');
+  addCol('order_items', 'custom_json', 'TEXT');
 
 addCol('admin_sessions', 'pw_ver', "TEXT NOT NULL DEFAULT ''");   // which password the session was opened with
 addCol('products', 'description', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'category', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'tags', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'images', "TEXT NOT NULL DEFAULT '[]'");
-addCol('orders', 'subtotal_cents', 'INTEGER NOT NULL DEFAULT 0');
+const subtotalIsNew = addCol('orders', 'subtotal_cents', 'INTEGER NOT NULL DEFAULT 0');
 addCol('orders', 'tax_cents', 'INTEGER NOT NULL DEFAULT 0');
 addCol('orders', 'auction_id', 'INTEGER');
 addCol('orders', 'public_token', 'TEXT');
@@ -223,8 +272,6 @@ addCol('orders', 'charge_error', 'TEXT');
 addCol('products', 'process', "TEXT NOT NULL DEFAULT ''");
 addCol('discounts', 'starts_on', 'TEXT');
 addCol('products', 'sku', "TEXT NOT NULL DEFAULT ''");
-addCol('order_items', 'variant_id', 'INTEGER');
-addCol('order_items', 'custom_json', 'TEXT');
 addCol('products', 'option_label', "TEXT NOT NULL DEFAULT ''");
 addCol('products', 'custom_fields', "TEXT NOT NULL DEFAULT '[]'");
 addCol('orders', 'shipping_cents', 'INTEGER NOT NULL DEFAULT 0');
@@ -267,37 +314,80 @@ addCol('orders', 'late_payment', "TEXT NOT NULL DEFAULT ''");          // paymen
 addCol('orders', 'late_paid_cents', 'INTEGER');
 addCol('auctions', 'extensions', 'INTEGER NOT NULL DEFAULT 0');        // how many times late bids pushed the end out
 
-// order_items.product_id used to be NOT NULL; auction lots have no product row.
-const pid = cols('order_items').find((c) => c.name === 'product_id');
-if (pid && pid.notnull === 1) {
-  db.exec(`
-    BEGIN;
-    CREATE TABLE order_items_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-      product_id INTEGER REFERENCES products(id),
-      name TEXT NOT NULL,
-      unit_price_cents INTEGER NOT NULL,
-      quantity INTEGER NOT NULL CHECK (quantity > 0)
-    );
-    INSERT INTO order_items_new (id, order_id, product_id, name, unit_price_cents, quantity)
-      SELECT id, order_id, product_id, name, unit_price_cents, quantity FROM order_items;
-    DROP TABLE order_items;
-    ALTER TABLE order_items_new RENAME TO order_items;
-    COMMIT;
-  `);
-}
-
 addCol('order_items', 'stock_taken', 'INTEGER');                       // how many were really taken out of stock when it was paid (NULL on older orders)
 
 // Backfills for rows that existed before the new columns
 db.exec(`UPDATE products SET images = json_array(image_url)
          WHERE images = '[]' AND image_url IS NOT NULL AND image_url <> ''`);
-db.exec(`UPDATE orders SET subtotal_cents = total_cents
-         WHERE subtotal_cents = 0 AND tax_cents = 0 AND total_cents > 0`);
+// Only for orders that existed before the subtotal column did. (It used to run on EVERY start and rewrote real orders,
+// e.g. a $0 item with $5 shipping became subtotal $5; review item 76.)
+if (subtotalIsNew) db.exec(`UPDATE orders SET subtotal_cents = total_cents WHERE subtotal_cents = 0 AND tax_cents = 0 AND total_cents > 0`);
 const needToken = db.prepare('SELECT id FROM orders WHERE public_token IS NULL').all();
 const setToken = db.prepare('UPDATE orders SET public_token = ? WHERE id = ?');
 for (const o of needToken) setToken.run(crypto.randomBytes(12).toString('hex'), o.id);
+
+  // ----- round 2 (this release): privacy, indexes, checks -----
+  addCol('subscribers', 'consent_at', 'INTEGER');                      // when the box was ticked (older rows: NULL)
+  if (startVersion < 2) {
+    // Bidder tokens are stored as a hash from now on (a leaked database or backup no longer holds working sign-ins).
+    const hashTok = db.prepare('UPDATE bidders SET token = ? WHERE id = ?');
+    for (const b of db.prepare('SELECT id, token FROM bidders').all()) hashTok.run(crypto.createHash('sha256').update(String(b.token)).digest('hex'), b.id);
+    db.exec("UPDATE admin_sessions SET ip = ''");                       // sessions no longer remember an address
+  }
+
+  // Indexes: without these the order export and the customers list scanned whole tables once per order (review item 78).
+  for (const sql of [
+    'CREATE INDEX IF NOT EXISTS idx_items_order ON order_items (order_id)',
+    'CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_orders_session ON orders (stripe_session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_orders_intent ON orders (stripe_payment_intent)',
+    'CREATE INDEX IF NOT EXISTS idx_orders_auction ON orders (auction_id)',
+    'CREATE INDEX IF NOT EXISTS idx_orders_email ON orders (customer_email)',
+    'CREATE INDEX IF NOT EXISTS idx_auctions_status ON auctions (status, end_at)',
+    'CREATE INDEX IF NOT EXISTS idx_auctions_pay ON auctions (pay_token)',
+    'CREATE INDEX IF NOT EXISTS idx_bidders_email ON bidders (email)',
+    'CREATE INDEX IF NOT EXISTS idx_bids_bidder ON bids (bidder_id)',
+    'CREATE INDEX IF NOT EXISTS idx_watches_auction ON watches (auction_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sessions_by_order ON order_sessions (session_id)',
+  ]) { try { db.exec(sql); } catch (e) { console.warn('Outpost: skipped a speed-up index (' + e.message + '). Everything still works.'); } }
+  // Rules the database itself now enforces (a bug or a typo can no longer store these): order status, review rating, stock never below zero.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_orders_status_ins BEFORE INSERT ON orders WHEN NEW.status NOT IN ('pending','paid','canceled','refunded')
+      BEGIN SELECT RAISE(ABORT, 'invalid order status'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_orders_status_upd BEFORE UPDATE OF status ON orders WHEN NEW.status NOT IN ('pending','paid','canceled','refunded')
+      BEGIN SELECT RAISE(ABORT, 'invalid order status'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_reviews_rating_ins BEFORE INSERT ON reviews WHEN NEW.rating NOT BETWEEN 1 AND 5
+      BEGIN SELECT RAISE(ABORT, 'invalid rating'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_reviews_rating_upd BEFORE UPDATE OF rating ON reviews WHEN NEW.rating NOT BETWEEN 1 AND 5
+      BEGIN SELECT RAISE(ABORT, 'invalid rating'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_products_stock_ins BEFORE INSERT ON products WHEN NEW.stock < 0
+      BEGIN SELECT RAISE(ABORT, 'stock cannot be negative'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_products_stock_upd BEFORE UPDATE OF stock ON products WHEN NEW.stock < 0
+      BEGIN SELECT RAISE(ABORT, 'stock cannot be negative'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_variants_stock_ins BEFORE INSERT ON variants WHEN NEW.stock < 0
+      BEGIN SELECT RAISE(ABORT, 'stock cannot be negative'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_variants_stock_upd BEFORE UPDATE OF stock ON variants WHEN NEW.stock < 0
+      BEGIN SELECT RAISE(ABORT, 'stock cannot be negative'); END;
+  `);
+  // Unique values. If an older shop already holds duplicates the index is skipped (and said so) rather than refusing to start.
+  for (const [name, sql] of [
+    ['ux_orders_token', 'CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_token ON orders (public_token)'],
+    ['ux_products_sku', "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_sku ON products (lower(sku)) WHERE sku <> ''"],
+  ]) { try { db.exec(sql); } catch (e) { console.warn(`Outpost: could not add the "${name}" safeguard because existing data has duplicates (${e.message}). Everything still works; fix the duplicates to turn it on.`); } }
+
+  db.pragma('user_version = ' + SCHEMA_VERSION);
+  db.exec('COMMIT');
+} catch (e) {
+  try { db.exec('ROLLBACK'); } catch { /* nothing was open */ }
+  console.error('\nOutpost could not update your database to the new version, so it did not start. NOTHING in your database was changed.\n' +
+    'Reason: ' + (e && e.message) + '\n' +
+    (needsRebuild ? 'A copy of the database from before the update is at ' + DB_FILE + '.before-update.bak\n' : '') +
+    'Please keep this message and ask for help; do not delete your database file.\n');
+  process.exit(1);
+}
+lockFiles();
+// One-time cleanup when an existing shop first gets the overwrite-on-delete setting: rewrite the file so earlier deletions are gone from it too.
+if (hadTables && startVersion < 2) { try { db.exec('VACUUM'); lockFiles(); } catch (e) { console.warn('Outpost: could not compact the database (' + (e && e.message) + '). Not a problem; it will work as it is.'); } }
 
 db.pragma('foreign_keys = ON');
 

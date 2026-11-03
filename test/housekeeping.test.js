@@ -47,5 +47,5 @@ test('removes only unused old sign-ups', () => {
 });
 
 test('running it again changes nothing', () => {
-  assert.deepEqual(pruneAbandoned(db), { orders: 0, bidders: 0 });
+  assert.deepEqual(pruneAbandoned(db), { orders: 0, bidders: 0, wiped: 0 });
 });

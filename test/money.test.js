@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { startServer, PASSWORD } = require('./helpers');
+const { startServer, PASSWORD, hashTok } = require('./helpers');
 
 const open = (s) => new Database(path.join(s.dir, 'outpost.db'));
 async function admin(s) {
@@ -131,7 +131,7 @@ test('item 25: a bidder cannot swap their address while in a running lot', async
   try {
     const dbh = open(s);
     const addr = { email: 'b@example.com', name: 'B', country: 'US', line1: '1 Main', line2: '', city: 'Portland', state: 'OR', zip: '97201' };
-    const bid = dbh.prepare("INSERT INTO bidders (name, email, token, created_at, address_json) VALUES ('B','b@example.com','btok',?,?)").run(Date.now(), JSON.stringify(addr)).lastInsertRowid;
+    const bid = dbh.prepare("INSERT INTO bidders (name, email, token, created_at, address_json) VALUES ('B','b@example.com',?,?,?)").run(hashTok('btok'), Date.now(), JSON.stringify(addr)).lastInsertRowid;
     const aid = dbh.prepare("INSERT INTO auctions (title, starting_bid_cents, increment_cents, start_at, end_at, created_at) VALUES ('Lot',100,100,0,?,0)").run(Date.now() + 3600e3).lastInsertRowid;
     dbh.prepare('INSERT INTO bids (auction_id, bidder_id, amount_cents, created_at) VALUES (?,?,100,0)').run(aid, bid);
     const move = { address: { line1: '9 Far Rd', city: 'Albany', state: 'NY', zip: '12207', country: 'US' } };

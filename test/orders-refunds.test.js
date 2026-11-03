@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const Database = require('better-sqlite3');
 const Stripe = require('stripe');
 const Safe = require('../safe');
-const { startServer, PASSWORD, sleep } = require('./helpers');
+const { startServer, PASSWORD, sleep, hashTok } = require('./helpers');
 const { startFakeStripe } = require('./fakestripe');
 
 const open = (s) => new Database(path.join(s.dir, 'outpost.db'));
@@ -226,7 +226,7 @@ function addBidder(dbh, over = {}) {
   const addr = JSON.stringify({ email: 'z@example.com', name: 'Zed', country: 'US', line1: '1 Main', line2: '', city: 'Portland', state: 'OR', zip: '97201' });
   const token = 'bt' + Math.random().toString(36).slice(2, 12);
   const id = Number(dbh.prepare('INSERT INTO bidders (name, email, token, created_at, address_json, stripe_customer_id, stripe_payment_method, card_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(over.name || 'Zed', over.email || ('z' + Math.random().toString(36).slice(2, 8) + '@example.com'), token, Date.now(), addr, over.cust || null, over.pm || null, over.card_at || null).lastInsertRowid);
+    .run(over.name || 'Zed', over.email || ('z' + Math.random().toString(36).slice(2, 8) + '@example.com'), hashTok(token), Date.now(), addr, over.cust || null, over.pm || null, over.card_at || null).lastInsertRowid);
   return { id, token };
 }
 

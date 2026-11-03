@@ -236,7 +236,7 @@ function startSession(req) {
   const now = Date.now();
   db.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').run(now);
   db.prepare('DELETE FROM admin_sessions WHERE token_hash IN (SELECT token_hash FROM admin_sessions ORDER BY created_at DESC LIMIT -1 OFFSET 19)').run();
-  db.prepare('INSERT INTO admin_sessions (token_hash, created_at, expires_at, ip, pw_ver) VALUES (?,?,?,?,?)').run(Auth.hashToken(token), now, now + SESSION_MS, req.ip || '', pwVersion());
+  db.prepare('INSERT INTO admin_sessions (token_hash, created_at, expires_at, ip, pw_ver) VALUES (?,?,?,?,?)').run(Auth.hashToken(token), now, now + SESSION_MS, '', pwVersion());   // no address is kept with a session
   return { token, expires_at: now + SESSION_MS };
 }
 // Remember this browser as the owner's (or keep the one it already has) and hand back its secret once.
@@ -285,6 +285,8 @@ const themeSettings = () => ({ bg: getSetting('theme_bg', ''), accent: getSettin
 const brandSettings = () => ({ theme: themeSettings(), logo_url: getSetting('logo_url', ''), mascot_url: getSetting('mascot_url', ''), sold_url: getSetting('sold_url', '') });
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// A real calendar day (2026-02-30 and 9999-99-99 have the right shape but are not days).
+const isDate = (v) => { if (typeof v !== 'string' || !DATE_RE.test(v)) return false; const [y, m, d] = v.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return y >= 2000 && y <= 2100 && t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
 // Sales are paused when the switch is on, or when today is on/after the "pause from" date; they resume on the "back on" date.
 const breakOn = () => {
   const from = getSetting('break_from', ''), until = getSetting('break_until', ''), today = todayStr();
@@ -293,6 +295,18 @@ const breakOn = () => {
   if (on && until && today >= until) on = false;
   return on;
 };
+// The shop's own timezone. Discount dates, "pause sales" dates and the day-by-day reports all roll over at midnight in THIS zone
+// (they used to follow the server's clock, which on a host is usually UTC: late afternoon for a US shop; review item 80).
+// It comes from the saved setting "timezone" (an IANA name like America/Los_Angeles) or, failing that, the TZ environment variable.
+const ORIGINAL_TZ = process.env.TZ;
+const validTz = (z) => { if (typeof z !== 'string' || !z || z.length > 60) return false; try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch { return false; } };
+function applyTimezone() {
+  const z = getSetting('timezone', '');
+  if (z && validTz(z)) process.env.TZ = z;
+  else if (ORIGINAL_TZ === undefined) delete process.env.TZ; else process.env.TZ = ORIGINAL_TZ;
+}
+applyTimezone();
+if (ON_INTERNET && !getSetting('timezone', '') && !ORIGINAL_TZ) console.warn('NOTE: no shop timezone is set, so dates and reports follow the server clock (usually UTC). Set it in Settings (or the TZ environment variable).');
 const lowStock = () => { const n = parseInt(getSetting('low_stock', '3'), 10); return Number.isFinite(n) && n >= 0 ? n : 3; };
 const REFUND_PRESETS = ['final', 'days', 'exchange', 'custom'];
 function refundPolicy() {
@@ -331,7 +345,8 @@ const needsAddress = () => true;   // online checkout always asks for the addres
 function cleanAddress(a) {
   a = a && typeof a === 'object' ? a : {};
   const f = (k, n) => String(a[k] == null ? '' : a[k]).trim().slice(0, n);
-  const country = a.country === 'CA' ? 'CA' : 'US';
+  const country = normCountry(a.country);   // only the US and Canada; anything else is refused (it used to be quietly treated as the US)
+  if (!country) throw new HttpError(400, 'Outpost ships within the US and Canada. Message the seller if you are somewhere else.');
   const out = { email: f('email', 200), name: f('name', 100), country, line1: f('line1', 120), line2: f('line2', 120), city: f('city', 80), state: f('state', 2).toUpperCase(), zip: f('zip', 10).toUpperCase() };
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(out.email)) throw new HttpError(400, 'Please enter a valid email address.');
   if (!out.name) throw new HttpError(400, 'Please enter your name.');
@@ -375,7 +390,7 @@ function cleanLinks(inp) {
       if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new HttpError(400, 'Web addresses must start with http or https');
       url = u.toString();   // stored in its cleaned-up form
     } else if (kind === 'link') throw new HttpError(400, 'Add a web address for “' + title + '”');
-    return { kind, title, url, note: String(l.note || '').trim().slice(0, 100), date: kind === 'event' && DATE_RE.test(l.date || '') ? l.date : '', place: kind === 'event' ? String(l.place || '').trim().slice(0, 80) : '', hidden: !!l.hidden };
+    return { kind, title, url, note: String(l.note || '').trim().slice(0, 100), date: kind === 'event' && isDate(l.date || '') ? l.date : '', place: kind === 'event' ? String(l.place || '').trim().slice(0, 80) : '', hidden: !!l.hidden };
   });
 }
 function cleanPolicy(q) {
@@ -935,7 +950,7 @@ function runHousekeeping() {
   try {
     Housekeeping.pruneSecurityLog(db);
     const r = Housekeeping.pruneAbandoned(db);
-    if (r.orders || r.bidders) console.log(`housekeeping: removed ${r.orders} abandoned checkouts and ${r.bidders} unused sign-ups`);
+    if (r.orders || r.bidders || r.wiped) console.log(`housekeeping: removed ${r.orders} abandoned checkouts and ${r.bidders} unused sign-ups, wiped ${r.wiped} old canceled auction orders`);
   } catch (e) { console.error('housekeeping error:', e && e.message); }
 }
 setTimeout(runHousekeeping, 30e3).unref();
@@ -979,6 +994,8 @@ app.post('/webhook', express.raw({ type: 'application/json', inflate: false }), 
   res.json({ received: true });
 });
 
+// The product import takes up to 2000 rows, which is more than the normal 100 KB limit, so it gets a bigger one (and only after sign-in).
+app.use('/api/admin/products/import', requireAdmin, express.json({ limit: '3mb', inflate: false }));
 app.use(express.json({ inflate: false }));   // compressed request bodies are refused: nothing here needs them
 // robots.txt: search engines are welcome, AI crawlers are asked to stay away.
 app.get('/robots.txt', (req, res) => {
@@ -1043,14 +1060,32 @@ app.post('/api/admin/upload', requireAdmin, express.raw({ type: 'image/*', limit
   const ext = sniffImage(req.body);
   if (!ext) return res.status(400).json({ error: 'That file is not a PNG, JPG, GIF, WebP or SVG image' });
   if (ext === 'svg' && Safe.svgProblem(req.body.toString('utf8'))) return res.status(400).json({ error: 'That SVG contains scripts or embedded content, which is not allowed. Re-export it as a plain SVG, or use a PNG.' });
+  // The photo folder shares the shop's disk (1 GB on the default Render disk), so it has a ceiling. IMAGES_MAX_MB changes it.
+  if (imagesSize() + req.body.length > IMAGES_MAX_BYTES) return res.status(400).json({ error: `Your photo storage is full (${Math.round(IMAGES_MAX_BYTES / 1048576)} MB). Remove photos you no longer use first.` });
   const name = rid(8) + '.' + ext;
   fs.writeFileSync(path.join(UPLOAD_DIR, name), req.body);
   res.json({ url: '/images/' + name });
 });
+const IMAGES_MAX_BYTES = (Number(process.env.IMAGES_MAX_MB) > 0 ? Number(process.env.IMAGES_MAX_MB) : 600) * 1048576;
+function imagesSize() { let n = 0; for (const f of fs.readdirSync(UPLOAD_DIR)) { try { const st = fs.statSync(path.join(UPLOAD_DIR, f)); if (st.isFile()) n += st.size; } catch { /* removed meanwhile */ } } return n; }
+// Photos that nothing refers to any more (products, lots, product lines, logo and other settings). Deletes them only when asked to (body {"delete":true}).
+app.post('/api/admin/images/cleanup', requireAdmin, (req, res) => {
+  const text = [db.prepare("SELECT group_concat(COALESCE(images,'') || ' ' || COALESCE(image_url,''), ' ') t FROM products").get().t,
+    db.prepare("SELECT group_concat(COALESCE(image_url,''), ' ') t FROM auctions").get().t,
+    db.prepare("SELECT group_concat(COALESCE(image_url,''), ' ') t FROM lines").get().t,
+    db.prepare('SELECT group_concat(value, \' \') t FROM settings').get().t].join(' ');
+  const unused = [];
+  for (const f of fs.readdirSync(UPLOAD_DIR)) {
+    if (f.startsWith('.') || text.includes(f)) continue;
+    try { const st = fs.statSync(path.join(UPLOAD_DIR, f)); if (st.isFile()) unused.push({ name: f, bytes: st.size }); } catch { /* gone */ }
+  }
+  if (req.body && req.body.delete === true) for (const u of unused) { try { fs.unlinkSync(path.join(UPLOAD_DIR, u.name)); } catch { /* ignore */ } }
+  res.json({ unused: unused.length, bytes: unused.reduce((a, u) => a + u.bytes, 0), deleted: !!(req.body && req.body.delete === true), used_bytes: imagesSize(), limit_bytes: IMAGES_MAX_BYTES });
+});
 
 // ---------- public API: settings, products, checkout, receipts ----------
 const settingsPayload = () => ({
-  store_name: storeName(), tax_rate: taxRate(), online_tax_rate: 0, currency: CURRENCY,
+  timezone: getSetting('timezone', ''), store_name: storeName(), tax_rate: taxRate(), online_tax_rate: 0, currency: CURRENCY,
   break_on: breakOn(), break_message: breakMessage(),
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
@@ -1363,7 +1398,13 @@ app.get('/api/admin/tax-status', requireAdmin, h(async (req, res) => {
 }));
 
 app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
-  const { links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required, block_ai } = req.body;
+  const { timezone, links, links_intro, mailing_list_on, policy, shipping, tax_home, tax_rate, store_name, break_on, break_message, theme, logo_url, mascot_url, sold_url, break_from, break_until, low_stock, refund_preset, refund_days, refund_text, max_qty, handmade_statement, about_text, social, ship_days, reviews_on, bid_card_required, block_ai } = req.body;
+  if (timezone !== undefined) {
+    const z = String(timezone || '').trim();
+    if (z && !validTz(z)) throw new HttpError(400, 'That timezone is not one I know. Use a name like America/Los_Angeles or America/New_York.');
+    setSetting('timezone', z);
+    applyTimezone();
+  }
   if (links !== undefined) setSetting('links_json', JSON.stringify(cleanLinks(links)));
   if (links_intro !== undefined) setSetting('links_intro', String(links_intro).trim().slice(0, 200));
   if (mailing_list_on !== undefined) setSetting('mailing_list_on', mailing_list_on ? '1' : '');
@@ -1409,7 +1450,7 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
   for (const [key, val] of [['break_from', break_from], ['break_until', break_until]]) {
     if (val === undefined) continue;
     const v = String(val || '').trim();
-    if (v && !DATE_RE.test(v)) throw new HttpError(400, 'Dates must look like 2026-11-30');
+    if (v && !isDate(v)) throw new HttpError(400, 'Dates must look like 2026-11-30');
     setSetting(key, v);
   }
   if (low_stock !== undefined) {
@@ -1470,11 +1511,13 @@ app.post('/api/subscribe', h(async (req, res) => {
   if (req.body.consent !== true) throw new HttpError(400, 'Please tick the box so we know you want emails');
   if (db.prepare('SELECT COUNT(*) c FROM subscribers').get().c >= LIST_MAX.subscribers) { logSecurity('list_full', req, 'subscribers'); throw new HttpError(503, 'The email list is not taking sign-ups right now.'); }
   const source = String(req.body.source || 'links').replace(/[^a-z0-9_-]/gi, '').slice(0, 20) || 'links';
-  db.prepare('INSERT INTO subscribers (email, source, created_at, unsubscribed) VALUES (?,?,?,0) ON CONFLICT(email) DO UPDATE SET unsubscribed=0').run(email, source, Date.now());
+  // An address already on the list is left exactly as it is: signing up again can't put someone back on the list after
+  // the owner marked them unsubscribed (it used to flip them back to subscribed). The visitor sees the same answer either way.
+  db.prepare('INSERT INTO subscribers (email, source, created_at, unsubscribed, consent_at) VALUES (?,?,?,0,?) ON CONFLICT(email) DO NOTHING').run(email, source, Date.now(), Date.now());
   res.json({ ok: true });
 }));
 app.get('/api/admin/subscribers', requireAdmin, (req, res) => {
-  res.json(db.prepare('SELECT id, email, source, created_at, unsubscribed FROM subscribers ORDER BY created_at DESC, id DESC').all());
+  res.json(db.prepare('SELECT id, email, source, created_at, consent_at, unsubscribed FROM subscribers ORDER BY created_at DESC, id DESC').all());
 });
 app.get('/api/admin/subscribers.csv', requireAdmin, (req, res) => {
   const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
@@ -1483,11 +1526,65 @@ app.get('/api/admin/subscribers.csv', requireAdmin, (req, res) => {
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.send(lines.join('\n') + '\n');
 });
+// Mark someone unsubscribed (or put them back). Nothing in the app could do this before.
+app.put('/api/admin/subscribers/:id', requireAdmin, (req, res) => {
+  if (typeof req.body.unsubscribed !== 'boolean') throw new HttpError(400, 'Say whether they are unsubscribed (true or false)');
+  const r = db.prepare('UPDATE subscribers SET unsubscribed=? WHERE id=?').run(req.body.unsubscribed ? 1 : 0, Number(req.params.id) || 0);
+  if (!r.changes) throw new HttpError(404, 'Not found');
+  res.json({ ok: true });
+});
 app.delete('/api/admin/subscribers/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM subscribers WHERE id=?').run(Number(req.params.id) || 0);
   res.json({ ok: true });
 });
 
+
+// ---------- "delete my information" (review items 38, 79) ----------
+// Orders and bids can't simply be deleted (they are your sales records and other people's bidding history), so a person is ANONYMISED: their
+// name, email, address, card details and sign-in are blanked, and the amounts and dates stay. Removed rows are overwritten in the database file
+// (secure_delete). Stripe keeps its own copy of payments and customers; the saved card's Stripe customer is deleted, the rest is in your Stripe dashboard.
+app.post('/api/admin/privacy/erase', requireAdmin, h(async (req, res) => {
+  const email = Safe.cleanEmail(req.body.email);
+  if (!Safe.validEmail(email)) throw new HttpError(400, 'Enter the email address to erase');
+  const bidders = db.prepare('SELECT * FROM bidders WHERE lower(email)=?').all(email);
+  const orders = db.prepare("SELECT * FROM orders WHERE lower(customer_email)=?").all(email);
+  // Things that must be finished first
+  for (const b of bidders) {
+    if (db.prepare("SELECT 1 FROM bids bi JOIN auctions a ON a.id=bi.auction_id WHERE bi.bidder_id=? AND bi.voided=0 AND a.status='open'").get(b.id))
+      throw new HttpError(409, 'This person is bidding in a lot that is still open. Erase them after it ends (or remove their bid first).');
+  }
+  const unshipped = [];
+  for (const o of orders) {
+    if (o.status === 'pending' && (o.channel === 'auction' || Date.now() - Date.parse(o.created_at.replace(' ', 'T') + 'Z') < 3 * 3600e3))
+      throw new HttpError(409, `Order #${o.id} is still waiting for payment. Cancel it (or wait until it is paid or expires) first.`);
+    if (o.charge_status === 'charging' || o.charge_status === 'recover' || o.refund_intent_cents > (o.refunded_cents || 0))
+      throw new HttpError(409, `Order #${o.id} has a payment or refund in progress. Try again in a few minutes.`);
+    if (o.status === 'paid' && ['online', 'auction'].includes(o.channel) && ['', 'packed'].includes(o.fulfillment || '')) unshipped.push(o.id);
+  }
+  if (unshipped.length && req.body.force !== true)
+    throw new HttpError(409, `Order${unshipped.length > 1 ? 's' : ''} ${unshipped.map((n) => '#' + n).join(', ')} ${unshipped.length > 1 ? 'are' : 'is'} paid but not shipped yet. Erasing the address now means you can't ship ${unshipped.length > 1 ? 'them' : 'it'}. Ship first, or confirm to erase anyway.`);
+  const customers = bidders.map((b) => b.stripe_customer_id).filter(Boolean);
+  const out = { bidders: 0, orders: 0, reviews: 0, subscribers: 0 };
+  db.transaction(() => {
+    for (const b of bidders) {
+      db.prepare(`UPDATE bidders SET name='Removed bidder', email=?, token=?, address_json=NULL, stripe_customer_id=NULL, stripe_payment_method=NULL,
+                  card_brand=NULL, card_last4=NULL, card_at=NULL WHERE id=?`).run(`removed-${b.id}@invalid`, Auth.hashToken(crypto.randomBytes(24).toString('hex')), b.id);
+      db.prepare('DELETE FROM watches WHERE bidder_id=?').run(b.id);
+      out.bidders++;
+    }
+    for (const o of orders) {
+      db.prepare("UPDATE orders SET customer_email='', shipping_json=NULL WHERE id=?").run(o.id);
+      out.reviews += db.prepare("UPDATE reviews SET name='Anonymous' WHERE order_id=?").run(o.id).changes;
+      out.orders++;
+    }
+    out.subscribers = db.prepare('DELETE FROM subscribers WHERE lower(email)=?').run(email).changes;
+  })();
+  logSecurity('privacy_erase', req, `bidders ${out.bidders}, orders ${out.orders}, subscribers ${out.subscribers}`);
+  let stripeFailed = 0;
+  if (stripe) for (const c of customers) { try { await stripe.customers.del(c); } catch (e) { stripeFailed++; logSecurity('privacy_erase_stripe', req, 'a saved-card customer was not deleted at Stripe: ' + String((e && e.message) || '').slice(0, 120)); } }
+  res.json({ ...out, stripe_customers_deleted: customers.length - stripeFailed, stripe_customers_failed: stripeFailed,
+    note: 'Stripe keeps its own record of payments. Remove them there too if the person asked for that (Stripe dashboard > Customers).' });
+}));
 
 // ---------- product lines (curated groups like "Frogs"; a product can be in several) ----------
 const slugify = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'line';
@@ -1642,8 +1739,18 @@ function shapeOrder(o) {
   return { ...o, items: items.map((i) => ({ ...i, custom: parseCustom(i) })), late: isLate(o), review_rating: rv ? rv.rating : null };
 }
 
+// The newest orders (200 by default; ?limit= up to 500, ?before=<order id> for the next page) PLUS every online/auction order that is paid but not
+// yet shipped or finished, however old, so the oldest unshipped order can never fall off the list (review item 78). X-Total-Orders has the full count.
 app.get('/api/admin/orders', requireAdmin, (req, res) => {
-  res.json(db.prepare('SELECT * FROM orders ORDER BY id DESC LIMIT 200').all().map(shapeOrder));
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
+  const before = parseInt(req.query.before, 10) || 0;
+  const rows = before
+    ? db.prepare('SELECT * FROM orders WHERE id < ? ORDER BY id DESC LIMIT ?').all(before, limit)
+    : db.prepare(`SELECT * FROM (SELECT * FROM orders ORDER BY id DESC LIMIT ?)
+                  UNION SELECT * FROM orders WHERE status='paid' AND channel IN ('online','auction') AND fulfillment IN ('','packed')
+                  ORDER BY id DESC`).all(limit);
+  res.set('X-Total-Orders', String(db.prepare('SELECT COUNT(*) c FROM orders').get().c));
+  res.json(rows.map(shapeOrder));
 });
 
 app.get('/api/admin/orders/:id', requireAdmin, (req, res) => {
@@ -1897,9 +2004,9 @@ function cleanDiscount(b) {
     if (!Number.isInteger(max) || max < 1) throw new HttpError(400, 'Max uses must be 1 or more');
   }
   const exp = b.expires_on ? String(b.expires_on) : null;
-  if (exp && !DATE_RE.test(exp)) throw new HttpError(400, 'Expiry must look like 2026-11-30');
+  if (exp && !isDate(exp)) throw new HttpError(400, 'Expiry must look like 2026-11-30');
   const start = b.starts_on ? String(b.starts_on) : null;
-  if (start && !DATE_RE.test(start)) throw new HttpError(400, 'Start date must look like 2026-11-30');
+  if (start && !isDate(start)) throw new HttpError(400, 'Start date must look like 2026-11-30');
   if (start && exp && start > exp) throw new HttpError(400, 'The start date has to come before the end date');
   return { code, kind: b.kind, value, min, max, exp, start, active: b.active === false || b.active === 0 ? 0 : 1 };
 }
@@ -1964,27 +2071,31 @@ app.get('/api/admin/reports', requireAdmin, (req, res) => {
 app.get('/api/admin/customers', requireAdmin, (req, res) => {
   const map = new Map();
   const get = (email) => { if (!map.has(email)) map.set(email, { email, name: '', orders: 0, spent_cents: 0, last_order: null, bids: 0, won: 0 }); return map.get(email); };
-  for (const o of db.prepare("SELECT customer_email, shipping_json, total_cents, refunded_cents, created_at FROM orders WHERE status IN ('paid','refunded') AND customer_email IS NOT NULL AND customer_email <> ''").all()) {
-    const c = get(o.customer_email.toLowerCase());
-    c.orders += 1; c.spent_cents += o.total_cents - o.refunded_cents;
-    if (!c.last_order || o.created_at > c.last_order) c.last_order = o.created_at;
-    try { const n = JSON.parse(o.shipping_json || 'null'); if (n && n.name && !c.name) c.name = n.name; } catch { /* ignore */ }
+  // Added up by the database (one row per customer) instead of reading every paid order into memory.
+  for (const o of db.prepare(`SELECT lower(customer_email) email, COUNT(*) n, SUM(total_cents - refunded_cents) spent, MAX(created_at) last,
+                                     MAX(json_extract(CASE WHEN json_valid(shipping_json) THEN shipping_json END, '$.name')) name
+                              FROM orders WHERE status IN ('paid','refunded') AND customer_email IS NOT NULL AND customer_email <> '' GROUP BY lower(customer_email)`).all()) {
+    const c = get(o.email); c.orders = o.n; c.spent_cents = o.spent || 0; c.last_order = o.last; if (o.name) c.name = o.name;
   }
-  for (const b of db.prepare(`SELECT bd.email, bd.name, COUNT(bi.id) bids FROM bidders bd JOIN bids bi ON bi.bidder_id = bd.id AND bi.voided = 0 GROUP BY bd.id`).all()) {
-    const c = get(b.email.toLowerCase()); c.bids += b.bids; if (!c.name) c.name = b.name;
+  for (const b of db.prepare(`SELECT lower(bd.email) email, MAX(bd.name) name, COUNT(bi.id) bids FROM bidders bd JOIN bids bi ON bi.bidder_id = bd.id AND bi.voided = 0 GROUP BY lower(bd.email)`).all()) {
+    const c = get(b.email); c.bids += b.bids; if (!c.name) c.name = b.name;
   }
-  for (const w of db.prepare(`SELECT bd.email FROM auctions a JOIN bids bi ON bi.id = a.winner_bid_id JOIN bidders bd ON bd.id = bi.bidder_id WHERE a.status = 'closed'`).all()) {
-    get(w.email.toLowerCase()).won += 1;
+  for (const w of db.prepare(`SELECT lower(bd.email) email, COUNT(*) n FROM auctions a JOIN bids bi ON bi.id = a.winner_bid_id JOIN bidders bd ON bd.id = bi.bidder_id WHERE a.status = 'closed' GROUP BY lower(bd.email)`).all()) {
+    get(w.email).won += w.n;
   }
-  res.json([...map.values()].sort((a, b) => b.spent_cents - a.spent_cents || a.email.localeCompare(b.email)));
+  res.json([...map.values()].filter((c) => !/^removed-\d+@/.test(c.email)).sort((a, b) => b.spent_cents - a.spent_cents || a.email.localeCompare(b.email)).slice(0, 5000));
 });
 
 app.get('/api/admin/orders.csv', requireAdmin, (req, res) => {
   const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };   // a leading = + - @ would run as a formula in Excel, so it gets a ' in front
   const rows = db.prepare("SELECT * FROM orders WHERE status IN ('paid','refunded') ORDER BY id").all();
+  const itemsBy = new Map();   // all items in one pass (it used to ask the database once per order, which froze the app on a big shop)
+  for (const i of db.prepare("SELECT order_id, name, quantity FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status IN ('paid','refunded')) ORDER BY id").all()) {
+    (itemsBy.get(i.order_id) || itemsBy.set(i.order_id, []).get(i.order_id)).push(`${i.quantity}x ${i.name}`);
+  }
   const lines = [['Order', 'Date', 'Channel', 'Payment', 'Status', 'Subtotal', 'Discount', 'Discount code', 'Shipping', 'Tax', 'Total', 'Refunded', 'Customer email', 'Fulfillment', 'Tracking', 'Items'].join(',')];
   for (const o of rows) {
-    const items = db.prepare('SELECT name, quantity FROM order_items WHERE order_id=?').all(o.id).map((i) => `${i.quantity}x ${i.name}`).join('; ');
+    const items = (itemsBy.get(o.id) || []).join('; ');
     const m = (c) => (c / 100).toFixed(2);
     lines.push([o.id, o.created_at, o.channel, o.payment_method, o.status, m(o.subtotal_cents), m(o.discount_cents), o.discount_code, m(o.shipping_cents || 0), m(o.tax_cents), m(o.total_cents), m(o.refunded_cents), o.customer_email, o.fulfillment, o.tracking_number, items].map(q).join(','));
   }
@@ -2024,18 +2135,23 @@ app.post('/api/admin/products/import', requireAdmin, h(async (req, res) => {
   if (rows.length > 2000) throw new HttpError(400, 'Import up to 2000 rows at a time');
   const result = { created: 0, updated: 0, errors: [] };
   const find = db.prepare('SELECT * FROM products WHERE lower(name) = lower(?)');
-  db.transaction(() => {
-    rows.forEach((r, i) => {
-      try {
-        const price = Math.round(Number(String(r.price ?? '').replace(/[$,\s]/g, '')) * 100);
-        if (!Number.isFinite(price)) throw new HttpError(400, 'Price is missing or not a number');
-        const body = { name: r.name, price_cents: price, stock: r.stock === '' || r.stock == null ? 0 : Number(r.stock) };
+  // Each row is its own all-or-nothing step: a row that fails halfway leaves nothing behind, and the others still go in.
+  const doRow = db.transaction((r) => {
+        r = r && typeof r === 'object' ? r : {};
+        const existing = find.get(String(r.name || '').trim());
+        // A blank cell never wipes what is already there: a blank price keeps the current price, a blank (or missing) stock keeps the current stock.
+        // A new product needs a price (a blank one used to quietly become $0.00).
+        const rawPrice = String(r.price ?? '').replace(/[$,\s]/g, '');
+        let price;
+        if (rawPrice === '') { if (!existing) throw new HttpError(400, 'Price is missing'); price = existing.price_cents; }
+        else { const n = Number(rawPrice); if (!Number.isFinite(n)) throw new HttpError(400, 'Price is not a number'); price = Math.round(n * 100); }
+        const stockGiven = !(r.stock === '' || r.stock == null);
+        const body = { name: r.name, price_cents: price, stock: stockGiven ? Number(r.stock) : (existing ? existing.stock : 0) };
         if (r.category !== undefined) body.category = r.category;
         if (r.description !== undefined) body.description = r.description;
         if (r.tags !== undefined) body.tags = String(r.tags).split(/[,;|]/).map((t) => t.trim()).filter(Boolean);
         if (r.badge !== undefined) body.badge = String(r.badge).trim().toLowerCase().replace(/[\s-]+/g, '_');
         if (r.sku !== undefined) body.sku = r.sku;
-        const existing = find.get(String(r.name || '').trim());
         // options: "Small:5:25.00;Large:3:30.00"  (name:stock:optional price)
         let vs = null;
         if (r.variants !== undefined && String(r.variants).trim()) {
@@ -2062,9 +2178,11 @@ app.post('/api/admin/products/import', requireAdmin, h(async (req, res) => {
           if (vs) saveVariants(Number(ins.lastInsertRowid), vs);
           result.created++;
         }
-      } catch (e) {
-        result.errors.push({ row: i + 1, error: e.message || 'Invalid row' });
-      }
+  });
+  db.transaction(() => {
+    rows.forEach((r, i) => {
+      try { doRow(r); }
+      catch (e) { result.errors.push({ row: i + 1, error: e.message || 'Invalid row' }); }
     });
   })();
   res.json(result);
@@ -2197,7 +2315,7 @@ function shapeAuction(a, { admin = false, bidder = null } = {}) {
 
 const bidderFromReq = (req) => {
   const t = req.get('x-bidder-token');
-  return t ? db.prepare('SELECT * FROM bidders WHERE token=?').get(t) : null;
+  return t && typeof t === 'string' && t.length <= 200 ? db.prepare('SELECT * FROM bidders WHERE token=?').get(Auth.hashToken(t)) : null;   // only a hash of the token is stored
 };
 
 // ---------- card on file for bidders (optional) ----------
@@ -2397,7 +2515,7 @@ app.post('/api/bidders', h(async (req, res) => {
   } catch (e) { rlAdd('regbad:' + ipKey(req)); throw e; }
   rlAdd('reg:' + ipKey(req)); rlAdd('regday:' + ipKey(req));
   const token = rid(24);
-  db.prepare('INSERT INTO bidders (name, email, token, created_at, address_json) VALUES (?,?,?,?,?)').run(name, email, token, Date.now(), addrJson);
+  db.prepare('INSERT INTO bidders (name, email, token, created_at, address_json) VALUES (?,?,?,?,?)').run(name, email, Auth.hashToken(token), Date.now(), addrJson);
   res.json({ token, name });
 }));
 
@@ -2529,7 +2647,15 @@ app.get('/pay/:token', async (req, res) => {
 // --- admin ---
 app.get('/api/admin/auctions', requireAdmin, (req, res) => {
   sweepAuctions();
-  res.json(db.prepare('SELECT * FROM auctions ORDER BY id DESC').all().map((a) => shapeAuction(a, { admin: true })));
+  // Newest 300 (?limit= up to 1000, ?before=<id> for the next page) plus every lot that is still open or waiting for payment, however old.
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 300, 1), 1000);
+  const before = parseInt(req.query.before, 10) || 0;
+  const rows = before
+    ? db.prepare('SELECT * FROM auctions WHERE id < ? ORDER BY id DESC LIMIT ?').all(before, limit)
+    : db.prepare(`SELECT * FROM (SELECT * FROM auctions ORDER BY id DESC LIMIT ?)
+                  UNION SELECT * FROM auctions WHERE status='open' OR (status='closed' AND order_id IN (SELECT id FROM orders WHERE status='pending'))
+                  ORDER BY id DESC`).all(limit);
+  res.json(rows.map((a) => shapeAuction(a, { admin: true })));
 });
 
 app.post('/api/admin/auctions', requireAdmin, h(async (req, res) => {
@@ -2607,7 +2733,7 @@ app.post('/api/admin/bids/:id/void', requireAdmin, h(async (req, res) => {
 // JSON error responses (e.g. an upload over 8 MB) instead of an HTML error page
 app.use((err, req, res, next) => {
   const status = err.status || 500;
-  res.status(status).json({ error: status === 413 ? 'Image is too large (8 MB max)' : 'Server error' });
+  res.status(status).json({ error: status === 413 ? (req.path === '/api/admin/upload' ? 'Image is too large (8 MB max)' : req.path === '/api/admin/products/import' ? 'That file is too large to import in one go. Split it into smaller files.' : 'That request is too large.') : 'Server error' });
 });
 
 app.listen(PORT, () => console.log(`Outpost running at ${BASE_URL}`));

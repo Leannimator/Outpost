@@ -37,4 +37,7 @@ async function startServer(extraEnv = {}) {
   return { base, dir, proc, stop, alive, j, formToken };
 }
 
-module.exports = { startServer, sleep, PASSWORD };
+// Bidder sign-in tokens are stored hashed; tests that put a bidder straight into the database store the hash of the token they will send.
+const hashTok = (t) => require('node:crypto').createHash('sha256').update(String(t)).digest('hex');
+
+module.exports = { startServer, sleep, PASSWORD, hashTok };
