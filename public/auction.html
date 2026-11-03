@@ -138,6 +138,16 @@
     stage.innerHTML = `<div class="stage-top"><span>${bk}</span><div class="spacer"></div><span id="live"></span></div>
       <div class="lotgrid"><div id="left"></div><div id="right"></div></div>`;
 
+    // Reads what a bidder typed. "75.50", "$75", "1,250" and "75,50" (comma cents) are fine; anything unclear gives NaN.
+    function parseBid(t) {
+      t = String(t || '').trim().replace(/^\$\s*/, '');
+      let m;
+      if ((m = /^(\d{1,3}(?:,\d{3})+)(?:\.(\d{1,2}))?$/.exec(t))) return Number(m[1].replace(/,/g, '')) * 100 + (m[2] ? Number(m[2].padEnd(2, '0')) : 0);
+      if ((m = /^(\d+)(?:[.,](\d{1,2}))?$/.exec(t))) return Number(m[1]) * 100 + (m[2] ? Number(m[2].padEnd(2, '0')) : 0);
+      return NaN;
+    }
+    let sig = '';
+
     async function fetchLot() {
       const r = await fetch('/api/auctions/' + encodeURIComponent(lot), { headers: headers() });
       if (!r.ok) { stage.innerHTML = `<div class="stage-top"><span>${bk}</span></div><div class="card empty">That lot isn't available.</div>`; throw new Error('gone'); }
@@ -167,6 +177,9 @@
         <div class="lotdesc">${esc(a.description)}</div>
         ${a.bids.length ? `<h3 class="histhead">Bid history</h3><div class="bidhist">${a.bids.slice(0, 10).map((b) => `<div class="b"><span class="dot" style="background:${COLORS[b.color % 6]}"></span><span>${esc(b.name)}</span><span class="amt">${fmt(b.amount_cents)}</span><span class="when">${fmtTime(b.created_at)}</span></div>`).join('')}</div>` : ''}`;
       const bp = $('#bidpanel'); bp.hidden = false;
+      const nsig = JSON.stringify([a.phase, a.current_bid_cents, a.bid_count, a.next_min_bid_cents, a.pay_url, a.you, a.final_bid_cents, a.winner, a.start_at]);
+      if (nsig === sig && bp.firstChild) return;
+      sig = nsig;
       const keepAmt = $('#amt') ? $('#amt').value : '', keepOpen = $('#otherbox') ? !$('#otherbox').hidden : false;
       bp.innerHTML = `
         <div class="bidbox"><div>${hasBids ? 'Current bid' : 'Starting bid'}</div>
@@ -186,7 +199,13 @@
       if (live) {
         $('#bid').onclick = () => placeBid(a.next_min_bid_cents);
         $('#other').onclick = () => { $('#otherbox').hidden = !$('#otherbox').hidden; };
-        $('#bid2').onclick = () => { const c = Math.round(parseFloat($('#amt').value.replace(/[$,]/g, '')) * 100); Number.isFinite(c) ? placeBid(c) : ($('#bmsg').innerHTML = '<div class="msg err">Enter an amount like 75.00</div>'); };
+        $('#bid2').onclick = () => {
+          const c = parseBid($('#amt').value);
+          if (!Number.isFinite(c) || c <= 0) { $('#bmsg').innerHTML = '<div class="msg err">Please enter an amount like 75 or 75.50.</div>'; return; }
+          $('#bmsg').innerHTML = `<div class="card" style="margin-top:10px;text-align:left"><b>Place a bid of ${fmt(c)}?</b><div class="small muted" style="margin:6px 0 10px">You can’t take a bid back once it’s placed.</div><div class="row"><button class="btn btn-primary" id="yes">Yes, bid ${fmt(c)}</button><button class="btn btn-ghost" id="no">Change it</button></div></div>`;
+          $('#yes').onclick = () => { $('#bmsg').innerHTML = ''; placeBid(c); };
+          $('#no').onclick = () => { $('#bmsg').innerHTML = ''; $('#amt').focus(); };
+        };
       }
     }
 
@@ -224,12 +243,13 @@
       $('#bno', back).onclick = () => back.remove();
       if (needsAddr) OutpostAddress.wire($('#baddr', back));
       $('#bgo', back).onclick = async () => {
+        const go = $('#bgo', back); if (go.disabled) return; go.disabled = true;
         try {
           const r = await fetch('/api/bidders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#bn', back).value, email: $('#be', back).value, ...(needsAddr ? { address: OutpostAddress.read($('#baddr', back)) } : {}), started: loadedAt, website: $('#bw', back).value, captcha: capToken }) });
           const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not sign up');
           bidder = { token: d.token, name: d.name }; ls.set('outpost_bidder', JSON.stringify(bidder));
           back.remove(); then();
-        } catch (e) { $('#berr', back).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; if (capId !== null && window.turnstile) { window.turnstile.reset(capId); capToken = ''; } }
+        } catch (e) { go.disabled = false; $('#berr', back).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; if (capId !== null && window.turnstile) { window.turnstile.reset(capId); capToken = ''; } }
       };
     }
 

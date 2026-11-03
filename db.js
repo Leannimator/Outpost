@@ -312,6 +312,8 @@ addCol('orders', 'refund_key', "TEXT NOT NULL DEFAULT ''");
 addCol('orders', 'restock_requested', 'INTEGER NOT NULL DEFAULT 0');   // "put the items back" was ticked on a part refund: done when the order is fully refunded
 addCol('orders', 'late_payment', "TEXT NOT NULL DEFAULT ''");          // payment id of money that arrived AFTER the order was canceled
 addCol('orders', 'late_paid_cents', 'INTEGER');
+addCol('discounts', 'max_per_customer', 'INTEGER');                    // how many times one customer (by email) may use the code; NULL = no limit
+addCol('orders', 'late_resolved', "TEXT NOT NULL DEFAULT ''");          // what the owner did about late money: '' | refunding | refunded | accepted
 addCol('auctions', 'extensions', 'INTEGER NOT NULL DEFAULT 0');        // how many times late bids pushed the end out
 
 addCol('order_items', 'stock_taken', 'INTEGER');                       // how many were really taken out of stock when it was paid (NULL on older orders)

@@ -153,7 +153,7 @@
       return `<button class="pcard${p.stock < 1 ? ' is-sold' : ''}" data-id="${p.id}" ${p.stock < 1 ? 'aria-disabled="true"' : ''}>
       <div class="picwrap">${pic(p.image_url, p.name)}${t ? `<span class="ptag ptag-${t.cls}">${esc(t.text)}</span>` : ''}</div>
       <div class="nm">${esc(p.name)}</div><div class="pr">${priceText(p)}</div>
-      <div class="st">${p.variants.length ? `${p.variants.length} options` : esc(p.description).slice(0, 60)}</div><span class="pdetail" role="link" tabindex="0" data-d="${p.id}">Details</span></button>`;
+      <div class="st">${p.variants.length ? `${p.variants.length} options` : esc(String(p.description || '').slice(0, 60))}</div><span class="pdetail" role="link" tabindex="0" data-d="${p.id}">Details</span></button>`;
     }).join('') || `<div class="empty" style="grid-column:1/-1">${products.length ? 'No matches' : 'Nothing for sale right now. Check back soon!'}</div>`;
   }
   const body = () => ({ items: [...cart].map(([k, qty]) => { const l = look(k); return { id: l.id, variant: l.vid || undefined, custom: l.cv.length ? l.cv : undefined, qty }; }), code });

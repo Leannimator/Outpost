@@ -247,7 +247,7 @@ test('item 77: a blank price or stock cell no longer wipes real data; a big impo
     assert.equal(p.price_cents, 1550); assert.equal(p.stock, 8, 'a missing stock column keeps the stock');
     r = (await imp([{ name: 'Fresh', price: '' }, { name: 'Fresh2', price: 'abc' }, { name: 'Fine', price: '$3.00', stock: '4' }])).data;
     assert.equal(r.created, 1);
-    assert.deepEqual(r.errors.map((e) => [e.row, e.error]), [[1, 'Price is missing'], [2, 'Price is not a number']]);
+    assert.deepEqual(r.errors.map((e) => [e.row, e.error]), [[1, 'Price is missing'], [2, 'Price is not a number (use 12 or 12.50)']]);
     const names = (await a.get('/api/admin/products')).data.map((x) => x.name);
     assert.ok(names.includes('Fine') && !names.includes('Fresh') && !names.includes('Fresh2'), 'no $0.00 product was created');
     // 600 rows is well over the normal 100 KB request limit

@@ -109,4 +109,17 @@ function svgProblem(text) {
   return null;
 }
 
-module.exports = { svgProblem, passwordProblem, safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };
+
+// A money amount typed by a person, as cents, or NaN when it isn't clearly an amount.
+// Accepts: 12  12.5  12.50  $12.50  12,50 (a comma then 1-2 digits is a decimal comma)  1,250  1,250.50 (commas before groups of exactly 3 digits are thousands separators).
+// Refuses everything else ("1e2", "1,2,3", "12.345", "abc", "-5"): it used to read "12,50" as $1,250 and "1e2" as $100.
+function parseMoneyCents(input) {
+  let t = String(input == null ? '' : input).trim().slice(0, 30).replace(/^\$\s*/, '');
+  if (!t) return NaN;
+  let m;
+  if ((m = /^(\d{1,3}(?:,\d{3})+)(?:\.(\d{1,2}))?$/.exec(t))) return Number(m[1].replace(/,/g, '')) * 100 + (m[2] ? Number(m[2].padEnd(2, '0')) : 0);
+  if ((m = /^(\d+)(?:[.,](\d{1,2}))?$/.exec(t))) return Number(m[1]) * 100 + (m[2] ? Number(m[2].padEnd(2, '0')) : 0);
+  return NaN;
+}
+
+module.exports = { parseMoneyCents, svgProblem, passwordProblem, safeEqual, cleanEmail, validEmail, cleanReviewBody, looksLikeSvg, ipGroup, EMAIL_MAX, REVIEW_MAX };

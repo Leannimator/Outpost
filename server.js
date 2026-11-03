@@ -621,6 +621,11 @@ function findDiscount(code, subtotal, opts = {}) {
   if (d.expires_on && todayStr() > d.expires_on) throw codeErr('That discount code has expired');
   if (d.max_uses != null && d.uses >= d.max_uses) throw codeErr('That discount code has been fully used');
   if (d.max_uses != null && opts.hold && d.uses + heldCode(d.code, opts.holdEmail) >= d.max_uses) throw codeErr('That discount code is being used by another checkout right now. Please try again in a few minutes.');
+  if (d.max_per_customer != null && opts.holdEmail) {
+    // Counted by email address, over orders that were really paid (including ones refunded later). Someone who started a checkout and came back is not blocked by their own unpaid try.
+    const used = db.prepare("SELECT COUNT(*) n FROM orders WHERE discount_code=? AND lower(customer_email)=? AND status IN ('paid','refunded')").get(d.code, opts.holdEmail).n;
+    if (used >= d.max_per_customer) throw codeErr("You've already used this code.");
+  }
   if (subtotal < d.min_subtotal_cents) throw codeErr(`That code needs a subtotal of at least ${'$' + (d.min_subtotal_cents / 100).toFixed(2)}`);
   const amount = d.kind === 'percent' ? Math.round((subtotal * d.value) / 100) : Math.min(d.value, subtotal);
   return { code: d.code, amount };
@@ -1423,15 +1428,18 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
   }
   if (theme !== undefined) {
     const t = theme || {};
+    if (t.mode != null && typeof t.mode !== 'string') throw new HttpError(400, 'Appearance must be light, dark or auto');
     const mode = String(t.mode || '').trim();
     if (mode && !Theme.MODES.includes(mode)) throw new HttpError(400, 'Appearance must be light, dark or auto');
     setSetting('theme_mode', mode);
     const clean = {};
     for (const k of ['bg', 'accent', 'button', 'text', 'heading', 'link', 'buttontext']) {
+      if (t[k] != null && typeof t[k] !== 'string') throw new HttpError(400, 'Colors must look like #aabbcc');
       const v = String(t[k] || '').trim();
       if (v && !Theme.HEX.test(v)) throw new HttpError(400, 'Colors must look like #aabbcc');
       clean[k] = v;
     }
+    if (t.textmode != null && typeof t.textmode !== 'string') throw new HttpError(400, 'Text colors must be default, one color, or each');
     const tm = String(t.textmode || '').trim();
     if (!Theme.TEXTMODES.includes(tm)) throw new HttpError(400, 'Text colors must be default, one color, or each');
     clean.textmode = tm;
@@ -1861,6 +1869,59 @@ app.post('/api/admin/orders/:id/refund', requireAdmin, h(async (req, res) => {
 // ----- protection: blocklist + recent blocked attempts -----
 // One printable page with everything that helps answer a chargeback.
 const escH = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Money that arrived for an order you had canceled (the buyer was still paying, or the payment message was very late; see items 28 and 65).
+// Two ways to settle it, each from the order screen: send the money back, or keep the order after all and ship it.
+app.post('/api/admin/orders/:id/late-refund', requireAdmin, h(async (req, res) => {
+  const id = Number(req.params.id);
+  if (refunding.has(id)) throw new HttpError(409, 'A refund for this order is already in progress');
+  refunding.add(id);
+  let claimed = false, keep = false, done = false;
+  try {
+    const o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
+    if (!o) throw new HttpError(404, 'Not found');
+    if (o.status !== 'canceled' || !o.late_payment) throw new HttpError(400, 'This order has no late payment to refund');
+    if (!['', 'refunding'].includes(o.late_resolved)) throw new HttpError(400, o.late_resolved === 'refunded' ? 'That payment was already refunded' : 'That payment was already kept: the order was reopened');
+    const cents = o.late_paid_cents;
+    if (!Number.isInteger(cents) || cents < 1) throw new HttpError(400, 'The amount that arrived is not known. Refund it in your Stripe dashboard.');
+    if (!stripe) throw new HttpError(503, 'Stripe is not connected. Refund it in your Stripe dashboard.');
+    if (!db.prepare("UPDATE orders SET late_resolved='refunding' WHERE id=? AND status='canceled' AND late_resolved IN ('','refunding')").run(id).changes) throw new HttpError(409, 'This order changed. Reload and try again.');
+    claimed = true;
+    stillSignedIn(req);
+    try {
+      // The same key every time for the same payment: asking twice can never refund twice.
+      await stripe.refunds.create({ payment_intent: o.late_payment, amount: cents, metadata: { order_id: String(id) } }, { idempotencyKey: `late-refund-${id}-${o.late_payment}` });
+    } catch (e) {
+      if (stripeSaidNo(e)) throw e;
+      keep = true;
+      throw new HttpError(502, 'Stripe did not answer, so the refund may or may not have gone through. Try again in a minute: it cannot be refunded twice.');
+    }
+    db.prepare("UPDATE orders SET late_resolved='refunded', refund_note=? WHERE id=?").run(`Late payment refunded${req.body && req.body.note ? ': ' + String(req.body.note).trim().slice(0, 200) : ''}`, id);
+    done = true;
+    res.json({ ok: true, refunded_cents: cents });
+  } finally {
+    if (claimed && !keep && !done) { try { db.prepare("UPDATE orders SET late_resolved='' WHERE id=? AND late_resolved='refunding'").run(id); } catch { /* ignore */ } }
+    refunding.delete(id);
+  }
+}));
+app.post('/api/admin/orders/:id/accept-late', requireAdmin, h(async (req, res) => {
+  const id = Number(req.params.id);
+  if (refunding.has(id)) throw new HttpError(409, 'A refund for this order is in progress');
+  const o = db.prepare('SELECT * FROM orders WHERE id=?').get(id);
+  if (!o) throw new HttpError(404, 'Not found');
+  if (o.status !== 'canceled' || !o.late_payment || o.late_resolved !== '') throw new HttpError(400, 'This order has no late payment waiting for a decision');
+  if (!Number.isInteger(o.late_paid_cents) || o.late_paid_cents < o.total_cents) throw new HttpError(400, 'The money that arrived is less than the order total. Refund it instead.');
+  if (o.channel === 'auction') {
+    const a = db.prepare('SELECT * FROM auctions WHERE order_id=?').get(id);
+    if (!a || a.status !== 'closed') throw new HttpError(400, 'That lot has moved on or was canceled, so this order can’t be reopened. Refund the payment instead.');
+  }
+  db.transaction(() => {
+    if (!db.prepare("UPDATE orders SET status='pending' WHERE id=? AND status='canceled' AND late_resolved=''").run(id).changes) throw new HttpError(409, 'This order changed. Reload and try again.');
+    fulfillOrder(id, { payment_intent: o.late_payment, amount_cents: o.late_paid_cents });   // stock, discount use and paid status, exactly as for a normal payment
+    db.prepare("UPDATE orders SET late_resolved='accepted' WHERE id=?").run(id);
+  })();
+  res.json({ ok: true });
+}));
+
 app.get('/api/admin/orders/:id/evidence', requireAdmin, (req, res) => {
   const o = db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
@@ -1994,6 +2055,7 @@ function cleanDiscount(b) {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) throw new HttpError(400, 'Enter a discount amount');   // a number, not text like "10"
   if (b.min_subtotal_cents != null && b.min_subtotal_cents !== '' && typeof b.min_subtotal_cents !== 'number') throw new HttpError(400, 'Minimum must be a number');
   if (b.max_uses != null && b.max_uses !== '' && typeof b.max_uses !== 'number') throw new HttpError(400, 'Max uses must be a number');
+  if (b.max_per_customer != null && b.max_per_customer !== '' && typeof b.max_per_customer !== 'number') throw new HttpError(400, 'Uses per customer must be a number');
   if (b.kind === 'percent' && value > 100) throw new HttpError(400, 'Percent must be 100 or less');
   if (b.kind === 'amount' && value > MAX_BID_CENTS) throw new HttpError(400, 'That discount is too large');
   const min = Number(b.min_subtotal_cents || 0);
@@ -2003,12 +2065,17 @@ function cleanDiscount(b) {
     max = Number(b.max_uses);
     if (!Number.isInteger(max) || max < 1) throw new HttpError(400, 'Max uses must be 1 or more');
   }
+  let perCustomer = null;
+  if (b.max_per_customer !== null && b.max_per_customer !== undefined && b.max_per_customer !== '') {
+    perCustomer = Number(b.max_per_customer);
+    if (!Number.isInteger(perCustomer) || perCustomer < 1 || perCustomer > 1000) throw new HttpError(400, 'Uses per customer must be 1 or more');
+  }
   const exp = b.expires_on ? String(b.expires_on) : null;
   if (exp && !isDate(exp)) throw new HttpError(400, 'Expiry must look like 2026-11-30');
   const start = b.starts_on ? String(b.starts_on) : null;
   if (start && !isDate(start)) throw new HttpError(400, 'Start date must look like 2026-11-30');
   if (start && exp && start > exp) throw new HttpError(400, 'The start date has to come before the end date');
-  return { code, kind: b.kind, value, min, max, exp, start, active: b.active === false || b.active === 0 ? 0 : 1 };
+  return { code, kind: b.kind, value, min, max, perCustomer, exp, start, active: b.active === false || b.active === 0 ? 0 : 1 };
 }
 app.get('/api/admin/discounts', requireAdmin, (req, res) => {
   res.json(db.prepare('SELECT * FROM discounts ORDER BY id DESC').all());
@@ -2016,16 +2083,16 @@ app.get('/api/admin/discounts', requireAdmin, (req, res) => {
 app.post('/api/admin/discounts', requireAdmin, h(async (req, res) => {
   const d = cleanDiscount(req.body);
   if (db.prepare('SELECT 1 FROM discounts WHERE code=?').get(d.code)) throw new HttpError(400, 'You already have a code with that name');
-  const r = db.prepare('INSERT INTO discounts (code, kind, value, min_subtotal_cents, max_uses, expires_on, starts_on, active) VALUES (?,?,?,?,?,?,?,?)')
-    .run(d.code, d.kind, d.value, d.min, d.max, d.exp, d.start, d.active);
+  const r = db.prepare('INSERT INTO discounts (code, kind, value, min_subtotal_cents, max_uses, max_per_customer, expires_on, starts_on, active) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(d.code, d.kind, d.value, d.min, d.max, d.perCustomer, d.exp, d.start, d.active);
   res.json({ id: Number(r.lastInsertRowid) });
 }));
 app.put('/api/admin/discounts/:id', requireAdmin, h(async (req, res) => {
   const cur = db.prepare('SELECT * FROM discounts WHERE id=?').get(req.params.id);
   if (!cur) throw new HttpError(404, 'Not found');
-  const d = cleanDiscount({ ...cur, min_subtotal_cents: cur.min_subtotal_cents, max_uses: cur.max_uses, expires_on: cur.expires_on, ...req.body, code: cur.code });
-  db.prepare('UPDATE discounts SET kind=?, value=?, min_subtotal_cents=?, max_uses=?, expires_on=?, starts_on=?, active=? WHERE id=?')
-    .run(d.kind, d.value, d.min, d.max, d.exp, d.start, d.active, cur.id);
+  const d = cleanDiscount({ ...cur, min_subtotal_cents: cur.min_subtotal_cents, max_uses: cur.max_uses, max_per_customer: cur.max_per_customer, expires_on: cur.expires_on, ...req.body, code: cur.code });
+  db.prepare('UPDATE discounts SET kind=?, value=?, min_subtotal_cents=?, max_uses=?, max_per_customer=?, expires_on=?, starts_on=?, active=? WHERE id=?')
+    .run(d.kind, d.value, d.min, d.max, d.perCustomer, d.exp, d.start, d.active, cur.id);
   res.json({ ok: true });
 }));
 app.delete('/api/admin/discounts/:id', requireAdmin, (req, res) => {
@@ -2133,18 +2200,20 @@ app.post('/api/admin/products/import', requireAdmin, h(async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
   if (!rows.length) throw new HttpError(400, 'No rows to import');
   if (rows.length > 2000) throw new HttpError(400, 'Import up to 2000 rows at a time');
-  const result = { created: 0, updated: 0, errors: [] };
+  const dry = req.body.dry_run === true;   // a preview: everything is worked out for real, then undone, so nothing is saved
+  const result = { created: 0, updated: 0, errors: [], ...(dry ? { dry_run: true, plan: [] } : {}) };
+  const DRY = new Error('dry run');
   const find = db.prepare('SELECT * FROM products WHERE lower(name) = lower(?)');
   // Each row is its own all-or-nothing step: a row that fails halfway leaves nothing behind, and the others still go in.
-  const doRow = db.transaction((r) => {
+  const doRow = db.transaction((r, i) => {
         r = r && typeof r === 'object' ? r : {};
         const existing = find.get(String(r.name || '').trim());
         // A blank cell never wipes what is already there: a blank price keeps the current price, a blank (or missing) stock keeps the current stock.
         // A new product needs a price (a blank one used to quietly become $0.00).
-        const rawPrice = String(r.price ?? '').replace(/[$,\s]/g, '');
+        const rawPrice = String(r.price ?? '').trim();
         let price;
         if (rawPrice === '') { if (!existing) throw new HttpError(400, 'Price is missing'); price = existing.price_cents; }
-        else { const n = Number(rawPrice); if (!Number.isFinite(n)) throw new HttpError(400, 'Price is not a number'); price = Math.round(n * 100); }
+        else { price = Safe.parseMoneyCents(rawPrice); if (!Number.isFinite(price)) throw new HttpError(400, 'Price is not a number (use 12 or 12.50)'); }   // strict: "12,50" is $12.50 and "1e2" is refused
         const stockGiven = !(r.stock === '' || r.stock == null);
         const body = { name: r.name, price_cents: price, stock: stockGiven ? Number(r.stock) : (existing ? existing.stock : 0) };
         if (r.category !== undefined) body.category = r.category;
@@ -2159,7 +2228,7 @@ app.post('/api/admin/products/import', requireAdmin, h(async (req, res) => {
           vs = cleanVariants(String(r.variants).split(';').map((part) => part.trim()).filter(Boolean).map((part) => {
             const [nm, st, pr] = part.split(':').map((x) => x.trim());
             const o = old.find((x) => x.name.toLowerCase() === String(nm || '').toLowerCase());
-            const pc = pr ? Math.round(Number(pr.replace(/[$,]/g, '')) * 100) : null;
+            const pc = pr ? Safe.parseMoneyCents(pr) : null;
             if (pr && !Number.isFinite(pc)) throw new HttpError(400, `Option "${nm}" has a price that isn't a number`);
             return { id: o ? o.id : null, name: nm, stock: st === undefined || st === '' ? 0 : Number(st), price_cents: pc, sku: o ? o.sku : '' };
           }));
@@ -2167,6 +2236,7 @@ app.post('/api/admin/products/import', requireAdmin, h(async (req, res) => {
         }
         const n = cleanProduct(body, existing || NEW_PRODUCT);
         checkSkus(existing ? existing.id : 0, n.sku, vs || []);
+        if (dry) result.plan.push({ row: i + 1, name: n.name, action: existing ? 'change' : 'new', price_before: existing ? existing.price_cents : null, price_after: n.price_cents, stock_before: existing ? existing.stock : null, stock_after: n.stock });
         if (existing) {
           db.prepare('UPDATE products SET price_cents=?, stock=?, description=?, category=?, tags=?, badge=?, sku=? WHERE id=?')
             .run(n.price_cents, n.stock, n.description, n.category, n.tags, n.badge || '', n.sku || '', existing.id);
@@ -2179,12 +2249,15 @@ app.post('/api/admin/products/import', requireAdmin, h(async (req, res) => {
           result.created++;
         }
   });
-  db.transaction(() => {
-    rows.forEach((r, i) => {
-      try { doRow(r); }
-      catch (e) { result.errors.push({ row: i + 1, error: e.message || 'Invalid row' }); }
-    });
-  })();
+  try {
+    db.transaction(() => {
+      rows.forEach((r, i) => {
+        try { doRow(r, i); }
+        catch (e) { result.errors.push({ row: i + 1, error: e.message || 'Invalid row' }); }
+      });
+      if (dry) throw DRY;
+    })();
+  } catch (e) { if (e !== DRY) throw e; }
   res.json(result);
 }));
 
@@ -2307,7 +2380,7 @@ function shapeAuction(a, { admin = false, bidder = null } = {}) {
   }
   if (admin) {
     if (phase === 'sold') out.pay_url = `${BASE_URL}/pay/${a.pay_token}`;
-    if (high && (phase === 'sold' || phase === 'paid')) out.winner_full = { name: high.bidder_name, email: high.bidder_email };
+    if (high && (phase === 'sold' || phase === 'paid')) { out.winner_full = { name: high.bidder_name, email: high.bidder_email }; out.winner_bid_id = a.winner_bid_id || null; }
     if (order) out.order = order;
   }
   return out;
@@ -2713,6 +2786,8 @@ app.post('/api/admin/auctions/:id/next-bidder', requireAdmin, h(async (req, res)
   if (a.status !== 'closed' || !order || order.status !== 'pending') {
     throw new HttpError(400, 'Only a sold, unpaid lot can move to the next bidder');
   }
+  // The screen sends the bid it is showing. If the lot has already moved to someone else (a double click, or another tab), this is refused instead of removing the NEXT winner too.
+  if (req.body && req.body.expected_bid_id !== undefined && Number(req.body.expected_bid_id) !== a.winner_bid_id) throw new HttpError(409, 'This lot has already moved on to someone else. Reload to see the current winner.');
   if (chargeBusy(order)) throw new HttpError(409, 'A card payment is being processed (or went through). Check Stripe and the order before moving on. Try again in a moment.');
   cancelPendingOrder(order.id);
   db.prepare('UPDATE bids SET voided=1 WHERE id=?').run(a.winner_bid_id);
@@ -2733,6 +2808,8 @@ app.post('/api/admin/bids/:id/void', requireAdmin, h(async (req, res) => {
 // JSON error responses (e.g. an upload over 8 MB) instead of an HTML error page
 app.use((err, req, res, next) => {
   const status = err.status || 500;
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'That request could not be read.' });   // broken JSON is the sender's mistake, not a server fault
+  if (status >= 500) console.error('Unhandled error on ' + req.method + ' ' + req.path + ':', err && err.message);   // it used to be silent
   res.status(status).json({ error: status === 413 ? (req.path === '/api/admin/upload' ? 'Image is too large (8 MB max)' : req.path === '/api/admin/products/import' ? 'That file is too large to import in one go. Split it into smaller files.' : 'That request is too large.') : 'Server error' });
 });
 

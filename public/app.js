@@ -7,7 +7,15 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dollars = (c) => (c / 100).toFixed(2);
-  const toCents = (s) => { const n = parseFloat(String(s).replace(/[$,\s]/g, '')); return Number.isFinite(n) ? Math.round(n * 100) : NaN; };
+  // Strict: 12  12.5  $12.50  12,50 (decimal comma)  1,250  1,250.50 are understood; "1e2", "1,2,3", "12.345" and words are NaN. (Same rules as the server.)
+  const toCents = (input) => {
+    const t = String(input == null ? '' : input).trim().slice(0, 30).replace(/^\$\s*/, '');
+    let m;
+    if (!t) return NaN;
+    if ((m = /^(\d{1,3}(?:,\d{3})+)(?:\.(\d{1,2}))?$/.exec(t))) return Number(m[1].replace(/,/g, '')) * 100 + (m[2] ? Number(m[2].padEnd(2, '0')) : 0);
+    if ((m = /^(\d+)(?:[.,](\d{1,2}))?$/.exec(t))) return Number(m[1]) * 100 + (m[2] ? Number(m[2].padEnd(2, '0')) : 0);
+    return NaN;
+  };
   const fmtDate = (ms) => new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const pad = (n) => String(n).padStart(2, '0');
   const toLocalInput = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -62,9 +70,17 @@
   let cleanups = [];
   const onLeave = (fn) => cleanups.push(fn);
 
+  // Each screen load gets a number. An answer that arrives after you have moved to another screen is thrown away (it used to paint the OLD
+  // screen's heading or fail on a page that was gone: "Cannot set properties of null").
+  let routeSeq = 0;
+  const NEVER = new Promise(() => {});
   async function api(path, opts = {}) {
+    const mine = routeSeq, had = token;
     const r = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', 'x-admin-token': token, ...(opts.headers || {}) } });
     const d = await r.json().catch(() => ({}));
+    // Signed out (or the session ran out) while a screen was refreshing itself in the background: stop everything and show the sign-in page once.
+    if (r.status === 401 && had && token === had) { store.del('outpost_token'); token = ''; cleanups.forEach((f) => { try { f(); } catch { /* ignore */ } }); cleanups = []; loginScreen('Please sign in again'); return NEVER; }
+    if (mine !== routeSeq) return NEVER;
     if (!r.ok) { const e = new Error(d.error || 'Request failed'); e.status = r.status; throw e; }
     return d;
   }
@@ -196,6 +212,7 @@
   async function route() {
     if (!appReady) return;
     paintBrand();
+    routeSeq++;
     cleanups.forEach((f) => { try { f(); } catch { /* ignore */ } });
     cleanups = [];
     const h = location.hash || '#/sell';
@@ -366,13 +383,21 @@
     const flash = (m) => { $('#sellmsg').innerHTML = `<div class="msg err">${esc(m)}</div>`; };
     $('#sellmsg').innerHTML = '';
 
+    let selling = false;
+    const lockSell = (on) => {
+      selling = on;
+      for (const id of ['cash', 'other', 'card']) { const b = $('#' + id); if (!b) continue; if (on) { b.dataset.label = b.textContent; b.textContent = 'Saving…'; } else if (b.dataset.label) { b.textContent = b.dataset.label; delete b.dataset.label; } b.disabled = on; }
+    };
     for (const method of ['cash', 'other']) {
       $('#' + method).onclick = async () => {
+        if (selling) return; lockSell(true);
         try { const r = await post('/api/register/sale', body(method)); saleComplete({ id: r.orderId, public_token: r.public_token, total_cents: r.total_cents }); }
         catch (e) { flash(e.message); }
+        lockSell(false);
       };
     }
     $('#card').onclick = async () => {
+      if (selling) return; lockSell(true);
       try {
         const r = await post('/api/register/sale', body('card'));
         let timer;
@@ -393,6 +418,7 @@
           } catch { /* keep polling */ }
         }, 2000);
       } catch (e) { flash(e.message); }
+      lockSell(false);
     };
 
     function saleComplete(order) {
@@ -431,7 +457,7 @@
     row.push(cell); if (row.some((x) => x.trim() !== '')) rows.push(row);
     return rows;
   }
-  const csvCell = (v) => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const csvCell = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(\.\d+)?$/.test(v)) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
 
   async function viewProducts() {
     let list = await api('/api/admin/products');
@@ -471,11 +497,12 @@
         const w = $('#bk-what').value, v = $('#bk-v').value;
         const set = {};
         if (w === 'active') set.active = v === '1';
-        else if (w === 'stock_add' || w === 'price_percent') { if (v.trim() === '' || !Number.isFinite(Number(v))) return ($('#pmsg').innerHTML = '<div class="msg err">Enter a number</div>'); set[w] = Number(v); }
+        else if (w === 'stock_add' || w === 'price_percent') { if (v.trim() === '' || !Number.isFinite(Number(v))) return ($('#pmsg').innerHTML = '<div class="msg err">Enter a number</div>'); set[w] = Number(v); if (w === 'stock_add' && !Number.isInteger(set[w])) return ($('#pmsg').innerHTML = '<div class="msg err">Stock change must be a whole number, like +5 or -2</div>'); }
         else set[w] = v;
         if (w === 'price_percent' && !confirm(`Change the price of ${picked.size} product${picked.size === 1 ? '' : 's'} by ${v}%?`)) return;
+        const go = $('#bk-go'); if (go.disabled && go.dataset.busy) return; go.disabled = true; go.dataset.busy = '1';
         try { const r = await post('/api/admin/products/bulk', { ids: [...picked], set }); toast(r.skipped_stock ? `Updated ${r.updated}. ${r.skipped_stock} with options were skipped for stock (edit those one by one).` : `Updated ${r.updated}`); picked.clear(); list = await api('/api/admin/products'); $('#pmsg').innerHTML = ''; paint(); }
-        catch (e) { $('#pmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+        catch (e) { $('#pmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; if ($('#bk-go')) { $('#bk-go').disabled = false; delete $('#bk-go').dataset.busy; } }
       };
     };
     const paint = () => {
@@ -516,9 +543,28 @@
           const head = rows[0].map((h) => h.trim().toLowerCase());
           if (!head.includes('name') || !head.includes('price')) throw new Error('The first row needs “name” and “price” columns.');
           const data = rows.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, (r[i] || '').trim()])));
-          const res = await post('/api/admin/products/import', { rows: data });
-          list = await api('/api/admin/products'); paint();
-          $('#imsg', m.el).innerHTML = `<div class="msg">Added ${res.created}, updated ${res.updated}.</div>` + (res.errors.length ? `<div class="msg err">${res.errors.slice(0, 6).map((x) => `Row ${x.row + 1}: ${esc(x.error)}`).join('<br>')}${res.errors.length > 6 ? `<br>and ${res.errors.length - 6} more` : ''}</div>` : '');
+          const prev = await post('/api/admin/products/import', { rows: data, dry_run: true });
+          const nNew = prev.plan.filter((x) => x.action === 'new').length, nChg = prev.plan.filter((x) => x.action === 'change').length, nBad = prev.errors.length;
+          const stat = (n, label, bg, fg) => `<div style="flex:1;min-width:130px;background:${bg};border-radius:10px;padding:12px"><div style="font-size:24px;font-weight:700;color:${fg}">${n}</div><div class="small" style="color:${fg}">${label}</div></div>`;
+          const cell = (before, after, f) => (before == null ? f(after) : before === after ? `${f(after)} <span class="muted">(unchanged)</span>` : `${f(before)} → <b>${f(after)}</b>`);
+          const planRows = prev.plan.slice(0, 50).map((x) => `<tr><td>${esc(x.name)}</td><td>${x.action === 'new' ? '<b>New</b>' : '<b>Changes</b>'}</td><td>${cell(x.price_before, x.price_after, fmt)}</td><td>${cell(x.stock_before, x.stock_after, String)}</td></tr>`).join('');
+          const badRows = prev.errors.slice(0, 50).map((x) => `<tr style="background:#fff5f4"><td>Row ${x.row + 1}: ${esc((data[x.row - 1] || {}).name || '')}</td><td><b>Skipped</b></td><td colspan="2">${esc(x.error)}</td></tr>`).join('');
+          const total = nNew + nChg;
+          $('#imsg', m.el).innerHTML = `<h3 style="margin:14px 0 8px">Check your import before it’s saved</h3>
+            <div class="row" style="flex-wrap:wrap;gap:10px">${stat(nNew, 'new products', '#e3f1ec', '#1d4a3d')}${stat(nChg, 'existing, will change', '#e8eef9', '#1e3a8a')}${stat(nBad, 'rows with problems (skipped)', '#fbe3df', '#7a271a')}</div>
+            <div style="max-height:260px;overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Product</th><th>What happens</th><th>Price</th><th>Stock</th></tr></thead><tbody>${planRows}${badRows}</tbody></table></div>
+            ${prev.plan.length > 50 || nBad > 50 ? '<div class="small muted">Only the first 50 of each list are shown here. Everything is still imported.</div>' : ''}
+            <p class="small muted">A blank price or stock cell keeps what the product has now. Nothing is saved until you press Import.</p>
+            <div class="row"><button class="btn btn-primary" id="igo" ${total ? '' : 'disabled'}>Import ${total} product${total === 1 ? '' : 's'}</button><button class="btn btn-ghost" id="ino">Cancel</button></div>`;
+          $('#ino', m.el).onclick = () => { $('#imsg', m.el).innerHTML = ''; };
+          $('#igo', m.el).onclick = async () => {
+            const go = $('#igo', m.el); if (go.disabled) return; go.disabled = true;
+            try {
+              const res = await post('/api/admin/products/import', { rows: data });
+              list = await api('/api/admin/products'); paint();
+              $('#imsg', m.el).innerHTML = `<div class="msg">Added ${res.created}, updated ${res.updated}.</div>` + (res.errors.length ? `<div class="msg err">${res.errors.slice(0, 6).map((x) => `Row ${x.row + 1}: ${esc(x.error)}`).join('<br>')}${res.errors.length > 6 ? `<br>and ${res.errors.length - 6} more` : ''}</div>` : '');
+            } catch (e) { go.disabled = false; $('#imsg', m.el).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+          };
         } catch (e) { $('#imsg', m.el).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
       };
     };
@@ -641,7 +687,7 @@
       const price_cents = toCents($('#price').value);
       const stock = parseInt($('#stock').value, 10);
       if (!$('#name').value.trim()) return ($('#emsg').innerHTML = '<div class="msg err">Please enter a name</div>');
-      if (!Number.isInteger(price_cents) || price_cents < 0) return ($('#emsg').innerHTML = '<div class="msg err">Please enter a price like 12.50</div>');
+      if (!Number.isInteger(price_cents) || price_cents < 0) return ($('#emsg').innerHTML = '<div class="msg err">Enter a price like 12 or 12.50.</div>');
       if (!Number.isInteger(stock) || stock < 0) return ($('#emsg').innerHTML = '<div class="msg err">Quantity must be a whole number</div>');
       for (const [i, v] of s.variants.entries()) {
         if (!v.name.trim()) return ($('#emsg').innerHTML = `<div class="msg err">Option ${i + 1} needs a name</div>`);
@@ -798,7 +844,7 @@
         }
         if (act === 'end' && confirm('End this lot now? The highest bidder wins.')) await post(`/api/admin/auctions/${id}/end`);
         else if (act === 'cancel' && confirm('Cancel this lot? Bidders will no longer see it.')) await post(`/api/admin/auctions/${id}/cancel`);
-        else if (act === 'next' && confirm(`Remove ${a.winner_full.name}'s bid and offer this lot to the next-highest bidder?`)) await post(`/api/admin/auctions/${id}/next-bidder`);
+        else if (act === 'next' && a.winner_full && confirm(`Remove ${a.winner_full.name}'s bid (${fmt(a.final_bid_cents)}) and offer this lot to the next-highest bidder?`)) await post(`/api/admin/auctions/${id}/next-bidder`, { expected_bid_id: a.winner_bid_id });
         else if (act === 'void' && confirm('Remove this bid?')) await post(`/api/admin/bids/${id}/void`);
         else return;
         await load();
@@ -887,10 +933,16 @@
   const needsShipping = (o) => o.status === 'paid' && ['online', 'auction'].includes(o.channel) && ['', 'packed'].includes(o.fulfillment || '');
   async function viewOrders() {
     let orders = await api('/api/admin/orders');
+    let older = [];            // orders loaded with "Load older orders"; kept when the list refreshes
+    let noMore = false;
+    const merge = (a, b) => { const m = new Map(); for (const o of [...a, ...b]) m.set(o.id, o); return [...m.values()].sort((x, y) => y.id - x.id); };
+    orders = merge(orders, []);
+    noMore = orders.length < 200;   // fewer than a full page: there is nothing older
     let filter = 'all';
     view().innerHTML = `<div class="topbar"><h1>Orders</h1><div class="spacer"></div><button class="btn" id="ocsv">Export CSV</button></div><div id="omsg"></div>
       <div class="chips" id="ofil"></div>
-      <div class="card tbl-scroll"><table><thead><tr><th>#</th><th>When</th><th>Where</th><th>Paid by</th><th>Status</th><th>Total</th><th>Items</th><th>Customer</th><th></th></tr></thead><tbody id="orows"></tbody></table></div>`;
+      <div class="card tbl-scroll"><table><thead><tr><th>#</th><th>When</th><th>Where</th><th>Paid by</th><th>Status</th><th>Total</th><th>Items</th><th>Customer</th><th></th></tr></thead><tbody id="orows"></tbody></table></div>
+      <div id="omore" class="center" style="margin-top:14px"></div>`;
     const stat = { paid: 'b-paid', pending: 'b-pending', canceled: 'b-canceled', refunded: 'b-canceled' };
     const where = { register: 'Register', online: 'Online', auction: 'Auction' };
     const ship = (o) => { try { const s = JSON.parse(o.shipping_json || 'null'); if (!s) return ''; const a = s.address || {}; return [s.name, a.line1, a.line2, a.city, a.state, a.postal_code, a.country].filter(Boolean).join(', '); } catch { return ''; } };
@@ -902,24 +954,46 @@
       $('#orows').innerHTML = rows.map((o) => `<tr>
         <td>${o.id}</td><td class="small">${esc(new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</td>
         <td>${where[o.channel] || esc(o.channel)}</td><td>${esc(o.payment_method)}</td>
-        <td><span class="badge ${stat[o.status] || ''}">${esc(o.status)}</span>${o.refunded_cents > 0 && o.status !== 'refunded' ? `<br><span class="badge b-pending">Part refunded</span>` : ''}${o.late ? `<br><span class="badge b-out">Running late</span>` : ''}${o.review_rating ? `<br><span class="small" title="Verified review">${'★'.repeat(o.review_rating)}</span>` : ''}${['online', 'auction'].includes(o.channel) && ['paid', 'refunded'].includes(o.status) && o.fulfillment ? `<br><span class="badge b-info">${FUL[o.fulfillment]}</span>` : ''}</td>
+        <td><span class="badge ${stat[o.status] || ''}">${esc(o.status)}</span>${lateOpen(o) ? `<br><span class="badge b-pending" style="background:#ffd88a;color:#4a3000;font-weight:700">Paid after cancel</span><br><span class="small">${fmt(o.late_paid_cents || o.total_cents)} arrived after you canceled this order.</span>` : o.late_resolved === 'refunded' ? '<br><span class="small muted">Late payment refunded</span>' : o.late_resolved === 'accepted' ? '<br><span class="small muted">Late payment kept</span>' : ''}${o.refunded_cents > 0 && o.status !== 'refunded' ? `<br><span class="badge b-pending">Part refunded</span>` : ''}${o.late ? `<br><span class="badge b-out">Running late</span>` : ''}${o.review_rating ? `<br><span class="small" title="Verified review">${'★'.repeat(o.review_rating)}</span>` : ''}${['online', 'auction'].includes(o.channel) && ['paid', 'refunded'].includes(o.status) && o.fulfillment ? `<br><span class="badge b-info">${FUL[o.fulfillment]}</span>` : ''}</td>
         <td><b>${fmt(o.total_cents)}</b>${o.refunded_cents > 0 ? `<br><span class="small muted">−${fmt(o.refunded_cents)} refunded</span>` : ''}</td>
         <td class="small">${o.items.map((i) => `${i.quantity}× ${esc(i.name)}${(i.custom || []).map((c) => `<br><b>${esc(c.label)}:</b> ${esc(c.value)}`).join('')}`).join('<br>')}</td>
         <td class="small">${esc(o.customer_email || '')}${ship(o) ? `<br><span class="muted">${esc(ship(o))}</span>` : ''}</td>
-        <td>${['paid', 'refunded'].includes(o.status) ? `<button class="btn btn-sm" data-manage="${o.id}">Manage</button>` : ''}
+        <td>${lateOpen(o) ? `<button class="btn btn-sm btn-primary" data-lrefund="${o.id}">Refund ${fmt(o.late_paid_cents || o.total_cents)}</button> <button class="btn btn-sm" data-laccept="${o.id}">Ship it instead</button>` : ''}${['paid', 'refunded'].includes(o.status) ? `<button class="btn btn-sm" data-manage="${o.id}">Manage</button>` : ''}
             ${o.status === 'pending' && o.channel !== 'auction' ? `<button class="btn btn-sm btn-danger" data-cancel="${o.id}">Cancel</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="9" class="empty">No orders here.</td></tr>';
     };
-    const reload = async () => { orders = await api('/api/admin/orders'); paint(); };
+    const lateOpen = (o) => o.status === 'canceled' && o.late_payment && (o.late_resolved === '' || o.late_resolved === 'refunding');
+    const paintMore = () => { $('#omore').innerHTML = noMore ? `<div class="small muted">That’s every order.</div>` : `<button class="btn" id="oolder">Load older orders</button><div class="small muted" style="margin-top:8px">Showing the newest orders and every order still waiting to ship, however old.</div>`; if ($('#oolder')) $('#oolder').onclick = loadOlder; };
+    const loadOlder = async () => {
+      $('#oolder').disabled = true;
+      try {
+        const lowest = Math.min(...orders.map((o) => o.id));
+        const page = await api('/api/admin/orders?limit=200&before=' + lowest);
+        if (page.length < 200) noMore = true;
+        older = merge(older, page); orders = merge(orders, page); paint(); paintMore();
+      } catch (e) { $('#omsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#oolder').disabled = false; }
+    };
+    const reload = async () => { orders = merge(await api('/api/admin/orders'), older); paint(); };
     $('#ofil').onclick = (e) => { const b = e.target.closest('[data-f]'); if (b) { filter = b.dataset.f; paint(); } };
     $('#ocsv').onclick = () => download('/api/admin/orders.csv', 'outpost-orders.csv').catch((e) => toast(e.message));
     $('#orows').onclick = async (e) => {
+      const lr = e.target.closest('[data-lrefund]'), la = e.target.closest('[data-laccept]');
+      if (lr || la) {
+        const o = orders.find((x) => x.id === Number((lr || la).dataset.lrefund || (lr || la).dataset.laccept));
+        const cents = o.late_paid_cents || o.total_cents;
+        const sure = lr ? confirm(`Refund ${fmt(cents)} to the buyer for order #${o.id}? The money goes back through Stripe.`) : confirm(`Keep the payment and reopen order #${o.id} as paid? It will count as a sale and you ship it.`);
+        if (!sure) return;
+        (lr || la).disabled = true;
+        try { await post(`/api/admin/orders/${o.id}/${lr ? 'late-refund' : 'accept-late'}`); toast(lr ? 'Refunded' : 'Order reopened as paid'); await reload(); }
+        catch (err) { $('#omsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; (lr || la).disabled = false; }
+        return;
+      }
       const mg = e.target.closest('[data-manage]');
       if (mg) return manageOrder(orders.find((o) => o.id === Number(mg.dataset.manage)), reload);
       const b = e.target.closest('[data-cancel]'); if (!b || !confirm('Cancel this unpaid order?')) return;
       try { await post(`/api/admin/orders/${b.dataset.cancel}/cancel`); await reload(); }
       catch (err) { $('#omsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
     };
-    paint();
+    paint(); paintMore();
   }
 
   function manageOrder(o, done) {
@@ -959,7 +1033,7 @@
         const r = await fetch(`/api/admin/orders/${o.id}/evidence`, { headers: { 'x-admin-token': token } });
         if (!r.ok) throw new Error('Could not build the page');
         const url = URL.createObjectURL(new Blob([await r.text()], { type: 'text/html' }));
-        window.open(url, '_blank');
+        window.open(url, '_blank', 'noopener');
       } catch (e) { toast(e.message); }
     };
     let ful = o.fulfillment || '';
@@ -995,9 +1069,9 @@
   // =====================================================================
   async function viewCustomers() {
     const [list, subs] = await Promise.all([api('/api/admin/customers'), api('/api/admin/subscribers')]);
-    view().innerHTML = `<div class="topbar"><h1>Customers</h1></div><div id="cmsg"></div>
+    view().innerHTML = `<div class="topbar"><h1>Customers</h1><div class="spacer"></div><button class="btn" id="erasebtn" style="color:var(--bad,#b42318);border-color:currentColor">Erase a person…</button></div><div id="cmsg"></div><div id="erasebox"></div>
       <div class="card" id="elist" style="margin-bottom:18px"><div class="row" style="flex-wrap:wrap;gap:10px;align-items:center"><div><h2 style="font-size:20px;margin:0">Email list</h2><div class="small muted"><b>${subs.filter((x) => !x.unsubscribed).length}</b> subscribed${subs.some((x) => x.unsubscribed) ? ` · ${subs.filter((x) => x.unsubscribed).length} unsubscribed` : ''}. Only people who ticked the box on your links page.</div></div><span class="spacer"></span><button class="btn btn-primary" id="edl" ${subs.length ? '' : 'disabled'}>Download CSV</button></div>
-        ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}${x.unsubscribed ? ' <span class="badge b-canceled">Unsubscribed</span>' : ''}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td><button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
+        ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th>Status</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td>${x.unsubscribed ? '<span class="badge b-canceled">Unsubscribed</span>' : '<span class="badge b-paid">Subscribed</span>'}</td><td><button class="btn btn-sm" data-eun="${x.id}" data-to="${x.unsubscribed ? 0 : 1}">${x.unsubscribed ? 'Put back on list' : 'Mark unsubscribed'}</button> <button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
         <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Outpost doesn’t send email itself.</div></div>
       <div class="search">${icon('search')}<input class="input" id="cq" placeholder="Search by name or email…"></div>
       <div class="card tbl-scroll"><table><thead><tr><th>Customer</th><th>Orders</th><th>Spent</th><th>Bids</th><th>Won</th><th>Last order</th><th></th></tr></thead><tbody id="crows"></tbody></table></div>
@@ -1012,8 +1086,52 @@
         `<tr><td colspan="7" class="empty">${list.length ? 'No matches' : 'No customers yet.'}</td></tr>`;
     };
     $('#cq').oninput = paint;
+    // --- erase a person (delete-my-information requests) ---
+    $('#erasebtn').onclick = () => {
+      $('#erasebox').innerHTML = `<div class="card" style="margin-bottom:18px"><h2 style="font-size:20px;margin:0 0 6px">Erase a person’s information</h2>
+        <p class="muted small" style="margin:0 0 10px">For when someone asks you to remove their information. Enter the email address they used.</p>
+        <label class="field"><span class="label">Their email address</span><input class="input" id="eremail" type="email" inputmode="email" autocomplete="off"></label>
+        <div id="erwhat"></div><div id="erwarn"></div>
+        <div class="row mt" style="gap:10px"><button class="btn btn-primary" id="ergo" style="background:var(--bad,#b42318)">Erase this person</button><button class="btn btn-ghost" id="ercancel">Cancel</button></div><div id="ermsg"></div></div>`;
+      const what = () => {
+        const em = $('#eremail').value.trim().toLowerCase();
+        const c = list.find((x) => x.email === em);
+        $('#erwhat').innerHTML = em ? `<div class="msg" style="margin-top:10px"><b>What will happen</b><ul class="small" style="margin:6px 0 0 18px;padding:0;line-height:1.6">
+          <li>Their name, email, address, saved card and bidder sign-in are blanked.</li>
+          <li>${c ? c.orders + ' order' + (c.orders === 1 ? '' : 's') : 'Any orders'} keep their amounts and dates but lose the email and address.</li>
+          <li>Their bids stay in the lot history, shown as “Removed bidder”.</li>
+          <li>They’re taken off the email list. A saved card is deleted at Stripe.</li></ul>
+          <div class="small muted" style="margin-top:6px">Stripe keeps its own record of payments. If they asked for that to go too, remove it in your Stripe dashboard.</div></div>` : '';
+      };
+      $('#eremail').oninput = what;
+      $('#ercancel').onclick = () => { $('#erasebox').innerHTML = ''; };
+      let force = false;
+      $('#ergo').onclick = async () => {
+        const em = $('#eremail').value.trim();
+        if (!em) return ($('#ermsg').innerHTML = '<div class="msg err">Enter an email address.</div>');
+        if (force && $('#erforce') && !$('#erforce').checked) return ($('#ermsg').innerHTML = '<div class="msg err">Tick the box to erase anyway, or ship the order first.</div>');
+        $('#ergo').disabled = true; $('#ermsg').innerHTML = '';
+        try {
+          const r = await post('/api/admin/privacy/erase', { email: em, ...(force ? { force: true } : {}) });
+          const done = `<div class="msg"><b>Done.</b> ${r.bidders} bidder record${r.bidders === 1 ? '' : 's'}, ${r.orders} order${r.orders === 1 ? '' : 's'} and ${r.subscribers} email list entr${r.subscribers === 1 ? 'y' : 'ies'} erased. ${esc(r.note || '')}${r.stripe_customers_failed ? ' <b>A saved-card customer could not be deleted at Stripe; remove it in your Stripe dashboard.</b>' : ''}</div>`;
+          await viewCustomers(); $('#cmsg').innerHTML = done;
+        } catch (err) {
+          $('#ergo').disabled = false;
+          if (/paid but not shipped/.test(err.message)) {
+            force = true;
+            $('#erwarn').innerHTML = `<div class="msg err" style="margin-top:10px;background:#fff8e6;color:#5c3d00;border-color:#f1d9a8">${esc(err.message)}</div><label class="check" style="margin-top:8px"><input type="checkbox" id="erforce"> <span>Erase anyway, even though an order isn’t shipped</span></label>`;
+          } else $('#ermsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`;
+        }
+      };
+    };
     if ($('#edl')) $('#edl').onclick = () => download('/api/admin/subscribers.csv', 'email-list.csv').catch((e) => { $('#cmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; });
     if ($('#erows')) $('#erows').onclick = async (e) => {
+      const un = e.target.closest('[data-eun]');
+      if (un) {
+        try { await put('/api/admin/subscribers/' + un.dataset.eun, { unsubscribed: un.dataset.to === '1' }); toast(un.dataset.to === '1' ? 'Marked unsubscribed' : 'Back on the list'); viewCustomers(); }
+        catch (err) { $('#cmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+        return;
+      }
       const b = e.target.closest('[data-esub]'); if (!b) return;
       if (!confirm('Remove this email from your list?')) return;
       try { await api('/api/admin/subscribers/' + b.dataset.esub, { method: 'DELETE' }); toast('Removed'); viewCustomers(); }
@@ -1037,6 +1155,8 @@
     const [cur, st] = await Promise.all([api('/api/admin/links'), api('/api/admin/status')]);
     let list = (cur.links || []).map((l) => ({ ...l }));
     let uid = 1; list.forEach((l) => { l._k = uid++; });
+    const strip = (arr) => JSON.stringify((arr || []).map(({ _k, ...l }) => l));
+    let baseline = strip(cur.links), saving = false;
     const base = (st.base_url || location.origin).replace(/\/$/, '');
     view().innerHTML = `<div class="topbar"><h1>Links</h1><button class="btn btn-primary" id="lsave">Save</button></div><div id="lmsg"></div>
       <div class="settings-col"><div style="display:grid;gap:18px;min-width:0">
@@ -1076,13 +1196,18 @@
     document.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => { const kind = b.dataset.add; list.push({ _k: uid++, kind, title: '', url: kind === 'shop' ? 'store.html' : '', note: '', date: '', place: '', hidden: false }); paint(); const t = document.querySelector('.lcard:last-child [data-f="title"]'); if (t) t.focus(); }; });
     $('#lcopy').onclick = async () => { try { await navigator.clipboard.writeText($('#lurl').value); toast('Address copied'); } catch { $('#lurl').select(); } };
     $('#lsave').onclick = async () => {
+      if (saving) return; saving = true;
       try {
+        // If the links were changed somewhere else (another tab or device) since this page opened, ask before overwriting them.
+        const fresh = await api('/api/admin/links');
+        if (strip(fresh.links) !== baseline && !confirm('Your links were changed somewhere else since you opened this page. Save anyway and replace those changes?')) { saving = false; return; }
         const clean = list.map(({ _k, ...l }) => l);
         const r = await put('/api/admin/settings', { links: clean, links_intro: $('#lintro').value, mailing_list_on: $('#lmail').checked });
         settings = { ...settings, links: r.links, links_intro: r.links_intro, mailing_list_on: r.mailing_list_on };
-        list = (r.links_all || []).map((l) => ({ ...l, _k: uid++ })); paint();
+        list = (r.links_all || []).map((l) => ({ ...l, _k: uid++ })); baseline = strip(list); paint();
         $('#lmsg').innerHTML = '<div class="msg">Saved. Your links page is up to date.</div>'; window.scrollTo(0, 0);
       } catch (e) { $('#lmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; window.scrollTo(0, 0); }
+      saving = false;
     };
   }
 
@@ -1118,7 +1243,7 @@
         } else if (hd) {
           const r = list.find((x) => x.id === Number(hd.dataset.hide));
           if (r.hidden) { await put(`/api/admin/reviews/${r.id}/hide`, { hidden: false }); return reload(); }
-          const m = openModal(`<div style="text-align:left"><h2>Hide this review?</h2><p class="muted small">Only for abuse, spam, or things that aren’t true. Shoppers will see “${'1'} review hidden by the seller” in your shop. Write a short reason for your own records.</p>
+          const m = openModal(`<div style="text-align:left"><h2>Hide this review?</h2><p class="muted small">Only for abuse, spam, or things that aren’t true. Shoppers will see a note in your shop that a review was hidden by the seller. Write a short reason for your own records.</p>
             <input class="input" id="hnote" maxlength="200" placeholder="Contains personal information about me">
             <div id="herr"></div><button class="btn btn-danger btn-block mt" id="hgo">Hide review</button><button class="btn btn-ghost btn-block mt" id="hno">Cancel</button></div>`);
           $('#hno', m.el).onclick = m.close;
@@ -1277,6 +1402,9 @@
   // State base sales-tax rates (Tax Foundation, 2026). Local add-ons aren't included, so the field stays editable.
   const STATE_TAX = {AL:['Alabama',4],AK:['Alaska',0],AZ:['Arizona',5.6],AR:['Arkansas',6.5],CA:['California',7.25],CO:['Colorado',2.9],CT:['Connecticut',6.35],DE:['Delaware',0],DC:['District of Columbia',6],FL:['Florida',6],GA:['Georgia',4],HI:['Hawaii',4],ID:['Idaho',6],IL:['Illinois',6.25],IN:['Indiana',7],IA:['Iowa',6],KS:['Kansas',6.5],KY:['Kentucky',6],LA:['Louisiana',5],ME:['Maine',5.5],MD:['Maryland',6],MA:['Massachusetts',6.25],MI:['Michigan',6],MN:['Minnesota',6.88],MS:['Mississippi',7],MO:['Missouri',4.23],MT:['Montana',0],NE:['Nebraska',5.5],NV:['Nevada',6.85],NH:['New Hampshire',0],NJ:['New Jersey',6.63],NM:['New Mexico',4.88],NY:['New York',4],NC:['North Carolina',4.75],ND:['North Dakota',5],OH:['Ohio',5.75],OK:['Oklahoma',4.5],OR:['Oregon',0],PA:['Pennsylvania',6],RI:['Rhode Island',7],SC:['South Carolina',6],SD:['South Dakota',4.2],TN:['Tennessee',7],TX:['Texas',6.25],UT:['Utah',6.1],VT:['Vermont',6],VA:['Virginia',5.3],WA:['Washington',6.5],WV:['West Virginia',6],WI:['Wisconsin',5],WY:['Wyoming',4]};
 
+  const MY_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } })();
+  const TZ_LIST = (() => { try { return Intl.supportedValuesOf('timeZone'); } catch { return ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu', 'America/Toronto', 'America/Vancouver']; } })();
+  const mb = (b) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0);
   async function viewSettings() {
     const [st, cur, discounts] = await Promise.all([api('/api/admin/status'), fetch('/api/settings').then((r) => r.json()), api('/api/admin/discounts')]);
     settings = cur;
@@ -1303,6 +1431,13 @@
               </div></details>
             <div class="hint">While paused, visitors can look around but can’t check out. Your register still works, and auctions already running keep going.</div>
             <button class="btn btn-primary mt" id="ssave">Save</button><div id="smsg"></div>`)}
+          ${card('Shop timezone', `
+            <p class="muted small" style="margin:0 0 10px">Discount start and last days, “pause sales” dates and the daily sales reports change over at midnight in this timezone. Without one they follow the server’s clock, which is usually several hours off.</p>
+            <label class="field"><span class="label">Timezone</span><input class="input" id="tzin" list="tzlist" autocomplete="off" placeholder="${esc(MY_TZ || 'America/Los_Angeles')}" value="${esc(cur.timezone || '')}"><datalist id="tzlist">${TZ_LIST.map((z) => `<option value="${esc(z)}">`).join('')}</datalist></label>
+            <div class="hint" id="tznow"></div>
+            <div class="row mt" style="gap:10px;flex-wrap:wrap"><button class="btn btn-primary" id="tzsave">Save</button>${MY_TZ ? `<button class="btn btn-ghost" type="button" id="tzmine">Use my browser’s timezone (${esc(MY_TZ)})</button>` : ''}</div><div id="tzmsg"></div>`)}
+          ${card('Photos', `
+            <div id="phbody" class="muted small">Checking your photos…</div>`)}
           ${lookCard()}
           ${card('About your shop', `
             <label class="field"><span class="label">Tell shoppers about yourself and your shop</span><textarea class="input" id="about" rows="6" maxlength="2000" placeholder="Hi, I’m Sam. I make linocut prints and ceramics in a small studio in Portland…">${esc(cur.about_text || '')}</textarea>
@@ -1358,7 +1493,8 @@
               <label class="field"><span class="label">Type</span><select class="input" id="dkind"><option value="percent">Percent off</option><option value="amount">Dollars off</option></select></label>
               <label class="field"><span class="label" id="dvl">Percent</span><input class="input" id="dval" inputmode="decimal" placeholder="10"></label>
               <label class="field"><span class="label">Minimum spend (optional)</span><input class="input" id="dmin" inputmode="decimal" placeholder="25.00"></label>
-              <label class="field"><span class="label">Max uses (optional)</span><input class="input" id="dmax" inputmode="numeric"></label>
+              <label class="field"><span class="label">Total times it can be used (optional)</span><input class="input" id="dmax" inputmode="numeric"></label>
+              <label class="field"><span class="label">Times each customer can use it <span class="badge b-live">New</span></span><input class="input" id="dper" inputmode="numeric" placeholder="1"><span class="small muted">Counted by email address. Leave empty for no limit.</span></label>
               <label class="field"><span class="label">Starts (optional)</span><input class="input" type="date" id="dstart"></label>
               <label class="field"><span class="label">Last day (optional)</span><input class="input" type="date" id="dexp"></label>
             </div>
@@ -1414,6 +1550,8 @@
     $('#ssave').onclick = async () => {
       try {
         const email = $('#smail').value.trim();
+        // Take the current saved values first, so a change made in another tab isn't reverted by this Save (it used to resend the old copy).
+        const fresh = await fetch('/api/settings').then((x) => x.json()); pol = fresh.policy || {}; soc = fresh.social || {};
         const r = await put('/api/admin/settings', { store_name: $('#sname').value, break_on: $('#sbreak').checked, break_message: $('#sbmsg').value, break_from: $('#sfrom').value, break_until: $('#suntil').value,
           ...(email !== (pol.contact_email || '') ? { policy: { ...pol, contact_email: email } } : {}), social: { ...soc, email } });
         settings = { ...settings, ...r }; if (r.policy) pol = r.policy; if (r.social) soc = r.social;
@@ -1421,6 +1559,38 @@
         $('#smsg').innerHTML = '<div class="msg">Saved.</div>';
       } catch (e) { $('#smsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
+
+    // --- timezone ---
+    const paintTz = () => {
+      const z = $('#tzin').value.trim() || MY_TZ;
+      let t = '';
+      try { t = new Date().toLocaleString([], { timeZone: z, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { t = ''; }
+      $('#tznow').innerHTML = t ? `Shop time right now: <b>${esc(t)}</b>` : '<span style="color:var(--bad,#b42318)">That timezone isn’t one I know. Pick one from the list.</span>';
+    };
+    $('#tzin').oninput = paintTz; paintTz();
+    if ($('#tzmine')) $('#tzmine').onclick = () => { $('#tzin').value = MY_TZ; paintTz(); };
+    $('#tzsave').onclick = async () => {
+      try { const r = await put('/api/admin/settings', { timezone: $('#tzin').value.trim() }); settings = { ...settings, ...r }; $('#tzmsg').innerHTML = '<div class="msg">Saved. Dates and reports now follow this timezone.</div>'; }
+      catch (e) { $('#tzmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+    // --- photos ---
+    const paintPhotos = async () => {
+      const box = $('#phbody');
+      try {
+        const u = await post('/api/admin/images/cleanup', {});
+        const pct = Math.min(100, Math.round((u.used_bytes / u.limit_bytes) * 100));
+        box.className = '';
+        box.innerHTML = `<div>${mb(u.used_bytes)} MB used of ${mb(u.limit_bytes)} MB</div>
+          <div style="height:10px;border-radius:5px;background:var(--line,#e5e7eb);margin:8px 0"><div style="width:${pct}%;height:10px;border-radius:5px;background:var(--accent,#2f5d50)"></div></div>
+          ${u.unused ? `<p class="small" style="margin:0 0 10px">${u.unused} photo${u.unused === 1 ? ' isn’t' : 's aren’t'} used by any product, lot, product line or setting (${mb(u.bytes)} MB).</p><button class="btn" id="phclean">Clean up unused photos…</button><div id="phconfirm"></div>` : '<p class="small muted" style="margin:0">Every photo is in use.</p>'}<div id="phmsg"></div>`;
+        if (u.unused) $('#phclean').onclick = () => {
+          $('#phconfirm').innerHTML = `<div class="msg err" style="margin-top:10px"><b>Delete ${u.unused} unused photo${u.unused === 1 ? '' : 's'} and free ${mb(u.bytes)} MB?</b><div class="small" style="margin:6px 0 10px">This can’t be undone. Photos that a product, lot or setting uses are never touched.</div><div class="row" style="gap:10px"><button class="btn btn-primary" id="phdel">Delete ${u.unused} photo${u.unused === 1 ? '' : 's'}</button><button class="btn btn-ghost" id="phno">Cancel</button></div></div>`;
+          $('#phno').onclick = () => { $('#phconfirm').innerHTML = ''; };
+          $('#phdel').onclick = async () => { $('#phdel').disabled = true; try { await post('/api/admin/images/cleanup', { delete: true }); toast('Photos removed'); paintPhotos(); } catch (e) { $('#phmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; } };
+        };
+      } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+    paintPhotos();
 
     // --- sales tax ---
     $('#taxsave').onclick = async () => {
@@ -1441,6 +1611,7 @@
     $('#asave').onclick = async () => {
       const social = {}; document.querySelectorAll('[data-soc]').forEach((i) => { social[i.dataset.soc] = i.value.trim(); });
       try {
+        const fresh = await fetch('/api/settings').then((x) => x.json()); soc = fresh.social || {};
         const r = await put('/api/admin/settings', { about_text: $('#about').value, handmade_statement: $('#hand').value, social: { ...soc, ...social } });
         settings = { ...settings, ...r }; if (r.social) soc = r.social; $('#amsg').innerHTML = '<div class="msg">Saved. Your About page is in the shop menu.</div>';
         document.querySelectorAll('[data-soc]').forEach((i) => { i.value = (r.social || {})[i.dataset.soc] || ''; });
@@ -1538,7 +1709,7 @@
     const dPaint = () => {
       $('#dlist').innerHTML = dlist.length ? dlist.map((d) => {
         const off = d.kind === 'percent' ? `${d.value}% off` : `${fmt(d.value)} off`;
-        const bits = [d.min_subtotal_cents ? `over ${fmt(d.min_subtotal_cents)}` : '', d.max_uses ? `${d.uses}/${d.max_uses} used` : `${d.uses} used`, d.starts_on ? `starts ${d.starts_on}` : '', d.expires_on ? `ends ${d.expires_on}` : ''].filter(Boolean).join(' · ');
+        const bits = [d.min_subtotal_cents ? `over ${fmt(d.min_subtotal_cents)}` : '', d.max_uses ? `${d.uses}/${d.max_uses} used` : `${d.uses} used`, d.max_per_customer ? `${d.max_per_customer} per customer` : '', d.starts_on ? `starts ${d.starts_on}` : '', d.expires_on ? `ends ${d.expires_on}` : ''].filter(Boolean).join(' · ');
         return `<div class="drow"><div><b>${esc(d.code)}</b> <span class="badge ${d.active ? 'b-live' : ''}">${d.active ? 'On' : 'Off'}</span><div class="small muted">${off}${bits ? ' · ' + bits : ''}</div></div>
           <div class="row"><button class="btn btn-sm" data-dt="${d.id}">${d.active ? 'Turn off' : 'Turn on'}</button><button class="btn btn-sm btn-danger" data-dx="${d.id}">Delete</button></div></div>`;
       }).join('') : '<div class="muted small">No codes yet. Make one below, like WELCOME10 for 10% off.</div>';
@@ -1550,9 +1721,9 @@
         const kind = $('#dkind').value;
         const value = kind === 'percent' ? Number($('#dval').value) : toCents($('#dval').value);
         const min = $('#dmin').value.trim() ? toCents($('#dmin').value) : 0;
-        await post('/api/admin/discounts', { code: $('#dcode').value, kind, value, min_subtotal_cents: min, max_uses: $('#dmax').value.trim() ? Number($('#dmax').value.trim()) : null, starts_on: $('#dstart').value || null, expires_on: $('#dexp').value || null });
+        await post('/api/admin/discounts', { code: $('#dcode').value, kind, value, min_subtotal_cents: min, max_uses: $('#dmax').value.trim() ? Number($('#dmax').value.trim()) : null, max_per_customer: $('#dper').value.trim() ? Number($('#dper').value.trim()) : null, starts_on: $('#dstart').value || null, expires_on: $('#dexp').value || null });
         dlist = await api('/api/admin/discounts'); dPaint();
-        ['dcode', 'dval', 'dmin', 'dmax', 'dstart', 'dexp'].forEach((id) => { $('#' + id).value = ''; });
+        ['dcode', 'dval', 'dmin', 'dmax', 'dper', 'dstart', 'dexp'].forEach((id) => { $('#' + id).value = ''; });
         $('#dmsg').innerHTML = '<div class="msg">Code added.</div>';
       } catch (e) { $('#dmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
     };
