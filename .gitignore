@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Secrets and local settings: never commit these
+.env
+.env.*
+!.env.example
+
+# Your shop's database and backups (customer data, tokens, 2FA secret)
+pos.db
+pos.db-wal
+pos.db-shm
+pos.db-journal
+outpost.db
+outpost.db-wal
+outpost.db-shm
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+outpost-backup*.tar.gz
+
+# Uploaded product photos live on your own disk, not in the code
+public/images/*
+!public/images/.gitkeep
+
+# Logs and OS junk
+*.log
+.DS_Store
