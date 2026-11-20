@@ -207,7 +207,7 @@
     [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/lines$/, viewLines, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
     [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
-    [/^#\/marketing(?:\/(links|sources))?$/, viewMarketing, 'marketing'], [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
+    [/^#\/marketing(?:\/(calendar|gallery|ready|links|sources))?$/, viewMarketing, 'marketing'], [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
   ];
 
   async function route() {
@@ -1156,18 +1156,238 @@
   // MARKETING (tracked links, sales by source)
   // =====================================================================
   async function viewMarketing(m) {
-    const tab = (m && m[1]) || 'links';
+    const tab = (m && m[1]) || 'calendar';
     const seq = routeSeq;
+    mk.loaded = false;
     view().innerHTML = `
       <div class="topbar"><h1>Marketing</h1></div>
       <div class="seg" id="mktabs">
-        <button data-t="links" class="${tab === 'links' ? 'on' : ''}">Tracked links</button>
-        <button data-t="sources" class="${tab === 'sources' ? 'on' : ''}">Sales by source</button>
+        ${[['calendar', 'Calendar'], ['gallery', 'Gallery'], ['ready', 'Ready to post'], ['links', 'Tracked links'], ['sources', 'Sales by source']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}${k === 'ready' ? '<span class="nav-badge"></span>' : ''}</button>`).join('')}
       </div>
       <div id="mkbody" style="margin-top:12px"></div>`;
     document.querySelectorAll('#mktabs button').forEach((b) => { b.onclick = () => { location.hash = '#/marketing/' + b.dataset.t; }; });
-    if (tab === 'sources') return mktSources(seq);
-    return mktLinks(seq);
+    mkBadge();
+    try {
+      if (tab === 'sources') return await mktSources(seq);
+      if (tab === 'links') return await mktLinks(seq);
+      if (tab === 'gallery') return await mktGallery(seq);
+      if (tab === 'ready') return await mktReady(seq);
+      return await mktCalendar(seq);
+    } catch (e) { if (seq === routeSeq) $('#mkbody').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+  }
+
+  // ---- Marketing: calendar, gallery, post editor, ready to post (all times shown in the shop's timezone) ----
+  const mk = { tz: '', cal: 'week', day: '', posts: [], photos: [], links: [], products: [], on: false, loaded: false };
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function zparts(ms) {
+    const f = new Intl.DateTimeFormat('en-US', { timeZone: mk.tz || undefined, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const o = {}; f.formatToParts(new Date(ms)).forEach((p) => { o[p.type] = Number(p.value); });
+    return { y: o.year, m: o.month, d: o.day, h: o.hour % 24, mi: o.minute };
+  }
+  const dayKey = (p) => `${p.y}-${pad2(p.m)}-${pad2(p.d)}`;
+  const keyOf = (ms) => dayKey(zparts(ms));
+  const keyParts = (k) => { const [y, m, d] = k.split('-').map(Number); return { y, m, d }; };
+  const addDays = (k, n) => { const { y, m, d } = keyParts(k); const t = new Date(Date.UTC(y, m - 1, d + n)); return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-${pad2(t.getUTCDate())}`; };
+  const dowOf = (k) => { const { y, m, d } = keyParts(k); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); };
+  function zoned(k, h, mi) {   // a wall-clock time in the shop timezone -> UTC ms
+    const { y, m, d } = keyParts(k); const guess = Date.UTC(y, m - 1, d, h, mi);
+    const off = (t) => { const p = zparts(t); return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi) - t; };
+    let t = guess - off(guess); t = guess - off(t); return t;
+  }
+  const hr12 = (h) => (h % 12 || 12) + (h < 12 ? ' AM' : ' PM');
+  const clock = (ms) => { const p = zparts(ms); return (p.h % 12 || 12) + ':' + pad2(p.mi) + (p.h < 12 ? ' AM' : ' PM'); };
+  const dayLabel = (k) => { const { m, d } = keyParts(k); return DOW[dowOf(k)] + ' ' + MON[m - 1].slice(0, 3) + ' ' + d; };
+  const postThumb = (p) => p.photos[0] ? `<img src="${esc(p.photos[0])}" alt="">` : '<span class="mk-nophoto">No photo</span>';
+
+  async function mkLoad() {
+    const [pp, ph, ln, set, prods] = await Promise.all([api('/api/admin/marketing/posts'), api('/api/admin/marketing/photos'), api('/api/admin/marketing/links'), fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json()).catch(() => [])]);
+    mk.posts = pp.posts; mk.on = !!pp.gallery_on; mk.photos = ph; mk.links = ln.links.filter((l) => !l.archived); mk.products = prods; mk.tz = set.timezone || '';
+    if (!mk.day) mk.day = keyOf(Date.now());
+    mk.loaded = true;
+  }
+  async function mkBadge() {
+    try { const d = await api('/api/admin/marketing/due'); const a = document.querySelector('.nav a[data-k="marketing"]'); if (!a) return d.count; let b = a.querySelector('.nav-badge'); if (d.count) { if (!b) { b = document.createElement('span'); b.className = 'nav-badge'; a.appendChild(b); } b.textContent = d.count; } else if (b) b.remove(); const t = document.querySelector('#mktabs [data-t="ready"] .nav-badge'); if (t) t.textContent = d.count || ''; return d.count; } catch { return 0; }
+  }
+
+  // Calendar ------------------------------------------------------------
+  function postChip(p) {
+    const st = p.status === 'draft' ? 'draft' : (p.posted_at ? 'posted' : '');
+    return `<button class="mk-chip ${st}" draggable="${p.status === 'scheduled' ? 'true' : 'false'}" data-post="${p.id}" title="${esc(p.caption.slice(0, 80))}">${postThumb(p)}<span>${p.scheduled_at ? clock(p.scheduled_at) : 'Draft'}</span></button>`;
+  }
+  async function mktCalendar(seq) {
+    if (!mk.loaded) await mkLoad(); if (seq !== routeSeq) return;
+    const body = $('#mkbody');
+    const sched = mk.posts.filter((p) => p.status === 'scheduled' && p.scheduled_at);
+    const drafts = mk.posts.filter((p) => p.status === 'draft');
+    const today = keyOf(Date.now());
+    let head = '', grid = '';
+    if (mk.cal === 'week') {
+      const start = addDays(mk.day, -dowOf(mk.day)); const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(start, i));
+      head = `${dayLabel(days[0])} – ${dayLabel(days[6])}`;
+      const byCell = {}; sched.forEach((p) => { const z = zparts(p.scheduled_at); (byCell[dayKey(z) + '|' + z.h] ||= []).push(p); });
+      grid = `<div class="mk-week"><div class="mk-corner"></div>${days.map((d) => `<div class="mk-dh${d === today ? ' today' : ''}">${dayLabel(d)}</div>`).join('')}` +
+        Array.from({ length: 24 }, (_, h) => h).filter((h) => h >= 6 || (byCell && days.some((d) => byCell[d + '|' + h]))).map((h) => `<div class="mk-hr">${hr12(h)}</div>${days.map((d) => `<div class="mk-cell${d === today ? ' today' : ''}" data-day="${d}" data-hour="${h}">${(byCell[d + '|' + h] || []).sort((a, b) => a.scheduled_at - b.scheduled_at).map(postChip).join('')}</div>`).join('')}`).join('') + '</div>';
+    } else if (mk.cal === 'month') {
+      const { y, m } = keyParts(mk.day); const first = `${y}-${pad2(m)}-01`; const start = addDays(first, -dowOf(first));
+      head = MON[m - 1] + ' ' + y;
+      const byDay = {}; sched.forEach((p) => { (byDay[keyOf(p.scheduled_at)] ||= []).push(p); });
+      const cells = []; for (let i = 0; i < 42; i++) { const d = addDays(start, i); if (i >= 35 && keyParts(d).m !== m) break; cells.push(d); }
+      grid = `<div class="mk-month">${DOW.map((x) => `<div class="mk-dh">${x}</div>`).join('')}${cells.map((d) => `<div class="mk-mcell${keyParts(d).m !== m ? ' other' : ''}${d === today ? ' today' : ''}" data-day="${d}" data-hour="10"><div class="mk-dn">${keyParts(d).d}</div>${(byDay[d] || []).sort((a, b) => a.scheduled_at - b.scheduled_at).map(postChip).join('')}</div>`).join('')}</div>`;
+    } else {
+      head = 'All scheduled posts';
+      grid = sched.length ? `<div class="card" style="padding:0">${[...sched].sort((a, b) => a.scheduled_at - b.scheduled_at).map((p) => `<div class="mk-listrow" data-post="${p.id}"><div class="mk-lthumb">${postThumb(p)}</div><div style="flex:1;min-width:0"><b>${esc(dayLabel(keyOf(p.scheduled_at)))} · ${clock(p.scheduled_at)}</b><div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.caption) || 'No caption'}</div></div><span class="small muted">${[p.to_gallery && 'Gallery', p.to_instagram && 'Instagram', p.to_facebook && 'Facebook'].filter(Boolean).join(', ')}</span></div>`).join('')}</div>` : '<div class="card"><div class="empty">Nothing scheduled yet. Choose “New post” to start.</div></div>';
+    }
+    body.innerHTML = `<div class="row wrap" style="gap:8px;margin-bottom:10px;align-items:center">
+        <div class="seg" id="calmode">${['week', 'month', 'list'].map((v) => `<button data-v="${v}" class="${mk.cal === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
+        ${mk.cal !== 'list' ? `<button class="btn btn-sm" id="calprev" aria-label="Previous">‹</button><button class="btn btn-sm" id="caltoday">Today</button><button class="btn btn-sm" id="calnext" aria-label="Next">›</button>` : ''}
+        <b style="flex:1">${esc(head)}</b><span class="small muted">Times in ${esc(mk.tz || 'your computer’s time zone')}</span>
+        <button class="btn btn-primary" id="newpost">New post</button></div>
+      ${grid}
+      ${drafts.length ? `<div class="card" style="margin-top:12px"><h2 style="font-size:20px;margin-bottom:6px">Drafts</h2><div class="mk-drafts">${drafts.map((p) => `<button class="mk-draft" data-post="${p.id}">${postThumb(p)}<span>${esc(p.caption.slice(0, 40)) || 'Untitled'}</span></button>`).join('')}</div></div>` : ''}
+      <p class="hint" style="margin-top:8px">Click an empty time slot to add a post there. Drag a post to move it. Posts for the Gallery appear on your public page when their time arrives. Instagram and Facebook posts show up in “Ready to post” for you to post by hand.</p>`;
+    document.querySelectorAll('#calmode button').forEach((b) => { b.onclick = () => { mk.cal = b.dataset.v; mktCalendar(routeSeq); }; });
+    const step = (n) => { mk.day = mk.cal === 'month' ? (() => { const { y, m } = keyParts(mk.day); const t = new Date(Date.UTC(y, m - 1 + n, 1)); return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-01`; })() : addDays(mk.day, 7 * n); mktCalendar(routeSeq); };
+    if ($('#calprev')) { $('#calprev').onclick = () => step(-1); $('#calnext').onclick = () => step(1); $('#caltoday').onclick = () => { mk.day = keyOf(Date.now()); mktCalendar(routeSeq); }; }
+    $('#newpost').onclick = () => mkEditor(null, {});
+    body.onclick = (e) => {
+      const c = e.target.closest('[data-post]'); if (c) { return mkEditor(mk.posts.find((p) => p.id === Number(c.dataset.post))); }
+      const cell = e.target.closest('[data-day]'); if (cell) mkEditor(null, { at: zoned(cell.dataset.day, Number(cell.dataset.hour), 0) });
+    };
+    let dragId = 0;
+    body.ondragstart = (e) => { const c = e.target.closest('[data-post]'); if (c && c.draggable) { dragId = Number(c.dataset.post); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(dragId)); } };
+    body.ondragover = (e) => { if (dragId && e.target.closest('[data-day]')) e.preventDefault(); };
+    body.ondrop = async (e) => {
+      const cell = e.target.closest('[data-day]'); if (!cell || !dragId) return; e.preventDefault();
+      const p = mk.posts.find((x) => x.id === dragId); dragId = 0; if (!p) return;
+      const old = zparts(p.scheduled_at); const at = cell.dataset.hour && mk.cal === 'week' ? zoned(cell.dataset.day, Number(cell.dataset.hour), old.mi) : zoned(cell.dataset.day, old.h, old.mi);
+      try { await put('/api/admin/marketing/posts/' + p.id, { scheduled_at: at }); await mkLoad(); toast('Moved to ' + dayLabel(keyOf(at)) + ' ' + clock(at)); mktCalendar(routeSeq); mkBadge(); } catch (er) { toast(er.message); }
+    };
+  }
+
+  // Post editor ------------------------------------------------------------
+  async function jpegFrom(file, max = 1600) {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, max / Math.max(bmp.width, bmp.height)); const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height);
+    return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not read that photo'))), 'image/jpeg', 0.86));
+  }
+  function mkEditor(existing, preset = {}) {
+    const isNew = !existing;
+    const s = existing ? { caption: existing.caption, photos: [...existing.photos], link_code: existing.link_code || '', product_id: existing.product_id || 0, scheduled_at: existing.scheduled_at, to_gallery: existing.to_gallery, to_instagram: existing.to_instagram, to_facebook: existing.to_facebook }
+      : { caption: '', photos: [], link_code: '', product_id: 0, scheduled_at: preset.at || null, to_gallery: true, to_instagram: false, to_facebook: false };
+    let ratio = '4/5', pick = false;
+    const m = openModal('<div id="edbody"></div>', { wide: true });
+    m.el.style.maxWidth = '860px'; m.el.style.textAlign = 'left';
+    const dateVal = () => (s.scheduled_at ? keyOf(s.scheduled_at) : ''); const timeVal = () => (s.scheduled_at ? (() => { const p = zparts(s.scheduled_at); return pad2(p.h) + ':' + pad2(p.mi); })() : '');
+    function paint() {
+      $('#edbody', m.el).innerHTML = `<div class="mk-ed">
+        <div class="mk-prev"><div class="seg" id="edratio">${[['4/5', '4:5'], ['1/1', 'Square'], ['1.91/1', 'Wide']].map(([v, l]) => `<button data-v="${v}" class="${ratio === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+          <div class="mk-phone"><div class="mk-img" style="aspect-ratio:${ratio}">${s.photos[0] ? `<img src="${esc(s.photos[0])}" alt="">` : '<span class="muted">Choose a photo</span>'}</div><div class="mk-pcap">${esc(s.caption.slice(0, 125)) || '<span class="muted">Your caption shows here</span>'}</div></div>
+          <p class="hint">Preview only. Instagram may crop slightly differently.</p></div>
+        <div class="mk-form">
+          <div class="label">Photos <span class="small muted">(${s.photos.length} of 10)</span></div>
+          <div class="mk-strip">${s.photos.map((u, i) => `<div class="mk-sp"><img src="${esc(u)}" alt=""><div class="mk-spb">${i > 0 ? `<button data-l="${i}" title="Move left">‹</button>` : ''}<button data-x="${i}" title="Remove">×</button>${i < s.photos.length - 1 ? `<button data-r="${i}" title="Move right">›</button>` : ''}</div></div>`).join('')}</div>
+          <div class="row wrap" style="gap:6px;margin:6px 0"><button class="btn btn-sm" id="edpick">${pick ? 'Hide gallery photos' : 'Choose from gallery photos'}</button><label class="btn btn-sm" style="cursor:pointer">Upload new<input type="file" id="edup" accept="image/*" multiple hidden></label></div>
+          ${pick ? `<div class="mk-pickgrid">${mk.photos.length ? mk.photos.map((ph) => `<button class="mk-pk${s.photos.includes(ph.url) ? ' on' : ''}" data-u="${esc(ph.url)}"><img src="${esc(ph.url)}" alt=""></button>`).join('') : '<span class="muted small">No gallery photos yet. Upload one.</span>'}</div>` : ''}
+          <label class="field"><span class="label">Caption <span class="small muted" id="edcount">${s.caption.length}/2200</span></span><textarea class="input" id="edcap" rows="5" maxlength="2200">${esc(s.caption)}</textarea></label>
+          <div class="row wrap" style="gap:8px"><label class="field" style="flex:1;min-width:140px"><span class="label">Date</span><input type="date" class="input" id="eddate" value="${dateVal()}"></label><label class="field" style="flex:1;min-width:120px"><span class="label">Time</span><input type="time" class="input" id="edtime" value="${timeVal()}"></label></div>
+          <div class="row wrap" style="gap:8px"><label class="field" style="flex:1;min-width:150px"><span class="label">Tracked link</span><select class="input" id="edlink"><option value="">None</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === s.link_code ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>
+            <label class="field" style="flex:1;min-width:150px"><span class="label">Shop this product</span><select class="input" id="edprod"><option value="0">None</option>${mk.products.map((p) => `<option value="${p.id}"${p.id === s.product_id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>
+          <div class="label">Where it goes</div>
+          <div class="row wrap" style="gap:12px;margin-bottom:8px">${[['to_gallery', 'Gallery'], ['to_instagram', 'Instagram'], ['to_facebook', 'Facebook']].map(([k, l]) => `<label class="row" style="gap:6px"><input type="checkbox" data-d="${k}" ${s[k] ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+          <div id="edmsg"></div>
+          <div class="row wrap" style="gap:8px;justify-content:flex-end"><button class="btn" data-close>Cancel</button>${isNew ? '' : '<button class="btn btn-danger" id="eddel">Delete</button>'}<button class="btn" id="eddraft">Save as draft</button><button class="btn btn-primary" id="edsched">Schedule</button></div>
+        </div></div>`;
+      const q = (x) => $(x, m.el);
+      q('#edratio').onclick = (e) => { const b = e.target.closest('button'); if (b) { ratio = b.dataset.v; paint(); } };
+      q('#edpick').onclick = () => { pick = !pick; sync(); paint(); };
+      q('#edcap').oninput = (e) => { q('#edcount').textContent = e.target.value.length + '/2200'; const c = q('.mk-pcap'); if (c) c.textContent = e.target.value.slice(0, 125) || 'Your caption shows here'; };
+      q('.mk-strip').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; sync(); const d = b.dataset; if (d.x !== undefined) s.photos.splice(Number(d.x), 1); else if (d.l !== undefined) { const i = Number(d.l); [s.photos[i - 1], s.photos[i]] = [s.photos[i], s.photos[i - 1]]; } else if (d.r !== undefined) { const i = Number(d.r); [s.photos[i + 1], s.photos[i]] = [s.photos[i], s.photos[i + 1]]; } paint(); };
+      const pg = q('.mk-pickgrid'); if (pg) pg.onclick = (e) => { const b = e.target.closest('.mk-pk'); if (!b) return; sync(); const u = b.dataset.u; const i = s.photos.indexOf(u); if (i >= 0) s.photos.splice(i, 1); else if (s.photos.length < 10) s.photos.push(u); paint(); };
+      q('#edup').onchange = async (e) => {
+        const files = [...e.target.files]; if (!files.length) return; sync(); q('#edmsg').innerHTML = '<div class="msg">Uploading…</div>';
+        try {
+          for (const f of files) {
+            if (s.photos.length >= 10) break;
+            const url = await uploadImage(await jpegFrom(f)); await post('/api/admin/marketing/photos', { url }); s.photos.push(url);
+          }
+          mk.photos = await api('/api/admin/marketing/photos'); paint();
+        } catch (er) { q('#edmsg').innerHTML = `<div class="msg err">${esc(er.message || 'That photo could not be added')}</div>`; }
+      };
+      q('[data-close]').onclick = m.close;
+      q('#eddraft').onclick = () => save('draft'); q('#edsched').onclick = () => save('scheduled');
+      if (q('#eddel')) q('#eddel').onclick = async () => { if (!confirm('Delete this post? Its photos stay in your gallery photos.')) return; try { await api('/api/admin/marketing/posts/' + existing.id, { method: 'DELETE' }); m.close(); await refresh(); } catch (er) { toast(er.message); } };
+    }
+    function sync() {
+      const q = (x) => $(x, m.el); if (!q('#edcap')) return;
+      s.caption = q('#edcap').value; s.link_code = q('#edlink').value; s.product_id = Number(q('#edprod').value);
+      m.el.querySelectorAll('[data-d]').forEach((c) => { s[c.dataset.d] = c.checked; });
+      const d = q('#eddate').value, t = q('#edtime').value; s.scheduled_at = d && t ? zoned(d, Number(t.slice(0, 2)), Number(t.slice(3, 5))) : (d ? zoned(d, 10, 0) : null);
+    }
+    async function save(status) {
+      sync();
+      const body = { caption: s.caption, photos: s.photos, link_code: s.link_code || null, product_id: s.product_id || null, scheduled_at: s.scheduled_at, status, to_gallery: s.to_gallery, to_instagram: s.to_instagram, to_facebook: s.to_facebook };
+      if (status === 'scheduled' && !s.scheduled_at) return ($('#edmsg', m.el).innerHTML = '<div class="msg err">Pick a date and time to schedule it.</div>');
+      try { if (isNew) await post('/api/admin/marketing/posts', body); else await put('/api/admin/marketing/posts/' + existing.id, body); m.close(); toast(status === 'draft' ? 'Draft saved' : 'Scheduled'); await refresh(); }
+      catch (er) { $('#edmsg', m.el).innerHTML = `<div class="msg err">${esc(er.message)}</div>`; }
+    }
+    paint();
+  }
+  async function refresh() { await mkLoad(); const t = ($('#mktabs .on') || {}).dataset; const tab = (t && t.t) || 'calendar'; ({ calendar: mktCalendar, gallery: mktGallery, ready: mktReady })[tab]?.(routeSeq); mkBadge(); }
+
+  // Gallery (curate) ------------------------------------------------------------
+  async function mktGallery(seq) {
+    if (!mk.loaded) await mkLoad(); if (seq !== routeSeq) return;
+    const now = Date.now(); const list = mk.posts;
+    const badges = (p) => [p.pinned && 'Pinned', p.status === 'draft' && 'Draft', p.status === 'scheduled' && p.scheduled_at > now && 'Scheduled', p.hidden && 'Hidden', !p.to_gallery && 'Not in gallery'].filter(Boolean);
+    $('#mkbody').innerHTML = `<div class="row wrap" style="gap:10px;margin-bottom:10px;align-items:center">
+        <label class="row" style="gap:6px"><input type="checkbox" id="galon" ${mk.on ? 'checked' : ''}> <b>Show the Gallery on my shop</b></label>
+        ${mk.on ? '<a class="btn btn-sm" href="/gallery" target="_blank" rel="noopener">View public page</a>' : ''}
+        <span style="flex:1"></span><button class="btn btn-primary" id="newpost">New post</button></div>
+      ${mk.on ? '' : '<p class="hint">The Gallery is off, so visitors cannot see it yet. Turn it on when you have a few posts ready.</p>'}
+      ${list.length ? `<div class="mk-ggrid" id="gg">${list.map((p) => `<div class="mk-gt" draggable="true" data-id="${p.id}"><button class="mk-gimg" data-post="${p.id}">${postThumb(p)}${p.photos.length > 1 ? `<span class="mk-multi">${p.photos.length}</span>` : ''}</button><div class="mk-gb">${badges(p).map((b) => `<span class="badge">${b}</span>`).join('')}</div><div class="mk-ga"><button class="btn btn-sm" data-pin="${p.id}">${p.pinned ? 'Unpin' : 'Pin'}</button><button class="btn btn-sm" data-hide="${p.id}">${p.hidden ? 'Show' : 'Hide'}</button></div></div>`).join('')}</div><p class="hint" style="margin-top:8px">Drag a tile to change the order. Pinned posts stay at the top.</p>`
+        : '<div class="card"><div class="empty">No posts yet. Choose “New post” to add your first.</div></div>'}`;
+    $('#newpost').onclick = () => mkEditor(null, {});
+    $('#galon').onchange = async (e) => { try { await put('/api/admin/marketing/gallery', { on: e.target.checked }); mk.on = e.target.checked; mktGallery(routeSeq); } catch (er) { toast(er.message); e.target.checked = !e.target.checked; } };
+    const gg = $('#gg'); if (!gg) return;
+    gg.onclick = async (e) => {
+      const pin = e.target.closest('[data-pin]'), hide = e.target.closest('[data-hide]'), open = e.target.closest('[data-post]');
+      try {
+        if (pin) { const p = mk.posts.find((x) => x.id === Number(pin.dataset.pin)); await put('/api/admin/marketing/posts/' + p.id, { pinned: !p.pinned }); await mkLoad(); mktGallery(routeSeq); }
+        else if (hide) { const p = mk.posts.find((x) => x.id === Number(hide.dataset.hide)); await put('/api/admin/marketing/posts/' + p.id, { hidden: !p.hidden }); await mkLoad(); mktGallery(routeSeq); }
+        else if (open) mkEditor(mk.posts.find((x) => x.id === Number(open.dataset.post)));
+      } catch (er) { toast(er.message); }
+    };
+    let drag = 0;
+    gg.ondragstart = (e) => { const t = e.target.closest('.mk-gt'); if (t) { drag = Number(t.dataset.id); e.dataTransfer.setData('text/plain', String(drag)); } };
+    gg.ondragover = (e) => { if (drag) e.preventDefault(); };
+    gg.ondrop = async (e) => {
+      const t = e.target.closest('.mk-gt'); if (!t || !drag) return; e.preventDefault();
+      const ids = mk.posts.map((p) => p.id).filter((i) => i !== drag); ids.splice(ids.indexOf(Number(t.dataset.id)), 0, drag); drag = 0;
+      try { await post('/api/admin/marketing/posts/order', { ids }); await mkLoad(); mktGallery(routeSeq); } catch (er) { toast(er.message); }
+    };
+  }
+
+  // Ready to post ------------------------------------------------------------
+  async function mktReady(seq) {
+    if (!mk.loaded) await mkLoad();
+    const d = await api('/api/admin/marketing/due'); if (seq !== routeSeq) return;
+    const card = (p, done) => `<div class="card mk-ready"><div class="mk-lthumb big">${postThumb(p)}</div><div style="flex:1;min-width:200px"><div class="small muted">${esc(dayLabel(keyOf(p.scheduled_at)))} · ${clock(p.scheduled_at)} · ${[p.to_instagram && 'Instagram', p.to_facebook && 'Facebook'].filter(Boolean).join(' + ')}</div><p style="margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere">${esc(p.caption) || '<span class="muted">No caption</span>'}</p>${p.url ? `<div class="small"><code>${esc(p.url)}</code></div>` : ''}
+      <div class="row wrap" style="gap:6px;margin-top:8px">${done ? `<button class="btn btn-sm" data-undo="${p.id}">Undo</button>` : `<button class="btn btn-sm" data-copy="${p.id}">Copy caption and link</button>${p.photos.map((u, i) => `<a class="btn btn-sm" href="${esc(u)}" download>Download photo${p.photos.length > 1 ? ' ' + (i + 1) : ''}</a>`).join('')}<button class="btn btn-sm btn-primary" data-done="${p.id}">Mark as posted</button>`}</div></div></div>`;
+    $('#mkbody').innerHTML = `${d.due.length ? d.due.map((p) => card(p, false)).join('') : '<div class="card"><div class="empty">Nothing waiting. Instagram and Facebook posts appear here when their time comes.</div></div>'}
+      ${d.done.length ? `<h2 style="font-size:20px;margin:14px 0 6px">Posted in the last 7 days</h2>${d.done.map((p) => card(p, true)).join('')}` : ''}`;
+    const all = [...d.due, ...d.done];
+    $('#mkbody').onclick = async (e) => {
+      const c = e.target.closest('[data-copy]'), dn = e.target.closest('[data-done]'), un = e.target.closest('[data-undo]');
+      try {
+        if (c) { const p = all.find((x) => x.id === Number(c.dataset.copy)); await navigator.clipboard.writeText(p.caption + (p.url ? '\n\n' + p.url : '')); toast('Copied'); }
+        else if (dn) { await post('/api/admin/marketing/posts/' + dn.dataset.done + '/posted', {}); toast('Marked as posted'); await mkLoad(); mktReady(routeSeq); mkBadge(); }
+        else if (un) { await post('/api/admin/marketing/posts/' + un.dataset.undo + '/posted', { posted: false }); await mkLoad(); mktReady(routeSeq); mkBadge(); }
+      } catch (er) { toast(er.message); }
+    };
   }
 
   async function mktLinks(seq) {
