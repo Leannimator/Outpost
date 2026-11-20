@@ -657,3 +657,10 @@ details.more summary{cursor:pointer;color:var(--forest);font-weight:600}
   .me-pal { display: flex; flex-wrap: wrap; gap: 6px; overflow: visible; } .me-pal .label, .me-pal .seg { width: 100%; } .me-mod { width: auto; padding: 6px 10px; margin: 0; } .me-mod small, .me-mod i { display: none; }
   .me-build, .me-pvp { overflow: visible; } .me-pvp iframe { height: 520px; }
 }
+/* People + grouped sidebar */
+.nav-h { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 14px 14px 4px; }
+.nav-h:first-child { padding-top: 4px; }
+@media (max-width: 720px) { .nav-h { display: none; } }
+.plink { background: none; border: 0; padding: 0; font: inherit; font-weight: 700; color: var(--ink); cursor: pointer; text-align: left; text-decoration: underline dotted; text-underline-offset: 3px; }
+.plink:hover { text-decoration: underline; }
+.chip.tag .mk-tx { margin-left: 2px; }

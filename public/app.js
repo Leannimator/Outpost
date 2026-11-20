@@ -62,6 +62,7 @@
     const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
+  ICONS.people = ICONS.customers;
   const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]}</svg>`;
 
   let token = store.get('outpost_token') || '';
@@ -125,6 +126,19 @@
       document.addEventListener('keydown', onKey);
       cm.el.querySelector('[data-n]').onclick = () => end(false); cm.el.querySelector('[data-y]').onclick = () => end(true);
       cm.el.querySelector(danger ? '[data-n]' : '[data-y]').focus();
+    });
+  }
+  // Ask for a short piece of text in a box that matches the app (instead of the browser's own pop-up).
+  function askText({ title, label, placeholder = '', yes = 'Save' }) {
+    return new Promise((resolve) => {
+      const cm = openModal(`<h2 style="font-size:22px;margin-bottom:8px">${esc(title)}</h2><label class="field" style="text-align:left"><span class="label">${esc(label)}</span><input class="input" data-v maxlength="60" placeholder="${esc(placeholder)}"></label>
+        <div class="row" style="gap:10px;justify-content:center;margin-top:10px"><button class="btn" data-n>Cancel</button><button class="btn btn-primary" data-y>${esc(yes)}</button></div>`);
+      const inp = cm.el.querySelector('[data-v]'); inp.focus();
+      const end = (v) => { document.removeEventListener('keydown', onKey); cm.close(); resolve(v); };
+      const onKey = (ev) => { if (ev.key === 'Escape') end(null); };
+      document.addEventListener('keydown', onKey);
+      inp.onkeydown = (ev) => { if (ev.key === 'Enter') end(inp.value.trim() || null); };
+      cm.el.querySelector('[data-n]').onclick = () => end(null); cm.el.querySelector('[data-y]').onclick = () => end(inp.value.trim() || null);
     });
   }
   // Close button for an editor: nothing happens silently to unsaved work.
@@ -197,7 +211,8 @@
   }
 
   // ---------- shell + router ----------
-  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Link page', '#/links'], ['marketing', 'Marketing', '#/marketing'], ['reports', 'Reports', '#/reports'], ['security', 'Security', '#/security'], ['settings', 'Settings', '#/settings']];
+  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['people', 'People', '#/people'], ['marketing', 'Marketing', '#/marketing'], ['links', 'Link page', '#/links'], ['reports', 'Reports', '#/reports'], ['settings', 'Settings', '#/settings'], ['security', 'Security', '#/security']];
+  const NAV_HEADS = { sell: 'Sell', people: 'People', marketing: 'Marketing', links: 'Shop & site' };
 
   function paintResting() { const el = document.getElementById('resting'); if (el) el.hidden = !settings.break_on; }
   function paintBrand() { if (window.OutpostBrand) OutpostBrand.apply(settings); paintResting(); }
@@ -207,7 +222,7 @@
       <div class="app">
         <aside class="side">
           <a class="wordmark" href="#/sell" data-brand="name">Outpost</a>
-          <nav class="nav">${NAV.map(([k, label, href]) => `<a href="${href}" data-k="${k}">${icon(k)}<span>${label}</span></a>`).join('')}<a class="ext" href="store.html" target="_blank" rel="noopener" title="Opens your shop the way shoppers see it">${icon('shop')}<span>View shop</span></a></nav>
+          <nav class="nav">${NAV.map(([k, label, href]) => `${NAV_HEADS[k] ? `<div class="nav-h">${NAV_HEADS[k]}</div>` : ''}<a href="${href}" data-k="${k}">${icon(k)}<span>${label}</span></a>`).join('')}<a class="ext" href="store.html" target="_blank" rel="noopener" title="Opens your shop the way shoppers see it">${icon('shop')}<span>View shop</span></a></nav>
           <div class="side-foot">
             <a class="resting-pill" id="resting" href="#/settings" hidden>Online shop is resting</a>
             <img class="side-art" data-brand="mascot" alt="" hidden>
@@ -225,7 +240,7 @@
     [/^#\/sell$/, viewSell, 'sell'], [/^#\/products$/, viewProducts, 'products'],
     [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/lines$/, viewLines, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
-    [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
+    [/^#\/people(?:\/(customers|email|reviews))?$/, viewPeople, 'people'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/links$/, viewLinks, 'links'],
     [/^#\/marketing(?:\/(calendar|gallery|ready|email|links|sources))?$/, viewMarketing, 'marketing'], [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
   ];
 
@@ -236,6 +251,8 @@
     cleanups.forEach((f) => { try { f(); } catch { /* ignore */ } });
     cleanups = [];
     const h = location.hash || '#/sell';
+    const moved = { '#/customers': '#/people', '#/reviews': '#/people/reviews' };
+    if (moved[h]) { location.replace(moved[h]); return; }
     for (const [re, fn, key] of routes) {
       const m = h.match(re);
       if (!m) continue;
@@ -1087,25 +1104,153 @@
   // =====================================================================
   // CUSTOMERS
   // =====================================================================
-  async function viewCustomers() {
+  // =====================================================================
+  // PEOPLE (customers, bidders and email subscribers in one place; tags; a profile for each person)
+  // =====================================================================
+  const PEOPLE_TABS = [['customers', 'Customers'], ['email', 'Email list'], ['reviews', 'Reviews']];
+  const emailBadge = (st) => ({ subscribed: '<span class="badge b-paid">Subscribed</span>', unsubscribed: '<span class="badge b-canceled">Unsubscribed</span>', bounced: '<span class="badge b-canceled">Bounced</span>', no_consent: '<span class="badge">No consent on file</span>', unconfirmed: '<span class="badge b-pending">Waiting to confirm</span>' })[st] || '';
+  const dateShort = (v) => (v ? new Date(typeof v === 'number' ? v : v.replace(' ', 'T') + 'Z').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+  const pstate = { filter: { kind: 'everyone' }, q: '', sel: new Set() };   // kept while you move between tabs
+  const EMAIL_GROUPS = ['buyers', 'repeat', 'bidders', 'never_bought'];
+  const audienceFor = (f) => (f.kind === 'tag' ? { kind: 'tag', tag: f.id } : f.kind === 'group' && EMAIL_GROUPS.includes(f.key) ? { kind: 'group', group: f.key } : null);
+
+  async function viewPeople() {
+    const m = location.hash.match(/^#\/people(?:\/(customers|email|reviews))?$/); const tab = (m && m[1]) || 'customers';
+    view().innerHTML = `<div class="topbar"><h1>People</h1></div><div class="seg" id="ptabs" role="tablist">${PEOPLE_TABS.map(([k, l]) => `<button data-t="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div><div id="pbody" style="margin-top:8px"></div>`;
+    document.querySelectorAll('#ptabs button').forEach((b) => { b.onclick = () => { location.hash = '#/people' + (b.dataset.t === 'customers' ? '' : '/' + b.dataset.t); }; });
+    const host = $('#pbody');
+    if (tab === 'email') await peopleEmail(host); else if (tab === 'reviews') await viewReviews(host); else await peopleCustomers(host);
+  }
+
+  async function peopleCustomers(host) {
+    let d = await api('/api/admin/people');
+    const matches = (p) => {
+      const f = pstate.filter;
+      if (f.kind === 'tag' && !p.tags.some((t) => t.id === f.id)) return false;
+      if (f.kind === 'group') {
+        if (f.key === 'buyers' && !(p.orders > 0)) return false; if (f.key === 'repeat' && !(p.orders > 1)) return false; if (f.key === 'bidders' && !(p.bids > 0)) return false;
+        if (f.key === 'subscribed' && p.email_status !== 'subscribed') return false; if (f.key === 'never_bought' && !(p.email_status === 'subscribed' && p.orders === 0)) return false;
+      }
+      const n = pstate.q.trim().toLowerCase(); return !n || (p.name + ' ' + p.email + ' ' + p.tags.map((t) => t.name).join(' ')).toLowerCase().includes(n);
+    };
+    const GROUPS_UI = [['everyone', 'Everyone'], ['buyers', 'Bought'], ['repeat', 'Repeat buyers'], ['bidders', 'Bidders'], ['subscribed', 'On the email list'], ['never_bought', 'Subscribed, never bought']];
+    host.innerHTML = `<div id="pmsg"></div><div class="row wrap" id="pchips" style="gap:8px;margin-bottom:10px"></div>
+      <div class="row wrap" style="gap:8px;margin-bottom:10px"><div class="search" style="flex:1;min-width:220px;margin:0">${icon('search')}<input class="input" id="pq" placeholder="Search by name, email or tag…" value="${esc(pstate.q)}"></div><button class="btn" id="ptags">Manage tags</button></div>
+      <div id="pbar"></div><div class="card tbl-scroll" style="padding:0"><table><thead><tr><th style="width:34px"><input type="checkbox" id="pall" aria-label="Select everyone shown"></th><th>Person</th><th>Tags</th><th>Orders</th><th>Spent</th><th>Last order</th><th>Email list</th></tr></thead><tbody id="prows"></tbody></table></div>
+      <p class="hint">Built from paid orders, auction bids and your email list. Groups fill themselves in; tags are yours. Click a name to see everything about that person. Nothing is shared with anyone.</p>`;
+    const paintChips = () => {
+      const f = pstate.filter; const isOn = (k, id) => (k === 'tag' ? f.kind === 'tag' && f.id === id : f.kind === (k === 'everyone' ? 'everyone' : 'group') && (k === 'everyone' || f.key === k));
+      $('#pchips').innerHTML = GROUPS_UI.map(([k, l]) => `<button class="chip${isOn(k) ? ' on' : ''}" data-g="${k}">${l} · ${d.groups[k]}</button>`).join('') + d.tags.map((t) => `<button class="chip${isOn('tag', t.id) ? ' on' : ''}" data-tag="${t.id}">${esc(t.name)} · ${t.count}</button>`).join('')
+        + (audienceFor(f) ? ` <button class="btn btn-sm btn-primary" id="pmail">Write an email to this group</button>` : '');
+    };
+    const paintRows = () => {
+      const rows = d.people.filter(matches), shown = rows.slice(0, 200);
+      $('#prows').innerHTML = shown.map((p) => `<tr><td><input type="checkbox" data-sel="${esc(p.email)}" ${pstate.sel.has(p.email) ? 'checked' : ''} aria-label="Select ${esc(p.email)}"></td>
+        <td><button class="plink" data-open="${esc(p.email)}">${esc(p.name || p.email)}</button>${p.name ? `<br><span class="small muted">${esc(p.email)}</span>` : ''}</td>
+        <td>${p.tags.map((t) => `<span class="chip tag">${esc(t.name)}</span>`).join(' ')}${p.has_note ? ' <span class="small muted" title="Has a private note">✎ note</span>' : ''}</td>
+        <td>${p.orders}</td><td><b>${fmt(p.spent_cents)}</b></td><td class="small">${dateShort(p.last_order)}</td><td>${emailBadge(p.email_status)}</td></tr>`).join('')
+        || `<tr><td colspan="7" class="empty">${d.people.length ? 'No one matches.' : 'No one yet. People appear here when they order, bid, or join your email list.'}</td></tr>`;
+      $('#pall').checked = shown.length > 0 && shown.every((p) => pstate.sel.has(p.email));
+      $('#pbar').innerHTML = (rows.length > 200 ? `<div class="small muted" style="margin:0 0 6px">Showing the first 200 of ${rows.length}. Search or pick a group to narrow it down.</div>` : '')
+        + (pstate.sel.size ? `<div class="card" style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--cream-2)"><b>${pstate.sel.size} selected</b><button class="btn btn-sm" id="padd">Add tag…</button><button class="btn btn-sm" id="prem">Remove tag…</button><button class="btn btn-sm btn-ghost" id="pclr">Clear</button></div>` : '');
+      const bind = (id, fn) => { if ($(id)) $(id).onclick = fn; };
+      bind('#padd', () => tagModal([...pstate.sel], 'add', reload)); bind('#prem', () => tagModal([...pstate.sel], 'remove', reload)); bind('#pclr', () => { pstate.sel.clear(); paintRows(); });
+    };
+    const reload = async () => { d = await api('/api/admin/people'); const f = pstate.filter; if (f.kind === 'tag' && !d.tags.some((t) => t.id === f.id)) pstate.filter = { kind: 'everyone' }; paintChips(); paintRows(); };
+    $('#pchips').onclick = (e) => {
+      const g = e.target.closest('[data-g]'), t = e.target.closest('[data-tag]');
+      if (g) pstate.filter = g.dataset.g === 'everyone' ? { kind: 'everyone' } : { kind: 'group', key: g.dataset.g };
+      else if (t) pstate.filter = { kind: 'tag', id: Number(t.dataset.tag) };
+      else if (e.target.closest('#pmail')) { mk.openNew = { audience: audienceFor(pstate.filter) }; location.hash = '#/marketing/email'; return; }
+      else return;
+      paintChips(); paintRows();
+    };
+    $('#pq').oninput = (e) => { pstate.q = e.target.value; paintRows(); };
+    $('#ptags').onclick = () => tagsModal(reload);
+    $('#pall').onchange = (e) => { d.people.filter(matches).slice(0, 200).forEach((p) => { if (e.target.checked) pstate.sel.add(p.email); else pstate.sel.delete(p.email); }); paintRows(); };
+    $('#prows').onclick = (e) => {
+      const o = e.target.closest('[data-open]'); if (o) return openProfile(o.dataset.open, reload);
+    };
+    $('#prows').onchange = (e) => { const c = e.target.closest('[data-sel]'); if (!c) return; if (c.checked) pstate.sel.add(c.dataset.sel); else pstate.sel.delete(c.dataset.sel); paintRows(); };
+    paintChips(); paintRows();
+  }
+
+  // Add or remove tags for the people picked.
+  async function tagModal(emails, mode, done) {
+    const tags = await api('/api/admin/tags'); const chosen = new Set();
+    const m = openModal(`<div style="text-align:left"><h2 style="font-size:22px;margin-bottom:6px">${mode === 'add' ? 'Add a tag' : 'Remove a tag'}</h2><p class="muted small" style="margin:0 0 10px">For ${emails.length} ${emails.length === 1 ? 'person' : 'people'}. Tags are your own labels, like “Box member” or “Commission client”.</p>
+      <div class="row wrap" id="tg-chips" style="gap:6px;margin-bottom:10px">${tags.map((t) => `<button class="chip" data-tg="${esc(t.name)}">${esc(t.name)} · ${t.count}</button>`).join('') || '<span class="muted small">No tags yet.</span>'}</div>
+      ${mode === 'add' ? '<label class="field"><span class="label">Or make a new tag</span><input class="input" id="tg-new" maxlength="40" placeholder="Box member"></label>' : ''}
+      <div id="tg-msg"></div><div class="row" style="gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" data-n>Cancel</button><button class="btn btn-primary" data-y>${mode === 'add' ? 'Add' : 'Remove'}</button></div></div>`);
+    m.el.querySelectorAll('[data-tg]').forEach((b) => { b.onclick = () => { const n = b.dataset.tg; if (chosen.has(n)) chosen.delete(n); else chosen.add(n); b.classList.toggle('on', chosen.has(n)); }; });
+    m.el.querySelector('[data-n]').onclick = m.close;
+    m.el.querySelector('[data-y]').onclick = async () => {
+      const names = [...chosen]; const nw = $('#tg-new', m.el); if (nw && nw.value.trim()) names.push(nw.value.trim());
+      if (!names.length) { $('#tg-msg', m.el).innerHTML = '<div class="msg err">Pick a tag first.</div>'; return; }
+      try { await post('/api/admin/people/tag', { emails, [mode === 'add' ? 'add' : 'remove']: names }); m.close(); toast(mode === 'add' ? 'Tag added' : 'Tag removed'); await done(); }
+      catch (e) { $('#tg-msg', m.el).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+  }
+
+  // Rename or delete tags.
+  async function tagsModal(done) {
+    const m = openModal('<div id="tgm" style="text-align:left"></div>', { wide: true }); m.el.style.maxWidth = '560px';
+    const paint = async () => {
+      const tags = await api('/api/admin/tags');
+      $('#tgm', m.el).innerHTML = `<h2 style="font-size:22px;margin-bottom:6px">Your tags</h2><p class="muted small" style="margin:0 0 10px">Rename a tag and everyone who has it keeps it. Deleting only removes the label, never the people.</p>
+        ${tags.map((t) => `<div class="row" style="gap:8px;margin-bottom:6px"><input class="input" value="${esc(t.name)}" maxlength="40" data-rn="${t.id}" style="flex:1"><span class="small muted" style="min-width:70px">${t.count} ${t.count === 1 ? 'person' : 'people'}</span><button class="btn btn-sm" data-sv="${t.id}">Save</button><button class="btn btn-sm btn-ghost" data-dl="${t.id}" data-nm="${esc(t.name)}">Delete</button></div>`).join('') || '<div class="empty">No tags yet. Add one from the list: tick a few people, then “Add tag…”.</div>'}
+        <div id="tgmsg"></div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" data-x>Done</button></div>`;
+      m.el.querySelector('[data-x]').onclick = () => { m.close(); done(); };
+      m.el.querySelectorAll('[data-sv]').forEach((b) => { b.onclick = async () => { try { await put('/api/admin/tags/' + b.dataset.sv, { name: m.el.querySelector(`[data-rn="${b.dataset.sv}"]`).value }); toast('Renamed'); paint(); } catch (e) { $('#tgmsg', m.el).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; } }; });
+      m.el.querySelectorAll('[data-dl]').forEach((b) => { b.onclick = async () => {
+        if (!(await confirmBox({ title: `Delete “${b.dataset.nm}”?`, body: 'The tag is removed from everyone who has it. The people stay.', yes: 'Delete tag', danger: true }))) return;
+        try { await api('/api/admin/tags/' + b.dataset.dl, { method: 'DELETE' }); toast('Deleted'); paint(); }
+        catch (e) {
+          if (e.status !== 409) { $('#tgmsg', m.el).innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+          if (await confirmBox({ title: 'An email is waiting for this tag', body: esc(e.message) + ' If you delete it, those emails go back to drafts for everyone, and nothing is sent until you schedule them again.', yes: 'Delete and make them drafts', danger: true })) { try { await api('/api/admin/tags/' + b.dataset.dl + '?force=1', { method: 'DELETE' }); toast('Deleted'); paint(); } catch (e2) { $('#tgmsg', m.el).innerHTML = `<div class="msg err">${esc(e2.message)}</div>`; } }
+        }
+      }; });
+    };
+    paint();
+  }
+
+  // One person: everything in one place.
+  async function openProfile(email, changed) {
+    let p; try { p = await api('/api/admin/people/profile?email=' + encodeURIComponent(email)); } catch (e) { toast(e.message); return; }
+    const allTags = await api('/api/admin/tags').catch(() => []);
+    const m = openModal('<div id="pf"></div>', { wide: true }); m.el.style.maxWidth = '760px'; m.el.style.textAlign = 'left';
+    let note0 = p.note; const dirty = () => { const n = $('#pf-note', m.el); return !!n && n.value !== note0; };
+    const stat = (l, v) => `<div class="card" style="padding:10px 14px;min-width:90px"><div class="small muted">${l}</div><b>${v}</b></div>`;
+    const refresh = async () => { p = await api('/api/admin/people/profile?email=' + encodeURIComponent(email)); note0 = p.note; paint(); changed(); };
+    function paint() {
+      $('#pf', m.el).innerHTML = `<div class="row" style="align-items:flex-start;gap:10px"><div style="flex:1"><h2 style="font-size:24px;margin:0">${esc(p.name || p.email)}</h2><div class="small muted">${esc(p.email)} ${emailBadge(p.email_status)}${p.subscribed_at ? ` · joined the list ${esc(dateShort(p.subscribed_at))}${p.source ? ' from ' + esc(p.source) : ''}` : ''}</div></div><button class="btn btn-sm" data-close>Close</button></div>
+        <div class="row wrap" style="gap:8px;margin:12px 0">${stat('Orders', p.orders)}${stat('Spent', fmt(p.spent_cents))}${stat('Bids', p.bids)}${stat('Auctions won', p.won)}${stat('Last order', dateShort(p.last_order))}</div>
+        <div class="label">Tags</div><div class="row wrap" style="gap:6px;margin-bottom:6px">${p.tags.map((t) => `<span class="chip tag">${esc(t.name)} <button class="mk-tx" data-untag="${esc(t.name)}" aria-label="Remove tag ${esc(t.name)}" style="width:22px;height:22px">×</button></span>`).join('') || '<span class="muted small">No tags yet.</span>'}</div>
+        <div class="row" style="gap:6px;margin-bottom:12px"><input class="input" id="pf-tag" list="pf-tags" maxlength="40" placeholder="Add a tag" style="max-width:240px"><datalist id="pf-tags">${allTags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist><button class="btn btn-sm" id="pf-addtag">Add</button></div>
+        <label class="field"><span class="label">Private note <span class="small muted">only you can see this</span></span><textarea class="input" id="pf-note" rows="3" maxlength="2000" placeholder="Likes pickup. Allergic to nuts. Asked about a custom order.">${esc(p.note)}</textarea></label>
+        <div class="row" style="gap:8px;margin-bottom:12px"><button class="btn btn-sm" id="pf-savenote">Save note</button><span id="pf-msg" class="small muted"></span></div>
+        ${p.orders_list.length ? `<div class="label">Orders</div><div class="tbl-scroll" style="max-height:200px;overflow:auto;margin-bottom:12px"><table><tbody>${p.orders_list.map((o) => `<tr><td>#${o.id}</td><td class="small">${dateShort(o.created_at)}</td><td class="small">${esc(o.items.join(', '))}</td><td><b>${fmt(o.total_cents - (o.refunded_cents || 0))}</b>${o.status === 'refunded' ? ' <span class="badge">Refunded</span>' : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        ${p.emails.length ? `<div class="label">Emails you sent them</div><div class="small" style="margin-bottom:12px">${p.emails.map((x) => `${esc(x.subject)} <span class="muted">· ${x.status}</span>`).join('<br>')}</div>` : ''}
+        <div class="row wrap" style="gap:8px;justify-content:flex-end"><a class="btn" href="mailto:${esc(encodeURIComponent(p.email).replace(/%40/g, '@'))}">Email from my mail app</a><button class="btn btn-ghost" id="pf-block">Block…</button></div>`;
+      m.el.querySelector('[data-close]').onclick = guardClose(m, dirty);
+      m.el.querySelectorAll('[data-untag]').forEach((b) => { b.onclick = async () => { try { await post('/api/admin/people/tag', { emails: [p.email], remove: [b.dataset.untag] }); await refresh(); } catch (e) { toast(e.message); } }; });
+      const addTag = async () => { const v = $('#pf-tag', m.el).value.trim(); if (!v) return; try { await post('/api/admin/people/tag', { emails: [p.email], add: [v] }); await refresh(); } catch (e) { $('#pf-msg', m.el).textContent = e.message; } };
+      $('#pf-addtag', m.el).onclick = addTag; $('#pf-tag', m.el).onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } };
+      $('#pf-savenote', m.el).onclick = async () => { try { await put('/api/admin/people/note', { email: p.email, note: $('#pf-note', m.el).value }); note0 = $('#pf-note', m.el).value; $('#pf-msg', m.el).textContent = 'Saved'; changed(); } catch (e) { $('#pf-msg', m.el).textContent = e.message; } };
+      $('#pf-block', m.el).onclick = async () => {
+        if (!(await confirmBox({ title: `Block ${p.email}?`, body: 'They won’t be able to check out or bid, and any bids they have on open lots come off the board.', yes: 'Block', danger: true }))) return;
+        try { await post('/api/admin/blocks', { kind: 'email', value: p.email, note: 'Blocked from People' }); toast('Blocked'); } catch (e) { toast(e.message); }
+      };
+    }
+    paint();
+  }
+
+  async function peopleEmail(host) {
     const [list, subs] = await Promise.all([api('/api/admin/customers'), api('/api/admin/subscribers')]);
-    view().innerHTML = `<div class="topbar"><h1>Customers</h1><div class="spacer"></div><button class="btn" id="erasebtn" style="color:var(--bad,#b42318);border-color:currentColor">Erase a person…</button></div><div id="cmsg"></div><div id="erasebox"></div>
+    host.innerHTML = `<div class="row" style="justify-content:flex-end;margin-bottom:8px"><button class="btn" id="erasebtn" style="color:var(--bad,#b42318);border-color:currentColor">Erase a person…</button></div><div id="cmsg"></div><div id="erasebox"></div>
       <div class="card" id="elist" style="margin-bottom:18px"><div class="row" style="flex-wrap:wrap;gap:10px;align-items:center"><div><h2 style="font-size:20px;margin:0">Email list</h2><div class="small muted"><b>${subs.filter((x) => !x.unsubscribed).length}</b> subscribed${subs.some((x) => x.unsubscribed) ? ` · ${subs.filter((x) => x.unsubscribed).length} unsubscribed` : ''}. Only people who ticked the box on your links page.</div></div><span class="spacer"></span><button class="btn btn-primary" id="edl" ${subs.length ? '' : 'disabled'}>Download CSV</button></div>
         ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th>Status</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td>${x.unsubscribed ? '<span class="badge b-canceled">Unsubscribed</span>' : x.bounced ? '<span class="badge b-canceled">Bounced</span>' : !x.consent_at ? '<span class="badge">No consent on file</span>' : !x.confirmed_at ? '<span class="badge b-pending">Waiting to confirm</span>' : '<span class="badge b-paid">Subscribed</span>'}</td><td><button class="btn btn-sm" data-eun="${x.id}" data-to="${x.unsubscribed ? 0 : 1}">${x.unsubscribed ? 'Put back on list' : 'Mark unsubscribed'}</button> <button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
-        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Write and send emails to this list in <a href="#/marketing/email">Marketing → Email</a>. Only people who agreed, haven’t unsubscribed or bounced (and confirmed, if you ask for that) are ever emailed.</div></div>
-      <div class="search">${icon('search')}<input class="input" id="cq" placeholder="Search by name or email…"></div>
-      <div class="card tbl-scroll"><table><thead><tr><th>Customer</th><th>Orders</th><th>Spent</th><th>Bids</th><th>Won</th><th>Last order</th><th></th></tr></thead><tbody id="crows"></tbody></table></div>
-      <p class="hint">Built from your paid orders and auction bidders. Nothing is shared with anyone.</p>`;
-    const paint = () => {
-      const n = $('#cq').value.trim().toLowerCase();
-      const rows = list.filter((c) => !n || (c.name + ' ' + c.email).toLowerCase().includes(n));
-      $('#crows').innerHTML = rows.map((c) => `<tr><td><b>${esc(c.name || '—')}</b><br><span class="small muted">${esc(c.email)}</span></td>
-        <td>${c.orders}</td><td><b>${fmt(c.spent_cents)}</b></td><td>${c.bids}</td><td>${c.won}</td>
-        <td class="small">${c.last_order ? esc(new Date(c.last_order.replace(' ', 'T') + 'Z').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })) : '—'}</td>
-        <td><a class="btn btn-sm" href="mailto:${esc(encodeURIComponent(c.email).replace(/%40/g, '@'))}">Email</a> <button class="btn btn-sm btn-ghost" data-block="${esc(c.email)}">Block</button></td></tr>`).join('') ||
-        `<tr><td colspan="7" class="empty">${list.length ? 'No matches' : 'No customers yet.'}</td></tr>`;
-    };
-    $('#cq').oninput = paint;
+        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Write and send emails to this list in <a href="#/marketing/email">Marketing → Email</a>. Only people who agreed, haven’t unsubscribed or bounced (and confirmed, if you ask for that) are ever emailed.</div></div>`;
     // --- erase a person (delete-my-information requests) ---
     $('#erasebtn').onclick = () => {
       $('#erasebox').innerHTML = `<div class="card" style="margin-bottom:18px"><h2 style="font-size:20px;margin:0 0 6px">Erase a person’s information</h2>
@@ -1148,7 +1293,7 @@
         try {
           const r = await post('/api/admin/privacy/erase', { email: em, ...(force ? { force: true } : {}) });
           const done = `<div class="msg"><b>Done.</b> ${r.bidders} bidder record${r.bidders === 1 ? '' : 's'}, ${r.orders} order${r.orders === 1 ? '' : 's'} and ${r.subscribers} email list entr${r.subscribers === 1 ? 'y' : 'ies'} erased. ${esc(r.note || '')}${r.stripe_customers_failed ? ' <b>A saved-card customer could not be deleted at Stripe; remove it in your Stripe dashboard.</b>' : ''}</div>`;
-          await viewCustomers(); $('#cmsg').innerHTML = done;
+          await peopleEmail(host); $('#cmsg').innerHTML = done;
         } catch (err) {
           $('#ergo').disabled = false;
           if (/paid but not shipped/.test(err.message)) {
@@ -1162,23 +1307,17 @@
     if ($('#erows')) $('#erows').onclick = async (e) => {
       const un = e.target.closest('[data-eun]');
       if (un) {
-        try { await put('/api/admin/subscribers/' + un.dataset.eun, { unsubscribed: un.dataset.to === '1' }); toast(un.dataset.to === '1' ? 'Marked unsubscribed' : 'Back on the list'); viewCustomers(); }
+        try { await put('/api/admin/subscribers/' + un.dataset.eun, { unsubscribed: un.dataset.to === '1' }); toast(un.dataset.to === '1' ? 'Marked unsubscribed' : 'Back on the list'); peopleEmail(host); }
         catch (err) { $('#cmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
         return;
       }
       const b = e.target.closest('[data-esub]'); if (!b) return;
-      if (!confirm('Remove this email from your list?')) return;
-      try { await api('/api/admin/subscribers/' + b.dataset.esub, { method: 'DELETE' }); toast('Removed'); viewCustomers(); }
+      if (!(await confirmBox({ title: 'Remove this email?', body: 'It comes off your email list for good. They can sign up again.', yes: 'Remove', danger: true }))) return;
+      try { await api('/api/admin/subscribers/' + b.dataset.esub, { method: 'DELETE' }); toast('Removed'); peopleEmail(host); }
       catch (err) { $('#cmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
     };
-    $('#crows').onclick = async (e) => {
-      const b = e.target.closest('[data-block]'); if (!b) return;
-      if (!confirm(`Block ${b.dataset.block}? They won’t be able to check out or bid, and any bids they have on open lots come off the board.`)) return;
-      try { await post('/api/admin/blocks', { kind: 'email', value: b.dataset.block, note: 'Blocked from Customers' }); toast('Blocked'); }
-      catch (err) { $('#cmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
-    };
-    paint();
   }
+
 
 
   // =====================================================================
@@ -1356,7 +1495,7 @@
       if (snap0 === null) snap0 = snapOf();
       q('[data-close]').onclick = guardClose(m, () => snapOf() !== snap0);
       q('#eddraft').onclick = () => save('draft'); q('#edsched').onclick = () => save('scheduled');
-      if (q('#eddel')) q('#eddel').onclick = async () => { if (!confirm('Delete this post? Its photos stay in your gallery photos.')) return; try { await api('/api/admin/marketing/posts/' + existing.id, { method: 'DELETE' }); m.close(); await refresh(); } catch (er) { toast(er.message); } };
+      if (q('#eddel')) q('#eddel').onclick = async () => { if (!(await confirmBox({ title: 'Delete this post?', body: 'Its photos stay in your gallery photos.', yes: 'Delete', danger: true }))) return; try { await api('/api/admin/marketing/posts/' + existing.id, { method: 'DELETE' }); m.close(); await refresh(); } catch (er) { toast(er.message); } };
     }
     function sync() {
       const q = (x) => $(x, m.el); if (!q('#edcap')) return;
@@ -1507,7 +1646,8 @@
     const row = (c) => {
       const pct = c.total ? Math.round(100 * c.sent / c.total) : 0;
       const sub = c.status === 'scheduled' ? `Goes out ${dayLabel(keyOf(c.scheduled_at))} · ${clock(c.scheduled_at)}` : c.status === 'sending' ? `Sent ${c.sent} of ${c.total}${c.pending ? '. The rest goes out in the next daily batch.' : ''}` : c.status === 'done' ? `Sent to ${c.sent} ${c.sent === 1 ? 'person' : 'people'} on ${dayLabel(keyOf(c.finished_at || c.created_at))}${c.failed ? ` · ${c.failed} could not be sent` : ''}` : c.status === 'canceled' ? `Stopped after ${c.sent} of ${c.total}` : 'Not scheduled yet';
-      return `<div class="mk-mrow" data-mail="${c.id}"><div style="flex:1;min-width:200px"><b>${esc(c.subject) || 'No subject yet'}</b><div class="small muted">${esc(sub)}</div>${c.status === 'sending' ? `<div class="mk-bar"><i style="width:${pct}%"></i></div>` : ''}</div><span class="badge ${mailBadge[c.status][1]}">${mailBadge[c.status][0]}</span></div>`;
+      const aTo = c.audience && st.audiences.find((o) => (c.audience.kind === 'tag' ? o.kind === 'tag' && o.tag === c.audience.tag : o.group === c.audience.group)); const subTxt = sub + (aTo ? ` · to ${aTo.label}` : '');
+      return `<div class="mk-mrow" data-mail="${c.id}"><div style="flex:1;min-width:200px"><b>${esc(c.subject) || 'No subject yet'}</b><div class="small muted">${esc(subTxt)}</div>${c.status === 'sending' ? `<div class="mk-bar"><i style="width:${pct}%"></i></div>` : ''}</div><span class="badge ${mailBadge[c.status][1]}">${mailBadge[c.status][0]}</span></div>`;
     };
     $('#mkbody').innerHTML = `
       <div class="card" style="margin-bottom:14px">
@@ -1527,6 +1667,7 @@
         ${list.length ? list.map(row).join('') : '<div class="empty">No emails yet. Write one to everyone who signed up on your shop, and Outpost handles the unsubscribe link and the sending limits.</div>'}
       </div>`;
     $('#mailnew').onclick = () => mkMail(null, st);
+    if (mk.openNew) mkMail(null, st);
     $('#mailset').onclick = () => mkMailSettings(st);
     $('#mkbody').onclick = (e) => { const r = e.target.closest('[data-mail]'); if (r) mkMail(list.find((c) => c.id === Number(r.dataset.mail)), st); };
   }
@@ -1564,7 +1705,13 @@
     const at = c && c.scheduled_at ? c.scheduled_at : null;
     let design = c && c.design ? JSON.parse(JSON.stringify(c.design)) : (c && c.body ? { template: 'plain', blocks: [{ type: 'text', text: c.body }] } : null);
     let link = c ? c.link_code || '' : ''; let pick = null, templates = []; let subject = c ? c.subject : '';
-    const snapOf = () => JSON.stringify([subject, design, link]); const snap0 = snapOf();
+    const optKey = (o) => (o.kind === 'all' ? 'all' : o.kind === 'tag' ? 'tag:' + o.tag : 'group:' + o.group);
+    const audKey = (a) => (!a ? 'all' : a.kind === 'tag' ? 'tag:' + a.tag : 'group:' + a.group);
+    let aud = c ? (c.audience || null) : ((mk.openNew && mk.openNew.audience) || null); if (!c) mk.openNew = null;
+    if (aud && !st.audiences.some((o) => optKey(o) === audKey(aud))) aud = null;   // a tag that no longer exists
+    const audOpt = () => st.audiences.find((o) => optKey(o) === audKey(aud)) || st.audiences[0];
+    const audCount = () => audOpt().sendable;
+    const snapOf = () => JSON.stringify([subject, design, link, aud]); const snap0 = snapOf();
     const q = (x) => $(x, m.el);
     const clean = () => ({ template: design.template, blocks: design.blocks.map((b) => ({ ...b })) });
     let tm = 0;
@@ -1597,7 +1744,7 @@
         <label class="me-sub"><span class="label">Subject</span><input class="input" id="me-sub" maxlength="150" value="${esc(subject)}" ${dis}></label>
         ${design ? `<div class="me-tools"><div class="seg" role="group" aria-label="Preview"><button id="me-pv" class="${pvOn ? 'on' : ''}" aria-pressed="${pvOn}">Preview</button>${pvOn ? `<button id="me-pw" title="Make the preview wider">${pvWide ? 'Narrow' : 'Wide'}</button>` : ''}</div></div>` : ''}<button class="btn btn-sm" data-close>Close</button></div>`;
       if (!design) {
-        $('#mebody', m.el).innerHTML = `${top}<div class="me-start"><div class="label">Start from</div><div class="mk-presets">${PRESETS.map(([k, n, d]) => `<button class="mk-preset" data-preset="${k}"><i class="mk-pv mk-pv-${k}"></i><b>${n}</b><span class="small muted">${d}</span></button>`).join('')}</div>${templates.length ? `<div class="label" style="margin-top:10px">Your templates</div><div class="row wrap" style="gap:6px">${templates.map((t) => `<span class="mk-tchip"><button class="btn btn-sm" data-tpl="${t.id}">${esc(t.name)}</button><button class="mk-tx" data-tdel="${t.id}" title="Delete template" aria-label="Delete template ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}<div id="memsg" style="margin-top:6px"></div></div>`;
+        $('#mebody', m.el).innerHTML = `${top}<div class="me-start">${aud ? `<div class="msg" style="margin-bottom:10px">This email is set to go to <b>${esc(audOpt().label)}</b> (${audCount()}). You can change that before you schedule.</div>` : ''}<div class="label">Start from</div><div class="mk-presets">${PRESETS.map(([k, n, d]) => `<button class="mk-preset" data-preset="${k}"><i class="mk-pv mk-pv-${k}"></i><b>${n}</b><span class="small muted">${d}</span></button>`).join('')}</div>${templates.length ? `<div class="label" style="margin-top:10px">Your templates</div><div class="row wrap" style="gap:6px">${templates.map((t) => `<span class="mk-tchip"><button class="btn btn-sm" data-tpl="${t.id}">${esc(t.name)}</button><button class="mk-tx" data-tdel="${t.id}" title="Delete template" aria-label="Delete template ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}<div id="memsg" style="margin-top:6px"></div></div>`;
         wire(); return;
       }
       const cols = [locked ? '' : '176px', 'minmax(0,1fr)', pvOn ? (pvWide ? '680px' : '410px') : ''].filter(Boolean).join(' ');
@@ -1609,9 +1756,10 @@
       const pv = pvOn ? `<section class="me-pvp" aria-label="Email preview"><iframe id="me-prev" sandbox="" title="Email preview"></iframe></section>` : '';
       $('#mebody', m.el).innerHTML = `${top}<div class="me-grid" style="grid-template-columns:${cols}">${pal}${build}${pv}</div>
         <div id="memsg" class="me-msg"></div>
-        <div class="me-foot"><div class="me-aud"><b>${st.audience.sendable}</b> ${st.audience.sendable === 1 ? 'person' : 'people'} will get this. <span class="muted small">Up to ${st.allowance_today} go out today, the rest in daily batches, so receipts always go first.</span></div>
+        <div class="me-foot"><div class="me-aud"><label class="small muted" for="me-aud">Send to</label> <select class="input" id="me-aud" style="width:auto;margin:0 6px 0 4px" ${dis}>${st.audiences.map((o) => `<option value="${optKey(o)}"${optKey(o) === audKey(aud) ? ' selected' : ''}>${esc(o.label)} (${o.sendable})</option>`).join('')}</select>
+            ${audCount() ? `<b>${audCount()}</b> ${audCount() === 1 ? 'person' : 'people'} will get this. <span class="muted small">Up to ${st.allowance_today} go out today, the rest in daily batches, so receipts always go first.</span>` : '<span class="small" style="color:var(--bad,#b42318)"><b>Nobody</b> in this group can be emailed yet, so it can’t be scheduled.</span>'}</div>
           ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><select class="input" id="me-when" style="width:auto"><option value="at">Send on a date and time</option><option value="now">Send as soon as possible</option></select><input class="input" type="date" id="me-date" value="${at ? keyOf(at) : ''}" style="width:auto"><input class="input" type="time" id="me-time" value="${at ? (() => { const p = zparts(at); return pad2(p.h) + ':' + pad2(p.mi); })() : '10:00'}" style="width:auto"><span class="small muted">${esc(mk.tz || 'your computer’s time zone')}</span></div>`}
-          <div class="row wrap" style="gap:8px;margin-left:auto">${c && c.status === 'scheduled' ? '<button class="btn" id="me-unsched">Unschedule</button>' : ''}${c && c.status === 'sending' ? '<button class="btn btn-danger" id="me-stop">Stop sending</button>' : ''}${c && c.status !== 'sending' ? '<button class="btn btn-danger" id="me-del">Delete</button>' : ''}${locked ? '' : '<button class="btn" id="me-save">Save draft</button><button class="btn btn-primary" id="me-go">Schedule</button>'}</div></div>`;
+          <div class="row wrap" style="gap:8px;margin-left:auto">${c && c.status === 'scheduled' ? '<button class="btn" id="me-unsched">Unschedule</button>' : ''}${c && c.status === 'sending' ? '<button class="btn btn-danger" id="me-stop">Stop sending</button>' : ''}${c && c.status !== 'sending' ? '<button class="btn btn-danger" id="me-del">Delete</button>' : ''}${locked ? '' : `<button class="btn" id="me-save">Save draft</button><button class="btn btn-primary" id="me-go" ${audCount() ? '' : 'disabled'}>Schedule</button>`}</div></div>`;
       const nb = q('.me-build'); if (nb) nb.scrollTop = endNext ? nb.scrollHeight : keepTop; endNext = false; const np = q('.me-pal'); if (np) np.scrollTop = palTop;
       wire(); prev();
     }
@@ -1619,13 +1767,14 @@
     const keep = () => { if (q('#me-sub')) subject = q('#me-sub').value; if (!design) return; m.el.querySelectorAll('[data-f]').forEach((el) => { const [i, f] = el.dataset.f.split(':'); const b = design.blocks[Number(i)]; if (b) b[f] = (f === 'product_id' || f === 'line_id') ? Number(el.value) : el.value; }); if (q('#me-link')) link = q('#me-link').value; };
     function wire() {
       m.el.querySelector('[data-close]').onclick = guardClose(m, () => { keep(); return !locked && snapOf() !== snap0; });
+      if (q('#me-aud')) q('#me-aud').onchange = () => { keep(); const o = st.audiences.find((x) => optKey(x) === q('#me-aud').value); aud = !o || o.kind === 'all' ? null : o.kind === 'tag' ? { kind: 'tag', tag: o.tag } : { kind: 'group', group: o.group }; paint(); };
       if (q('#me-when')) q('#me-when').onchange = () => { if (q('#me-go')) q('#me-go').textContent = q('#me-when').value === 'now' ? 'Send now' : 'Schedule'; };
       if (q('#me-pv')) q('#me-pv').onclick = () => { keep(); pvOn = !pvOn; savePv(); paint(); };
       if (q('#me-pw')) q('#me-pw').onclick = () => { keep(); pvWide = !pvWide; savePv(); paint(); };
       if (q('#me-sub')) q('#me-sub').oninput = () => { subject = q('#me-sub').value; prev(); };
       m.el.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { keep(); design = PRESETS.find((p) => p[0] === b.dataset.preset)[3](); paint(); }; });
       m.el.querySelectorAll('[data-tpl]').forEach((b) => { b.onclick = () => { keep(); design = JSON.parse(JSON.stringify(templates.find((t) => t.id === Number(b.dataset.tpl)).design)); paint(); }; });
-      m.el.querySelectorAll('[data-tdel]').forEach((b) => { b.onclick = async () => { if (!confirm('Delete this template?')) return; await api('/api/admin/email/templates/' + b.dataset.tdel, { method: 'DELETE' }); templates = templates.filter((t) => t.id !== Number(b.dataset.tdel)); paint(); }; });
+      m.el.querySelectorAll('[data-tdel]').forEach((b) => { b.onclick = async () => { if (!(await confirmBox({ title: 'Delete this template?', body: 'Emails you already made from it are not affected.', yes: 'Delete', danger: true }))) return; await api('/api/admin/email/templates/' + b.dataset.tdel, { method: 'DELETE' }); templates = templates.filter((t) => t.id !== Number(b.dataset.tdel)); paint(); }; });
       if (!design) return;
       m.el.querySelectorAll('[data-f]').forEach((el) => { el.oninput = el.onchange = () => { keep(); if (el.tagName === 'SELECT' && el.dataset.f.endsWith(':product_id')) { /* repaint not needed */ } prev(); }; });
       if (q('#me-link')) q('#me-link').onchange = () => { keep(); prev(); };
@@ -1646,25 +1795,25 @@
       m.el.querySelectorAll('[data-set]').forEach((b) => { b.onclick = () => { keep(); setPhoto(b.dataset.set); }; });
       const up = m.el.querySelector('[data-up-new]'); if (up) up.onchange = async (e) => { const f = e.target.files[0]; if (!f) return; keep(); try { msg('<div class="msg">Uploading…</div>'); const url = await uploadImage(await jpegFrom(f)); await post('/api/admin/marketing/photos', { url }); mk.photos = await api('/api/admin/marketing/photos'); setPhoto(url); } catch (er) { msg(`<div class="msg err">${esc(er.message)}</div>`); } };
       const done = (t) => { m.close(); toast(t); mktEmail(routeSeq); };
-      const saveDraft = async () => { keep(); const b = { subject: q('#me-sub').value, design: clean(), link_code: link }; c = c ? await put('/api/admin/email/campaigns/' + c.id, b) : await post('/api/admin/email/campaigns', b); return c; };
+      const saveDraft = async () => { keep(); const b = { subject: q('#me-sub').value, design: clean(), link_code: link, audience: aud }; c = c ? await put('/api/admin/email/campaigns/' + c.id, b) : await post('/api/admin/email/campaigns', b); return c; };
       if (q('#me-save')) q('#me-save').onclick = async () => { try { await saveDraft(); done('Draft saved'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
       if (q('#me-go')) q('#me-go').onclick = async () => {
         try {
           const when = q('#me-when').value; let body = { now: true };
           if (when === 'at') { const d = q('#me-date').value, t = q('#me-time').value; if (!d || !t) return msg('<div class="msg err">Pick a date and time, or choose “As soon as possible”.</div>'); body = { scheduled_at: zoned(d, Number(t.slice(0, 2)), Number(t.slice(3, 5))) }; }
-          keep(); const n = st.audience.sendable;
+          keep(); const n = audCount();
           const late = body.scheduled_at && body.scheduled_at < Date.now();
           const goes = body.now || late ? 'right away' : 'on ' + esc(dayLabel(keyOf(body.scheduled_at))) + ' at ' + esc(clock(body.scheduled_at));
-          if (!(await confirmBox({ title: body.now || late ? 'Send this email now?' : 'Schedule this email?', body: `“${esc(subject || 'No subject')}” will go to <b>${n}</b> ${n === 1 ? 'person' : 'people'} ${goes}.${late && !body.now ? ' That time has already passed.' : ''} Once it starts sending, it can be stopped but not taken back.`, yes: body.now || late ? 'Send now' : 'Schedule', no: 'Not yet' }))) return;
+          if (!(await confirmBox({ title: body.now || late ? 'Send this email now?' : 'Schedule this email?', body: `“${esc(subject || 'No subject')}” will go to <b>${n}</b> ${n === 1 ? 'person' : 'people'} (${esc(audOpt().label)}) ${goes}.${late && !body.now ? ' That time has already passed.' : ''} Once it starts sending, it can be stopped but not taken back.`, yes: body.now || late ? 'Send now' : 'Schedule', no: 'Not yet' }))) return;
           q('#me-go').disabled = true;
           await saveDraft(); await post(`/api/admin/email/campaigns/${c.id}/schedule`, body); done(when === 'now' || late ? 'Sending started' : 'Scheduled');
         } catch (e) { if (q('#me-go')) q('#me-go').disabled = false; msg(`<div class="msg err">${esc(e.message)}</div>`); }
       };
       if (q('#me-test')) q('#me-test').onclick = async () => { try { keep(); msg('<div class="msg">Sending…</div>'); await post('/api/admin/email/test', { to: q('#me-to').value, subject: q('#me-sub').value, design: clean(), link_code: link }); msg('<div class="msg ok">Test sent. Check your inbox.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
-      if (q('#me-tpl')) q('#me-tpl').onclick = async () => { const name = prompt('Name this template'); if (!name) return; try { keep(); const t = await post('/api/admin/email/templates', { name, design: clean() }); templates.unshift(t); msg('<div class="msg ok">Saved. You’ll find it under “Your templates” on a new email.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-tpl')) q('#me-tpl').onclick = async () => { const name = await askText({ title: 'Save as a template', label: 'Name this template', placeholder: 'Monthly newsletter', yes: 'Save template' }); if (!name) return; try { keep(); const t = await post('/api/admin/email/templates', { name, design: clean() }); templates.unshift(t); msg('<div class="msg ok">Saved. You’ll find it under “Your templates” on a new email.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
       if (q('#me-unsched')) q('#me-unsched').onclick = async () => { try { await post(`/api/admin/email/campaigns/${c.id}/cancel`, {}); done('Back to a draft'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
-      if (q('#me-stop')) q('#me-stop').onclick = async () => { if (!confirm('Stop sending this email? People who already got it keep it; nobody else will.')) return; try { await post(`/api/admin/email/campaigns/${c.id}/cancel`, {}); done('Stopped'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
-      if (q('#me-del')) q('#me-del').onclick = async () => { if (!confirm('Delete this email?')) return; try { await api('/api/admin/email/campaigns/' + c.id, { method: 'DELETE' }); done('Deleted'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-stop')) q('#me-stop').onclick = async () => { if (!(await confirmBox({ title: 'Stop sending?', body: 'People who already got it keep it. Nobody else will.', yes: 'Stop sending', no: 'Keep sending', danger: true }))) return; try { await post(`/api/admin/email/campaigns/${c.id}/cancel`, {}); done('Stopped'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-del')) q('#me-del').onclick = async () => { if (!(await confirmBox({ title: 'Delete this email?', body: 'This can’t be undone.', yes: 'Delete', danger: true }))) return; try { await api('/api/admin/email/campaigns/' + c.id, { method: 'DELETE' }); done('Deleted'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
     }
     api('/api/admin/email/templates').then((t) => { templates = t; if (!design) paint(); }).catch(() => {});
     paint();
@@ -1828,9 +1977,9 @@
   // =====================================================================
   // REVIEWS
   // =====================================================================
-  async function viewReviews() {
+  async function viewReviews(host) {
     let list = await api('/api/admin/reviews');
-    view().innerHTML = `<div class="topbar"><h1>Reviews</h1></div><div id="rvmsg"></div><div id="rvlist"></div>
+    (host || view()).innerHTML = `${host ? '' : '<div class="topbar"><h1>Reviews</h1></div>'}<div id="rvmsg"></div><div id="rvlist"></div>
       <p class="hint">Every review here comes from a real paid order, and buyers can’t be impersonated. You can reply to any review. You can hide abusive or untrue ones, but shoppers are told how many are hidden, so hiding a fair critical review would cost you trust. Hide only what really breaks the rules.</p>`;
     const stars = (n) => `<span class="stars" aria-label="${n} out of 5">${'★'.repeat(n)}<span class="off">${'★'.repeat(5 - n)}</span></span>`;
     const paint = () => {
@@ -2030,6 +2179,7 @@
     const card = (title, inner) => `<div class="card"><h2 style="font-size:22px;margin-bottom:14px">${title}</h2>${inner}</div>`;
     view().innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
+      <div class="msg" style="margin-bottom:14px">Looking for email? Sending emails and the sender address are in <a href="#/marketing/email">Marketing → Email</a>. Your email list is under <a href="#/people/email">People → Email list</a>, and the signup box on your Link page is in <a href="#/links">Link page</a>.</div>
       <div class="settings-col">
         <div style="display:grid;gap:18px;min-width:0">
           <h2 class="sgroup">Your shop</h2>

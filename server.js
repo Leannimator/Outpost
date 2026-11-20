@@ -1879,6 +1879,28 @@ function noteEmailResult(r) {
   if (r.ok) { if (getSetting('email_last_error', '')) setSetting('email_last_error', ''); return; }
   setSetting('email_last_error', `${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC: ${r.error}${r.kind === 'config' ? ' (check the key and that your sending domain is verified)' : ''}`.slice(0, 300));
 }
+// Groups fill themselves in from orders and bids. Tags are the owner's own labels. Emails are matched in lower case.
+const BUYERS_SQL = "SELECT lower(customer_email) FROM orders WHERE status IN ('paid','refunded') AND customer_email IS NOT NULL AND customer_email <> ''";
+const GROUPS = {
+  buyers: { label: 'Customers who bought', sql: `lower(email) IN (${BUYERS_SQL})` },
+  repeat: { label: 'Repeat buyers', sql: `lower(email) IN (SELECT lower(customer_email) FROM orders WHERE status IN ('paid','refunded') AND customer_email <> '' GROUP BY lower(customer_email) HAVING COUNT(*) >= 2)` },
+  bidders: { label: 'Auction bidders', sql: "lower(email) IN (SELECT lower(bd.email) FROM bidders bd JOIN bids bi ON bi.bidder_id = bd.id AND bi.voided = 0)" },
+  never_bought: { label: 'Subscribed, never bought', sql: `lower(email) NOT IN (${BUYERS_SQL})` },
+};
+const cleanAudience = (a) => {
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch { a = null; } }
+  if (a && a.kind === 'tag' && Number.isInteger(Number(a.tag)) && db.prepare('SELECT 1 FROM tags WHERE id = ?').get(Number(a.tag))) return { kind: 'tag', tag: Number(a.tag) };
+  if (a && a.kind === 'group' && GROUPS[a.group]) return { kind: 'group', group: a.group };
+  return null;   // everyone who can be emailed
+};
+// SQL (against the subscribers table) for who an audience is, with its bound values
+const audienceSql = (a) => {
+  a = cleanAudience(a);
+  if (!a) return { sql: '1=1', args: [] };
+  if (a.kind === 'tag') return { sql: 'lower(email) IN (SELECT lower(email) FROM person_tags WHERE tag_id = ?)', args: [a.tag] };
+  return { sql: GROUPS[a.group].sql, args: [] };
+};
+const sendableIn = (a) => { const x = audienceSql(a); return db.prepare(`SELECT COUNT(*) n FROM subscribers WHERE ${sendableSql()} AND ${x.sql}`).get(...x.args).n; };
 function audienceCounts() {
   const c = (w) => db.prepare(`SELECT COUNT(*) n FROM subscribers WHERE ${w}`).get().n;
   return { total: c('1=1'), sendable: c(sendableSql()), unsubscribed: c('unsubscribed = 1'), bounced: c('unsubscribed = 0 AND bounced = 1'), no_consent: c('unsubscribed = 0 AND bounced = 0 AND consent_at IS NULL'), unconfirmed: doubleOptIn() ? c('unsubscribed = 0 AND bounced = 0 AND consent_at IS NOT NULL AND confirmed_at IS NULL') : 0 };
@@ -1893,7 +1915,8 @@ async function sendTransactional({ to, subject, text, html, headers }) {
 }
 function startCampaign(c) {
   db.transaction(() => {
-    const subs = db.prepare(`SELECT id, email FROM subscribers WHERE ${sendableSql()} ORDER BY id`).all();
+    const x = audienceSql(c.audience);
+    const subs = db.prepare(`SELECT id, email FROM subscribers WHERE ${sendableSql()} AND ${x.sql} ORDER BY id`).all(...x.args);
     const ins = db.prepare('INSERT OR IGNORE INTO email_recipients (campaign_id, subscriber_id, email) VALUES (?,?,?)');
     for (const s of subs) ins.run(c.id, s.id, s.email);
     db.prepare("UPDATE email_campaigns SET status = 'sending', started_at = ?, total = ? WHERE id = ?").run(Date.now(), subs.length, c.id);
@@ -1942,15 +1965,20 @@ const cleanSubject = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim().slic
 const EMAIL_BODY_MAX = 20000;
 const designText = (d) => d.blocks.filter((b) => b.type === 'heading' || b.type === 'text').map((b) => b.text).join('\n\n').slice(0, EMAIL_BODY_MAX) || (d.blocks.length ? '(designed email)' : '');
 const cleanCampaignLink = (v) => { v = String(v || '').trim().toLowerCase(); if (!v) return ''; const l = db.prepare('SELECT code FROM tracked_links WHERE code = ? AND archived = 0').get(v); if (!l) throw new HttpError(400, 'That tracked link does not exist'); return l.code; };
+const audienceOptions = () => [
+  { kind: 'all', label: 'Everyone who can be emailed', sendable: sendableIn(null) },
+  ...Object.entries(GROUPS).map(([k, g]) => ({ kind: 'group', group: k, label: g.label, sendable: sendableIn({ kind: 'group', group: k }) })),
+  ...db.prepare('SELECT id, name FROM tags ORDER BY name COLLATE NOCASE').all().map((t) => ({ kind: 'tag', tag: t.id, label: 'Tag: ' + t.name, sendable: sendableIn({ kind: 'tag', tag: t.id }) })),
+];
 const campaignOut = (c) => {
   const n = (st) => db.prepare('SELECT COUNT(*) n FROM email_recipients WHERE campaign_id = ? AND status = ?').get(c.id, st).n;
   let design = null; try { design = c.design ? JSON.parse(c.design) : null; } catch { design = null; }
-  return { ...c, design, sent: n('sent'), failed: n('failed'), pending: n('pending'), skipped: n('skipped') };
+  return { ...c, audience: cleanAudience(c.audience), design, sent: n('sent'), failed: n('failed'), pending: n('pending'), skipped: n('skipped') };
 };
 app.get('/api/admin/email/status', requireAdmin, (req, res) => {
   const u = emailUsed();
   res.json({ on: emailOn(), key_present: mailer.keyPresent(), ready: emailReady(), from: fromAddr(), reply_to: getSetting('email_reply_to', ''), mail_address: getSetting('mail_address', ''), daily_cap: emailCap(), reserve: emailReserve(), double_optin: doubleOptIn(), mailing_list_on: getSetting('mailing_list_on', '') === '1',
-    sent_today: { transactional: u.t, marketing: u.m }, allowance_today: emailReady() ? marketingAllowance() : 0, last_error: getSetting('email_last_error', ''), audience: audienceCounts() });
+    audiences: audienceOptions(), sent_today: { transactional: u.t, marketing: u.m }, allowance_today: emailReady() ? marketingAllowance() : 0, last_error: getSetting('email_last_error', ''), audience: audienceCounts() });
 });
 const FROM_RE = /^(?:[^<>\r\n@]{1,80}<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>|[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)$/;
 app.put('/api/admin/email/settings', requireAdmin, h(async (req, res) => {
@@ -1974,7 +2002,7 @@ app.post('/api/admin/email/campaigns', requireAdmin, h(async (req, res) => {
   if (db.prepare('SELECT COUNT(*) n FROM email_campaigns').get().n >= 1000) throw new HttpError(400, 'Too many emails saved. Delete some old ones first.');
   const subject = cleanSubject(req.body.subject), body = String(req.body.body || '').slice(0, EMAIL_BODY_MAX);
   const design = req.body.design ? mailer.cleanDesign(req.body.design) : null, link = cleanCampaignLink(req.body.link_code);
-  const id = Number(db.prepare("INSERT INTO email_campaigns (subject, body, status, created_at, design, link_code) VALUES (?,?,'draft',?,?,?)").run(subject, design ? designText(design) : body, Date.now(), design ? JSON.stringify(design) : '', link).lastInsertRowid);
+  const id = Number(db.prepare("INSERT INTO email_campaigns (subject, body, status, created_at, design, link_code, audience) VALUES (?,?,'draft',?,?,?,?)").run(subject, design ? designText(design) : body, Date.now(), design ? JSON.stringify(design) : '', link, JSON.stringify(cleanAudience(req.body.audience) || '')).lastInsertRowid);
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(id)));
 }));
 const campaignOr404 = (id) => { const c = db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(Number(id) || 0); if (!c) throw new HttpError(404, 'Not found'); return c; };
@@ -1985,7 +2013,8 @@ app.put('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
   let body = req.body.body !== undefined ? String(req.body.body).slice(0, EMAIL_BODY_MAX) : c.body, designJson = c.design;
   if (req.body.design !== undefined) { const d = req.body.design ? mailer.cleanDesign(req.body.design) : null; designJson = d ? JSON.stringify(d) : ''; if (d) body = designText(d); }
   const link = req.body.link_code !== undefined ? cleanCampaignLink(req.body.link_code) : c.link_code;
-  db.prepare('UPDATE email_campaigns SET subject = ?, body = ?, design = ?, link_code = ? WHERE id = ?').run(subject, body, designJson, link, c.id);
+  const aud = req.body.audience !== undefined ? JSON.stringify(cleanAudience(req.body.audience) || '') : c.audience;
+  db.prepare('UPDATE email_campaigns SET subject = ?, body = ?, design = ?, link_code = ?, audience = ? WHERE id = ?').run(subject, body, designJson, link, aud, c.id);
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
 }));
 app.delete('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
@@ -2000,6 +2029,7 @@ app.post('/api/admin/email/campaigns/:id/schedule', requireAdmin, h(async (req, 
   if (!emailReady()) throw new HttpError(400, 'Email is not switched on yet. Finish the email setup first.');
   if (!c.subject.trim() || !c.body.trim()) throw new HttpError(400, 'Add a subject and some content first.');
   if (!audienceCounts().sendable) throw new HttpError(400, 'Nobody can be emailed yet: no one on the list has agreed to emails (and confirmed, if double opt-in is on).');
+  if (!sendableIn(c.audience)) throw new HttpError(400, 'Nobody in the group you picked can be emailed yet. Pick a different group, or everyone.');
   const at = req.body.now ? Date.now() : Number(req.body.scheduled_at);
   if (!Number.isFinite(at) || at < Date.now() - 3600e3 || at > Date.now() + 366 * 86400e3) throw new HttpError(400, 'Pick a date and time within the next year.');
   db.prepare("UPDATE email_campaigns SET status = 'scheduled', scheduled_at = ? WHERE id = ?").run(Math.round(at), c.id);
@@ -2081,6 +2111,7 @@ app.post('/api/admin/privacy/erase', requireAdmin, h(async (req, res) => {
     }
     out.subscribers = db.prepare('DELETE FROM subscribers WHERE lower(email)=?').run(email).changes;
     db.prepare('DELETE FROM email_recipients WHERE lower(email)=?').run(email);
+    db.prepare('DELETE FROM person_tags WHERE lower(email)=?').run(email); db.prepare('DELETE FROM person_notes WHERE lower(email)=?').run(email);
   })();
   logSecurity('privacy_erase', req, `bidders ${out.bidders}, orders ${out.orders}, subscribers ${out.subscribers}`);
   let stripeFailed = 0;
@@ -2713,7 +2744,7 @@ app.get('/api/admin/reports', requireAdmin, (req, res) => {
   res.json({ days, today, week, period, refunds, series, channels, top, low, low_threshold: lowStock(), attention: { to_ship: toShip, late: late.length, late_ids: late.slice(0, 10), awaiting_payment: awaiting, ending_soon: ending } });
 });
 
-app.get('/api/admin/customers', requireAdmin, (req, res) => {
+function buildCustomers() {
   const map = new Map();
   const get = (email) => { if (!map.has(email)) map.set(email, { email, name: '', orders: 0, spent_cents: 0, last_order: null, bids: 0, won: 0 }); return map.get(email); };
   // Added up by the database (one row per customer) instead of reading every paid order into memory.
@@ -2728,8 +2759,83 @@ app.get('/api/admin/customers', requireAdmin, (req, res) => {
   for (const w of db.prepare(`SELECT lower(bd.email) email, COUNT(*) n FROM auctions a JOIN bids bi ON bi.id = a.winner_bid_id JOIN bidders bd ON bd.id = bi.bidder_id WHERE a.status = 'closed' GROUP BY lower(bd.email)`).all()) {
     get(w.email).won += w.n;
   }
-  res.json([...map.values()].filter((c) => !/^removed-\d+@/.test(c.email)).sort((a, b) => b.spent_cents - a.spent_cents || a.email.localeCompare(b.email)).slice(0, 5000));
+  return map;
+}
+app.get('/api/admin/customers', requireAdmin, (req, res) => {
+  res.json([...buildCustomers().values()].filter((c) => !/^removed-\d+@/.test(c.email)).sort((a, b) => b.spent_cents - a.spent_cents || a.email.localeCompare(b.email)).slice(0, 5000));
 });
+
+
+// ---- People: customers, bidders and email subscribers in one list, with tags, groups and a private note ----
+const normEmail = (e) => String(e || '').trim().toLowerCase();
+const cleanTagName = (n) => String(n || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+const subStatus = (s) => !s ? 'none' : s.unsubscribed ? 'unsubscribed' : s.bounced ? 'bounced' : s.consent_at == null ? 'no_consent' : (doubleOptIn() && s.confirmed_at == null) ? 'unconfirmed' : 'subscribed';
+app.get('/api/admin/people', requireAdmin, (req, res) => {
+  const map = buildCustomers();
+  const subs = new Map(db.prepare('SELECT * FROM subscribers').all().map((s) => [normEmail(s.email), s]));
+  for (const [e, s] of subs) if (!map.has(e)) map.set(e, { email: e, name: '', orders: 0, spent_cents: 0, last_order: null, bids: 0, won: 0 });
+  const tagsBy = new Map();
+  for (const r of db.prepare('SELECT lower(pt.email) email, t.id, t.name FROM person_tags pt JOIN tags t ON t.id = pt.tag_id ORDER BY t.name COLLATE NOCASE').all()) (tagsBy.get(r.email) || tagsBy.set(r.email, []).get(r.email)).push({ id: r.id, name: r.name });
+  const notes = new Set(db.prepare("SELECT lower(email) e FROM person_notes WHERE note <> ''").all().map((r) => r.e));
+  const people = [...map.values()].filter((c) => !/^removed-\d+@/.test(c.email)).map((c) => ({ ...c, email_status: subStatus(subs.get(c.email)), tags: tagsBy.get(c.email) || [], has_note: notes.has(c.email) }))
+    .sort((a, b) => b.spent_cents - a.spent_cents || a.email.localeCompare(b.email)).slice(0, 5000);
+  const tagCounts = db.prepare('SELECT t.id, t.name, (SELECT COUNT(*) FROM person_tags pt WHERE pt.tag_id = t.id) n FROM tags t ORDER BY t.name COLLATE NOCASE').all().map((t) => ({ id: t.id, name: t.name, count: t.n }));
+  const groups = { everyone: people.length, buyers: people.filter((p) => p.orders > 0).length, repeat: people.filter((p) => p.orders > 1).length, bidders: people.filter((p) => p.bids > 0).length, subscribed: people.filter((p) => p.email_status === 'subscribed').length, never_bought: people.filter((p) => p.email_status === 'subscribed' && p.orders === 0).length };
+  res.json({ people, tags: tagCounts, groups });
+});
+app.get('/api/admin/people/profile', requireAdmin, h(async (req, res) => {
+  const email = normEmail(req.query.email);
+  if (!Safe.validEmail(email)) throw new HttpError(400, 'Enter an email address');
+  const c = buildCustomers().get(email) || { email, name: '', orders: 0, spent_cents: 0, last_order: null, bids: 0, won: 0 };
+  const sub = db.prepare('SELECT * FROM subscribers WHERE lower(email) = ?').get(email);
+  const orders = db.prepare("SELECT id, channel, status, total_cents, refunded_cents, created_at FROM orders WHERE lower(customer_email) = ? AND status IN ('paid','refunded') ORDER BY id DESC LIMIT 50").all(email)
+    .map((o) => ({ ...o, items: db.prepare('SELECT name, quantity FROM order_items WHERE order_id = ? ORDER BY id LIMIT 8').all(o.id).map((i) => `${i.quantity}x ${i.name}`) }));
+  const tags = db.prepare('SELECT t.id, t.name FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE lower(pt.email) = ? ORDER BY t.name COLLATE NOCASE').all(email);
+  const note = (db.prepare('SELECT note FROM person_notes WHERE lower(email) = ?').get(email) || { note: '' }).note;
+  const emails = db.prepare("SELECT ec.id, ec.subject, er.status, er.sent_at FROM email_recipients er JOIN email_campaigns ec ON ec.id = er.campaign_id WHERE lower(er.email) = ? ORDER BY ec.id DESC LIMIT 10").all(email);
+  res.json({ ...c, email_status: subStatus(sub), subscribed_at: sub ? sub.created_at : null, source: sub ? sub.source : '', orders_list: orders, tags, note, emails });
+}));
+app.get('/api/admin/tags', requireAdmin, (req, res) => res.json(db.prepare('SELECT t.id, t.name, (SELECT COUNT(*) FROM person_tags pt WHERE pt.tag_id = t.id) count FROM tags t ORDER BY t.name COLLATE NOCASE').all()));
+const tagId = (name) => {
+  name = cleanTagName(name); if (!name) throw new HttpError(400, 'Give the tag a name');
+  const have = db.prepare('SELECT id FROM tags WHERE name = ?').get(name); if (have) return have.id;
+  if (db.prepare('SELECT COUNT(*) n FROM tags').get().n >= 100) throw new HttpError(400, 'That’s plenty of tags. Delete a few you don’t use first.');
+  return Number(db.prepare('INSERT INTO tags (name, created_at) VALUES (?, ?)').run(name, Date.now()).lastInsertRowid);
+};
+app.post('/api/admin/tags', requireAdmin, h(async (req, res) => { const id = tagId(req.body.name); res.json(db.prepare('SELECT id, name FROM tags WHERE id = ?').get(id)); }));
+app.put('/api/admin/tags/:id', requireAdmin, h(async (req, res) => {
+  const t = db.prepare('SELECT id FROM tags WHERE id = ?').get(Number(req.params.id) || 0); if (!t) throw new HttpError(404, 'Not found');
+  const name = cleanTagName(req.body.name); if (!name) throw new HttpError(400, 'Give the tag a name');
+  const clash = db.prepare('SELECT id FROM tags WHERE name = ? AND id <> ?').get(name, t.id); if (clash) throw new HttpError(409, 'You already have a tag with that name');
+  db.prepare('UPDATE tags SET name = ? WHERE id = ?').run(name, t.id); res.json({ id: t.id, name });
+}));
+app.delete('/api/admin/tags/:id', requireAdmin, h(async (req, res) => {
+  const id = Number(req.params.id) || 0;
+  // A scheduled or draft email aimed at this tag would otherwise quietly go to everyone: send those back to "everyone" and say so.
+  const aimed = db.prepare("SELECT id, audience FROM email_campaigns WHERE status IN ('draft','scheduled') AND audience <> ''").all().filter((c) => { try { const a = JSON.parse(c.audience); return a && a.kind === 'tag' && a.tag === id; } catch { return false; } });
+  if (aimed.length && req.query.force !== '1') throw new HttpError(409, `${aimed.length} unsent email${aimed.length === 1 ? ' is' : 's are'} set to go to this tag. Deleting it would change who gets ${aimed.length === 1 ? 'it' : 'them'}.`);
+  db.transaction(() => { for (const c of aimed) db.prepare("UPDATE email_campaigns SET audience = '', status = CASE WHEN status = 'scheduled' THEN 'draft' ELSE status END, scheduled_at = CASE WHEN status = 'scheduled' THEN NULL ELSE scheduled_at END WHERE id = ?").run(c.id); db.prepare('DELETE FROM tags WHERE id = ?').run(id); })();
+  res.json({ ok: true, emails_reset: aimed.length });
+}));
+// Add and/or remove tags for several people at once (by email address).
+app.post('/api/admin/people/tag', requireAdmin, h(async (req, res) => {
+  const emails = [...new Set((Array.isArray(req.body.emails) ? req.body.emails : []).map(normEmail).filter((e) => Safe.validEmail(e)))].slice(0, 2000);
+  if (!emails.length) throw new HttpError(400, 'Pick at least one person');
+  const add = [...new Set((Array.isArray(req.body.add) ? req.body.add : []).map(cleanTagName).filter(Boolean))].slice(0, 10);
+  const remove = [...new Set((Array.isArray(req.body.remove) ? req.body.remove : []).map(cleanTagName).filter(Boolean))].slice(0, 10);
+  db.transaction(() => {
+    for (const n of add) { const id = tagId(n); const ins = db.prepare('INSERT OR IGNORE INTO person_tags (email, tag_id) VALUES (?, ?)'); for (const e of emails) ins.run(e, id); }
+    for (const n of remove) { const t = db.prepare('SELECT id FROM tags WHERE name = ?').get(n); if (t) { const del = db.prepare('DELETE FROM person_tags WHERE lower(email) = ? AND tag_id = ?'); for (const e of emails) del.run(e, t.id); } }
+  })();
+  res.json({ ok: true, people: emails.length });
+}));
+app.put('/api/admin/people/note', requireAdmin, h(async (req, res) => {
+  const email = normEmail(req.body.email); if (!Safe.validEmail(email)) throw new HttpError(400, 'Enter an email address');
+  const note = String(req.body.note || '').slice(0, 2000);
+  if (note.trim()) db.prepare('INSERT INTO person_notes (email, note, updated_at) VALUES (?,?,?) ON CONFLICT(email) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at').run(email, note, Date.now());
+  else db.prepare('DELETE FROM person_notes WHERE lower(email) = ?').run(email);
+  res.json({ ok: true });
+}));
 
 app.get('/api/admin/orders.csv', requireAdmin, (req, res) => {
   const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };   // a leading = + - @ would run as a formula in Excel, so it gets a ' in front
