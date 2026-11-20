@@ -178,7 +178,7 @@
   }
 
   // ---------- shell + router ----------
-  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['marketing', 'Marketing', '#/marketing'], ['reports', 'Reports', '#/reports'], ['security', 'Security', '#/security'], ['settings', 'Settings', '#/settings']];
+  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Link page', '#/links'], ['marketing', 'Marketing', '#/marketing'], ['reports', 'Reports', '#/reports'], ['security', 'Security', '#/security'], ['settings', 'Settings', '#/settings']];
 
   function paintResting() { const el = document.getElementById('resting'); if (el) el.hidden = !settings.break_on; }
   function paintBrand() { if (window.OutpostBrand) OutpostBrand.apply(settings); paintResting(); }
@@ -1013,7 +1013,7 @@
           <label class="field"><span class="label">Tracking number</span><input class="input" id="trk" value="${esc(o.tracking_number || '')}"></label></div>
         <div class="row" style="flex-wrap:wrap"><button class="btn btn-primary btn-sm" id="fsave">Save shipping</button>
           ${o.customer_email ? '<a class="btn btn-sm" id="fmail" href="#">Email buyer…</a>' : '<span class="muted small">No buyer email on this order.</span>'}</div>
-        <div class="hint">Outpost doesn’t send emails by itself. “Email buyer” opens a ready-written message in your email app.</div>
+        <div class="hint">“Email buyer” opens a ready-written message in your email app. Marketing emails to your list are sent from <a href="#/marketing/email">Marketing → Email</a>.</div>
         <div id="fmsg"></div></div>` : ''}
       <div class="mgbox"><div class="label">Refund</div>
         ${o.refunded_cents > 0 ? `<div class="small" style="margin-bottom:8px">Already refunded ${fmt(o.refunded_cents)}${o.refund_note ? ` · “${esc(o.refund_note)}”` : ''}.</div>` : ''}
@@ -1072,8 +1072,8 @@
     const [list, subs] = await Promise.all([api('/api/admin/customers'), api('/api/admin/subscribers')]);
     view().innerHTML = `<div class="topbar"><h1>Customers</h1><div class="spacer"></div><button class="btn" id="erasebtn" style="color:var(--bad,#b42318);border-color:currentColor">Erase a person…</button></div><div id="cmsg"></div><div id="erasebox"></div>
       <div class="card" id="elist" style="margin-bottom:18px"><div class="row" style="flex-wrap:wrap;gap:10px;align-items:center"><div><h2 style="font-size:20px;margin:0">Email list</h2><div class="small muted"><b>${subs.filter((x) => !x.unsubscribed).length}</b> subscribed${subs.some((x) => x.unsubscribed) ? ` · ${subs.filter((x) => x.unsubscribed).length} unsubscribed` : ''}. Only people who ticked the box on your links page.</div></div><span class="spacer"></span><button class="btn btn-primary" id="edl" ${subs.length ? '' : 'disabled'}>Download CSV</button></div>
-        ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th>Status</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td>${x.unsubscribed ? '<span class="badge b-canceled">Unsubscribed</span>' : '<span class="badge b-paid">Subscribed</span>'}</td><td><button class="btn btn-sm" data-eun="${x.id}" data-to="${x.unsubscribed ? 0 : 1}">${x.unsubscribed ? 'Put back on list' : 'Mark unsubscribed'}</button> <button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
-        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Outpost doesn’t send email itself.</div></div>
+        ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th>Status</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td>${x.unsubscribed ? '<span class="badge b-canceled">Unsubscribed</span>' : x.bounced ? '<span class="badge b-canceled">Bounced</span>' : !x.consent_at ? '<span class="badge">No consent on file</span>' : !x.confirmed_at ? '<span class="badge b-pending">Waiting to confirm</span>' : '<span class="badge b-paid">Subscribed</span>'}</td><td><button class="btn btn-sm" data-eun="${x.id}" data-to="${x.unsubscribed ? 0 : 1}">${x.unsubscribed ? 'Put back on list' : 'Mark unsubscribed'}</button> <button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
+        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Write and send emails to this list in <a href="#/marketing/email">Marketing → Email</a>. Only people who agreed, haven’t unsubscribed or bounced (and confirmed, if you ask for that) are ever emailed.</div></div>
       <div class="search">${icon('search')}<input class="input" id="cq" placeholder="Search by name or email…"></div>
       <div class="card tbl-scroll"><table><thead><tr><th>Customer</th><th>Orders</th><th>Spent</th><th>Bids</th><th>Won</th><th>Last order</th><th></th></tr></thead><tbody id="crows"></tbody></table></div>
       <p class="hint">Built from your paid orders and auction bidders. Nothing is shared with anyone.</p>`;
@@ -1162,7 +1162,7 @@
     view().innerHTML = `
       <div class="topbar"><h1>Marketing</h1></div>
       <div class="seg" id="mktabs">
-        ${[['calendar', 'Calendar'], ['gallery', 'Gallery'], ['ready', 'Ready to post'], ['email', 'Email'], ['links', 'Tracked links'], ['sources', 'Sales by source']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}${k === 'ready' ? '<span class="nav-badge"></span>' : ''}</button>`).join('')}
+        ${[['calendar', 'Calendar'], ['gallery', 'Gallery'], ['ready', 'Ready to post'], ['email', 'Email'], ['links', 'Tracked links'], ['sources', 'Sales by link']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}${k === 'ready' ? '<span class="nav-badge"></span>' : ''}</button>`).join('')}
       </div>
       <div id="mkbody" style="margin-top:12px"></div>`;
     document.querySelectorAll('#mktabs button').forEach((b) => { b.onclick = () => { location.hash = '#/marketing/' + b.dataset.t; }; });
@@ -1556,7 +1556,7 @@
         : `<div class="row wrap" style="gap:8px;align-items:center;margin-bottom:8px"><span class="label" style="margin:0">Header</span><div class="seg" id="me-hdr"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}" ${dis}>Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}" ${dis}>Banner</button></div></div>
           ${design.blocks.map(blockHtml).join('')}
           ${locked ? '' : `<div class="row wrap" style="gap:6px;margin:8px 0">${['heading', 'text', 'photo', 'photos', 'button', 'product', 'divider'].map((t) => `<button class="btn btn-sm" data-add="${t}">+ ${BLOCK_NAMES[t]}</button>`).join('')}</div>`}
-          <label class="field"><span class="label">Count sales from this email</span><select class="input" id="me-link" ${dis}><option value="">Don’t track</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === link ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select><span class="hint">Shop links in the email get this tracked link, so Sales by source shows what the email earned. Make one in Tracked links.</span></label>
+          <label class="field"><span class="label">Count sales from this email</span><select class="input" id="me-link" ${dis}><option value="">Don’t track</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === link ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select><span class="hint">Shop links in the email get this tracked link, so Sales by link shows what the email earned. Make one in Tracked links.</span></label>
           ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><input class="input" id="me-to" type="email" placeholder="you@example.com" style="max-width:220px"><button class="btn btn-sm" id="me-test">Send me a test</button><button class="btn btn-sm" id="me-tpl">Save as template</button></div>`}`}
         <div id="memsg" style="margin-top:6px"></div></div>
       <div><div class="label">Preview</div>${design ? "" : '<div class="hint">Pick a layout on the left and your email appears here.</div>'}<iframe class="mk-mailprev" id="me-prev" ${design ? "" : 'hidden'} sandbox="" title="Email preview" style="width:100%;height:520px;border:1px solid var(--line,#e4dccb)"></iframe>
@@ -1689,7 +1689,7 @@
       const max = Math.max(1, ...d.rows.map((r) => r.revenue_cents), d.direct.revenue_cents);
       const bar = (c, grey) => `<span style="background:var(--cream-2);border-radius:6px;height:12px;display:block"><span style="display:block;height:12px;border-radius:6px;width:${Math.round((c / max) * 100)}%;background:${grey ? '#c9c2b3' : 'var(--forest)'}"></span></span>`;
       body.innerHTML = `
-        <div class="row" style="margin-bottom:12px"><h2 style="font-size:22px">Where sales come from</h2><div class="spacer"></div>
+        <div class="row" style="margin-bottom:12px"><h2 style="font-size:22px">Sales by link</h2><div class="spacer"></div>
           <select class="input" id="dsel" style="width:auto">${[7, 30, 90].map((n) => `<option value="${n}"${n === d.days ? ' selected' : ''}>Last ${n} days</option>`).join('')}</select></div>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px">
           <div class="card"><div class="small muted">Visits</div><div style="font-size:24px;font-weight:600">${d.visits}</div></div>
@@ -1713,13 +1713,13 @@
     const strip = (arr) => JSON.stringify((arr || []).map(({ _k, ...l }) => l));
     let baseline = strip(cur.links), saving = false;
     const base = (st.base_url || location.origin).replace(/\/$/, '');
-    view().innerHTML = `<div class="topbar"><h1>Links</h1><button class="btn btn-primary" id="lsave">Save</button></div><div id="lmsg"></div>
+    view().innerHTML = `<div class="topbar"><h1>Link page</h1><button class="btn btn-primary" id="lsave">Save</button></div><div id="lmsg"></div>
       <div class="settings-col"><div style="display:grid;gap:18px;min-width:0">
         <div class="card"><h2 style="font-size:22px;margin-bottom:6px">Your links page</h2>
           <p class="muted small" style="margin:0 0 10px">One page to put in your Instagram bio (or anywhere else) that points people to your shop, events, classes, anything.</p>
           <div class="row" style="flex-wrap:wrap;gap:8px"><input class="input" id="lurl" readonly value="${esc(base + '/links')}" style="flex:1;min-width:200px"><button class="btn" id="lcopy">Copy</button><a class="btn btn-ghost" href="links.html" target="_blank" rel="noopener">Open ↗</a></div>
           <label class="field" style="margin-top:14px"><span class="label">Short line under your name (optional)</span><input class="input" id="lintro" maxlength="160" placeholder="Linocut prints, ceramics and weekend workshops in Portland" value="${esc(cur.links_intro || '')}"></label>
-          <label class="check"><input type="checkbox" id="lmail" ${cur.mailing_list_on ? 'checked' : ''}> <span>Show an email signup box on this page</span></label>
+          <label class="check"><input type="checkbox" id="lmail" ${cur.mailing_list_on ? 'checked' : ''}> <span>Show an email signup box on this page</span></label><div class="hint" style="margin:2px 0 8px 26px">This only collects sign-ups. Writing and sending emails is in <a href="#/marketing/email">Marketing → Email</a>.</div>
           <div class="hint">People who sign up are saved under Customers → Email list, and you can download them to use in any email service.</div></div>
         <div class="card"><h2 style="font-size:22px;margin-bottom:6px">Buttons and events</h2>
           <div id="llist"></div>
@@ -1845,7 +1845,7 @@
           <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Sales per day" style="width:100%;height:auto">${bars}<line x1="${pad}" x2="${W - pad}" y1="${H - 18}" y2="${H - 18}" stroke="var(--line)"/>${ticks}</svg>
           <div class="hint">Sales are after refunds and include tax. Hover a bar to see the day.</div></div>
         <div class="grid2" style="margin-top:14px;align-items:start">
-          <div class="card"><h2 style="font-size:20px;margin-bottom:8px">Where sales come from</h2>
+          <div class="card"><h2 style="font-size:20px;margin-bottom:8px">Sales by channel</h2>
             ${r.channels.length ? r.channels.map((c) => `<div class="sum"><span>${chan[c.channel] || esc(c.channel)} <span class="muted small">· ${c.n} order${c.n === 1 ? '' : 's'}</span></span><b>${fmt(c.net)}</b></div>`).join('') : '<div class="muted small">No sales in this period.</div>'}</div>
           <div class="card"><h2 style="font-size:20px;margin-bottom:8px">Best sellers</h2>
             ${r.top.length ? r.top.map((t) => `<div class="sum"><span>${esc(t.name)} <span class="muted small">· ${t.qty} sold</span></span><b>${fmt(t.cents)}</b></div>`).join('') : '<div class="muted small">No sales in this period.</div>'}</div>
