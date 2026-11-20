@@ -1111,6 +1111,20 @@
         const em = $('#eremail').value.trim();
         if (!em) return ($('#ermsg').innerHTML = '<div class="msg err">Enter an email address.</div>');
         if (force && $('#erforce') && !$('#erforce').checked) return ($('#ermsg').innerHTML = '<div class="msg err">Tick the box to erase anyway, or ship the order first.</div>');
+        const c0 = list.find((x) => x.email === em.toLowerCase());
+        const sure = await new Promise((resolve) => {
+          const cm = openModal(`<h2 style="font-size:22px;margin-bottom:8px">Erase this person?</h2>
+            <p style="margin:0 0 6px"><b>${esc(em)}</b>${c0 && c0.name ? ' (' + esc(c0.name) + ')' : ''}</p>
+            <p class="muted small" style="margin:0 0 14px">Their name, address and email are removed from your orders, bidder records and email list, and a saved card is deleted at Stripe. <b>This can’t be undone.</b></p>
+            <div class="row" style="gap:10px;justify-content:center"><button class="btn" id="er-no">Cancel</button><button class="btn btn-primary" id="er-yes" style="background:var(--bad,#b42318)">Yes, erase</button></div>`);
+          cm.el.setAttribute('role', 'alertdialog'); cm.el.setAttribute('aria-modal', 'true');
+          $('#er-no', cm.el).focus();
+          const end = (v) => { document.removeEventListener('keydown', onKey); cm.close(); resolve(v); };
+          const onKey = (ev) => { if (ev.key === 'Escape') end(false); };
+          document.addEventListener('keydown', onKey);
+          $('#er-no', cm.el).onclick = () => end(false); $('#er-yes', cm.el).onclick = () => end(true);
+        });
+        if (!sure) return;
         $('#ergo').disabled = true; $('#ermsg').innerHTML = '';
         try {
           const r = await post('/api/admin/privacy/erase', { email: em, ...(force ? { force: true } : {}) });
