@@ -1039,10 +1039,10 @@ app.get('/robots.txt', (req, res) => {
 });
 // ---------- marketing: tracked links (visits are only COUNTED per day; no cookies, no visitor addresses stored) ----------
 const LINK_CODE_RE = /^[a-z0-9][a-z0-9_-]{0,29}$/i;
-const LINK_DESTS = { '/shop': 'Shop', '/links': 'Links page', '/about': 'About page' };
+const LINK_DESTS = { '/shop': 'Shop', '/gallery': 'Gallery', '/links': 'Links page', '/about': 'About page' };
 const LINK_MAX = 200;
 const BOT_UA_RE = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|fetch|monitor|curl|wget|python|headless/i;
-const COUNTED_PAGES = new Set(['/shop', '/links', '/about', '/store.html', '/links.html', '/about.html']);
+const COUNTED_PAGES = new Set(['/shop', '/gallery', '/links', '/about', '/store.html', '/gallery.html', '/links.html', '/about.html']);
 // The canonical code of an ACTIVE-or-archived link that really exists, or '' (so made-up codes never reach the database).
 const knownLinkCode = (c) => {
   c = String(c || '').trim();
@@ -1066,7 +1066,7 @@ app.use((req, res, next) => {
   next();
 });
 // Short, shareable addresses: yourshop.com/links goes in your Instagram bio.
-const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html' };
+const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html', '/gallery': 'gallery.html' };
 for (const [route, file] of Object.entries(CLEAN_PAGES)) app.get(route, (req, res) => res.sendFile(path.join(__dirname, 'public', file)));
 app.get('/theme.css', (req, res) => {
   res.set('Content-Type', 'text/css; charset=utf-8');
@@ -1136,6 +1136,8 @@ app.post('/api/admin/images/cleanup', requireAdmin, (req, res) => {
   const text = [db.prepare("SELECT group_concat(COALESCE(images,'') || ' ' || COALESCE(image_url,''), ' ') t FROM products").get().t,
     db.prepare("SELECT group_concat(COALESCE(image_url,''), ' ') t FROM auctions").get().t,
     db.prepare("SELECT group_concat(COALESCE(image_url,''), ' ') t FROM lines").get().t,
+    db.prepare("SELECT group_concat(url, ' ') t FROM gallery_photos").get().t,
+    db.prepare("SELECT group_concat(photos, ' ') t FROM posts").get().t,
     db.prepare('SELECT group_concat(value, \' \') t FROM settings').get().t].join(' ');
   const unused = [];
   for (const f of fs.readdirSync(UPLOAD_DIR)) {
@@ -1148,7 +1150,7 @@ app.post('/api/admin/images/cleanup', requireAdmin, (req, res) => {
 
 // ---------- public API: settings, products, checkout, receipts ----------
 const settingsPayload = () => ({
-  timezone: getSetting('timezone', ''), store_name: storeName(), tax_rate: taxRate(), online_tax_rate: 0, currency: CURRENCY,
+  timezone: getSetting('timezone', ''), gallery_on: getSetting('gallery_on', '') === '1', store_name: storeName(), tax_rate: taxRate(), online_tax_rate: 0, currency: CURRENCY,
   break_on: breakOn(), break_message: breakMessage(),
   break_manual: getSetting('break_on', '') === '1', break_from: getSetting('break_from', ''), break_until: getSetting('break_until', ''),
   low_stock: lowStock(), refund_policy: refundPolicy(), max_qty: maxQty(), captcha_site_key: TURNSTILE_SECRET ? TURNSTILE_SITE : '',
@@ -1626,6 +1628,139 @@ app.get('/api/admin/marketing/sources', requireAdmin, (req, res) => {
   let dn = 0, dc = 0;
   for (const [k, v] of sales) if (k === '' || !known.has(k.toLowerCase())) { dn += v.n; dc += v.cents; }
   res.json({ days, visits: rows.reduce((a, r) => a + r.visits, 0), orders: rows.reduce((a, r) => a + r.orders, 0) + dn, revenue_cents: rows.reduce((a, r) => a + r.revenue_cents, 0) + dc, rows, direct: { orders: dn, revenue_cents: dc } });
+});
+
+// ---------- marketing: gallery photos, posts, the public Gallery, and "Ready to post" (owner routes need sign-in) ----------
+const POST_MAX = 2000, POST_PHOTOS_MAX = 10, GALLERY_PHOTOS_MAX = 2000, CAPTION_MAX = 2200;
+const IMG_URL_RE = /^\/images\/[\w.\-]+$/;
+const parsePhotos = (t) => { try { const a = JSON.parse(t); return Array.isArray(a) ? a.filter((u) => typeof u === 'string') : []; } catch { return []; } };
+const postOut = (p) => ({ id: p.id, caption: p.caption, photos: parsePhotos(p.photos), link_code: p.link_code, product_id: p.product_id, scheduled_at: p.scheduled_at, status: p.status,
+  to_gallery: !!p.to_gallery, to_instagram: !!p.to_instagram, to_facebook: !!p.to_facebook, posted_at: p.posted_at, pinned: !!p.pinned, hidden: !!p.hidden, sort: p.sort, created_at: p.created_at });
+const postUrl = (p) => { const l = p.link_code ? db.prepare('SELECT code, dest FROM tracked_links WHERE code = ?').get(p.link_code) : null; return l ? linkUrl(l) : ''; };
+// Checks and cleans what the owner sent for a post. `cur` is the saved post when editing (so a partial update keeps the rest).
+function cleanPost(b, cur) {
+  b = b && typeof b === 'object' ? b : {};
+  const o = cur ? { ...postOut(cur) } : { caption: '', photos: [], link_code: '', product_id: null, scheduled_at: null, status: 'draft', to_gallery: true, to_instagram: false, to_facebook: false };
+  if (b.caption !== undefined) { o.caption = String(b.caption || '').replace(/\r\n/g, '\n').trim(); if (o.caption.length > CAPTION_MAX) throw new HttpError(400, `That caption is too long (${CAPTION_MAX} characters at most).`); }
+  if (b.photos !== undefined) {
+    if (!Array.isArray(b.photos) || b.photos.length > POST_PHOTOS_MAX) throw new HttpError(400, `A post can have up to ${POST_PHOTOS_MAX} photos.`);
+    const reg = db.prepare('SELECT 1 FROM gallery_photos WHERE url = ?');
+    const seen = new Set();
+    o.photos = b.photos.map((u) => String(u || '')).filter((u) => { if (seen.has(u)) return false; seen.add(u); return true; });
+    for (const u of o.photos) if (!IMG_URL_RE.test(u) || !reg.get(u)) throw new HttpError(400, 'Pick photos from your gallery photos. Product photos can’t be used in the gallery.');
+  }
+  if (b.link_code !== undefined) { const c = String(b.link_code || '').trim(); if (c && !knownLinkCode(c)) throw new HttpError(400, 'That tracked link was not found.'); o.link_code = c ? knownLinkCode(c) : ''; }
+  if (b.product_id !== undefined) { const id = b.product_id === null || b.product_id === '' ? null : Number(b.product_id); if (id !== null && (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM products WHERE id = ?').get(id))) throw new HttpError(400, 'That product was not found.'); o.product_id = id; }
+  for (const k of ['to_gallery', 'to_instagram', 'to_facebook']) if (b[k] !== undefined) o[k] = !!b[k];
+  if (b.scheduled_at !== undefined) {
+    const t = b.scheduled_at === null || b.scheduled_at === '' ? null : Number(b.scheduled_at);
+    if (t !== null && (!Number.isFinite(t) || t < Date.UTC(2000, 0, 1) || t > Date.UTC(2100, 0, 1))) throw new HttpError(400, 'That date and time doesn’t look right.');
+    o.scheduled_at = t === null ? null : Math.round(t);
+  }
+  if (b.status !== undefined) { if (!['draft', 'scheduled'].includes(b.status)) throw new HttpError(400, 'A post is either a draft or scheduled.'); o.status = b.status; }
+  if (o.status === 'scheduled') {
+    if (o.scheduled_at === null) throw new HttpError(400, 'Pick a date and time to schedule this post.');
+    if (!o.photos.length) throw new HttpError(400, 'Add at least one photo before scheduling this post.');
+    if (!o.to_gallery && !o.to_instagram && !o.to_facebook) throw new HttpError(400, 'Choose where this post goes: your gallery, Instagram, or Facebook.');
+  }
+  return o;
+}
+const savePostRow = (id, o) => db.prepare('UPDATE posts SET caption=?, photos=?, link_code=?, product_id=?, scheduled_at=?, status=?, to_gallery=?, to_instagram=?, to_facebook=? WHERE id=?')
+  .run(o.caption, JSON.stringify(o.photos), o.link_code, o.product_id, o.scheduled_at, o.status, o.to_gallery ? 1 : 0, o.to_instagram ? 1 : 0, o.to_facebook ? 1 : 0, id);
+
+// --- gallery photos (a separate set from product photos) ---
+app.get('/api/admin/marketing/photos', requireAdmin, (req, res) => {
+  const used = new Set(db.prepare('SELECT photos FROM posts').all().flatMap((r) => parsePhotos(r.photos)));
+  res.json(db.prepare('SELECT id, url, created_at FROM gallery_photos ORDER BY id DESC').all().map((r) => ({ ...r, used: used.has(r.url) })));
+});
+app.post('/api/admin/marketing/photos', requireAdmin, (req, res) => {
+  const url = String(req.body.url || '');
+  if (!IMG_URL_RE.test(url)) throw new HttpError(400, 'That photo address doesn’t look right.');
+  if (!/\.(jpe?g|png|webp|gif)$/i.test(url)) throw new HttpError(400, 'Gallery photos can be JPEG, PNG, WebP or GIF.');
+  if (!fs.existsSync(path.join(UPLOAD_DIR, url.slice('/images/'.length)))) throw new HttpError(404, 'That photo was not found. Upload it again.');
+  if (db.prepare('SELECT COUNT(*) c FROM gallery_photos').get().c >= GALLERY_PHOTOS_MAX) throw new HttpError(400, 'Your gallery photo library is full. Delete some you no longer use.');
+  db.prepare('INSERT OR IGNORE INTO gallery_photos (url, created_at) VALUES (?, ?)').run(url, Date.now());
+  res.json(db.prepare('SELECT id, url, created_at FROM gallery_photos WHERE url = ?').get(url));
+});
+app.delete('/api/admin/marketing/photos/:id', requireAdmin, (req, res) => {
+  const ph = db.prepare('SELECT id, url FROM gallery_photos WHERE id = ?').get(Number(req.params.id) || 0);
+  if (!ph) throw new HttpError(404, 'That photo was not found.');
+  if (db.prepare('SELECT photos FROM posts').all().some((r) => parsePhotos(r.photos).includes(ph.url))) throw new HttpError(409, 'A post still uses that photo. Remove it from the post first.');
+  db.prepare('DELETE FROM gallery_photos WHERE id = ?').run(ph.id);
+  try { fs.unlinkSync(path.join(UPLOAD_DIR, ph.url.slice('/images/'.length))); } catch { /* already gone */ }
+  res.json({ ok: true });
+});
+
+// --- posts ---
+app.get('/api/admin/marketing/posts', requireAdmin, (req, res) => {
+  res.json({ gallery_on: getSetting('gallery_on', '') === '1', posts: db.prepare('SELECT * FROM posts ORDER BY pinned DESC, sort DESC, id DESC').all().map(postOut) });
+});
+app.put('/api/admin/marketing/gallery', requireAdmin, (req, res) => {
+  setSetting('gallery_on', req.body.on ? '1' : '0');
+  res.json({ gallery_on: getSetting('gallery_on', '') === '1' });
+});
+app.post('/api/admin/marketing/posts', requireAdmin, (req, res) => {
+  if (db.prepare('SELECT COUNT(*) c FROM posts').get().c >= POST_MAX) throw new HttpError(400, 'That is a lot of posts. Delete some old ones first.');
+  const o = cleanPost(req.body, null);
+  const info = db.prepare('INSERT INTO posts (created_at, sort) VALUES (?, (SELECT COALESCE(MAX(sort),0)+1 FROM posts))').run(Date.now());
+  savePostRow(info.lastInsertRowid, o);
+  res.json(postOut(db.prepare('SELECT * FROM posts WHERE id = ?').get(info.lastInsertRowid)));
+});
+app.put('/api/admin/marketing/posts/:id', requireAdmin, (req, res) => {
+  const cur = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(req.params.id) || 0);
+  if (!cur) throw new HttpError(404, 'That post was not found.');
+  const o = cleanPost(req.body, cur);
+  db.transaction(() => {
+    savePostRow(cur.id, o);
+    if (req.body.pinned !== undefined) db.prepare('UPDATE posts SET pinned = ? WHERE id = ?').run(req.body.pinned ? 1 : 0, cur.id);
+    if (req.body.hidden !== undefined) db.prepare('UPDATE posts SET hidden = ? WHERE id = ?').run(req.body.hidden ? 1 : 0, cur.id);
+    // Moving a post to a new time means it has not been posted by hand yet at that time.
+    if (req.body.scheduled_at !== undefined && Number(req.body.scheduled_at) !== cur.scheduled_at) db.prepare('UPDATE posts SET posted_at = NULL WHERE id = ?').run(cur.id);
+  })();
+  res.json(postOut(db.prepare('SELECT * FROM posts WHERE id = ?').get(cur.id)));
+});
+app.delete('/api/admin/marketing/posts/:id', requireAdmin, (req, res) => {
+  const r = db.prepare('DELETE FROM posts WHERE id = ?').run(Number(req.params.id) || 0);
+  if (!r.changes) throw new HttpError(404, 'That post was not found.');
+  res.json({ ok: true });
+});
+// The owner drags tiles into a new order: the whole order is sent, and pinned posts stay on top.
+app.post('/api/admin/marketing/posts/order', requireAdmin, (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number) : null;
+  if (!ids || ids.length > POST_MAX || ids.some((n) => !Number.isInteger(n)) || new Set(ids).size !== ids.length) throw new HttpError(400, 'That order doesn’t look right.');
+  const have = new Set(db.prepare('SELECT id FROM posts').all().map((r) => r.id));
+  if (ids.some((n) => !have.has(n))) throw new HttpError(400, 'One of those posts no longer exists. Reload and try again.');
+  const maxSort = db.prepare('SELECT COALESCE(MAX(sort),0) m FROM posts').get().m;
+  const base = Math.max(maxSort, ids.length) + 1;
+  db.transaction(() => { ids.forEach((id, i) => db.prepare('UPDATE posts SET sort = ? WHERE id = ?').run(base + ids.length - i, id)); })();
+  res.json({ ok: true });
+});
+
+// --- Ready to post: scheduled posts whose time has come, for Instagram and Facebook, that the owner has not marked as posted ---
+app.get('/api/admin/marketing/due', requireAdmin, (req, res) => {
+  const now = Date.now();
+  const due = db.prepare("SELECT * FROM posts WHERE status='scheduled' AND scheduled_at <= ? AND (to_instagram=1 OR to_facebook=1) AND posted_at IS NULL ORDER BY scheduled_at").all(now);
+  const done = db.prepare("SELECT * FROM posts WHERE status='scheduled' AND (to_instagram=1 OR to_facebook=1) AND posted_at IS NOT NULL AND posted_at >= ? ORDER BY posted_at DESC LIMIT 20").all(now - 7 * 86400e3);
+  res.json({ count: due.length, due: due.map((p) => ({ ...postOut(p), url: postUrl(p) })), done: done.map((p) => ({ ...postOut(p), url: postUrl(p) })) });
+});
+app.post('/api/admin/marketing/posts/:id/posted', requireAdmin, (req, res) => {
+  const r = db.prepare('UPDATE posts SET posted_at = ? WHERE id = ?').run(req.body.posted === false ? null : Date.now(), Number(req.params.id) || 0);
+  if (!r.changes) throw new HttpError(404, 'That post was not found.');
+  res.json({ ok: true });
+});
+
+// --- the public Gallery: only posts whose time has come, switched on, not hidden; view only ---
+app.get('/api/gallery', (req, res) => {
+  if (getSetting('gallery_on', '') !== '1') throw new HttpError(404, 'This shop has no gallery.');
+  const offset = Math.min(Math.max(parseInt(req.query.offset, 10) || 0, 0), 5000);
+  const rows = db.prepare("SELECT * FROM posts WHERE status='scheduled' AND to_gallery=1 AND hidden=0 AND visibility='shop' AND scheduled_at <= ? ORDER BY pinned DESC, sort DESC, id DESC LIMIT 61 OFFSET ?").all(Date.now(), offset);
+  const prod = db.prepare('SELECT id, name FROM products WHERE id = ? AND active = 1');
+  res.set('Cache-Control', 'public, max-age=30');
+  res.json({ more: rows.length > 60, posts: rows.slice(0, 60).map((p) => {
+    const pr = p.product_id ? prod.get(p.product_id) : null;
+    const code = p.link_code || '';
+    return { id: p.id, caption: p.caption, photos: parsePhotos(p.photos), at: p.scheduled_at, shop: pr ? { name: pr.name, url: `/shop?p=${pr.id}${code ? '&s=' + encodeURIComponent(code) : ''}` } : null };
+  }) });
 });
 
 // ---------- email list (download as CSV and import into your own email service; Outpost sends no email) ----------

@@ -359,6 +359,35 @@ for (const o of needToken) setToken.run(crypto.randomBytes(12).toString('hex'), 
   addCol('orders', 'source', "TEXT NOT NULL DEFAULT ''");              // the tracked link a shopper arrived by ('' = direct or unknown)
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_orders_source ON orders (source)'); } catch { /* speed-up only */ }
 
+  // ----- marketing tab, step 2: gallery photos and posts -----
+  // Gallery photos are their own set (lifestyle, studio, process): a post may only use photos registered here, so product shots and gallery shots never mix.
+  db.exec(`CREATE TABLE IF NOT EXISTS gallery_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL
+  )`);
+  // A post: photos + caption, an optional "Shop this" product, an optional tracked link, and when it goes live.
+  // status 'draft' = no time yet; 'scheduled' = goes live on the Gallery (and shows in "Ready to post") at scheduled_at.
+  db.exec(`CREATE TABLE IF NOT EXISTS posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    caption TEXT NOT NULL DEFAULT '',
+    photos TEXT NOT NULL DEFAULT '[]',
+    link_code TEXT NOT NULL DEFAULT '',
+    product_id INTEGER,
+    scheduled_at INTEGER,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','scheduled')),
+    to_gallery INTEGER NOT NULL DEFAULT 1,
+    to_instagram INTEGER NOT NULL DEFAULT 0,
+    to_facebook INTEGER NOT NULL DEFAULT 0,
+    posted_at INTEGER,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    sort INTEGER NOT NULL DEFAULT 0,
+    visibility TEXT NOT NULL DEFAULT 'shop',
+    created_at INTEGER NOT NULL
+  )`);
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_posts_when ON posts (status, scheduled_at)'); } catch { /* speed-up only */ }
+
   // Indexes: without these the order export and the customers list scanned whole tables once per order (review item 78).
   for (const sql of [
     'CREATE INDEX IF NOT EXISTS idx_items_order ON order_items (order_id)',

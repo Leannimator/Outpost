@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gallery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+<script src="/source.js"></script>
+</head>
+<body data-page="gallery">
+<div class="shop-app">
+  <aside class="shop-side">
+    <div class="shop-brand">
+      <a class="wordmark" id="sn" data-brand="name" href="store.html">Outpost</a>
+      <nav><a href="store.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg><span>Shop</span></a><a href="auction.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6-3 3-6-6 3-3z"/><path d="M11 7l-6 6 3 3 6-6"/><path d="M4 20h9"/></svg><span>Auctions</span></a></nav>
+    </div>
+    <img class="side-art" data-brand="mascot" alt="" hidden>
+  </aside>
+  <main class="shop-content">
+    <a class="wordmark mobhead" data-brand="name" href="store.html">Outpost</a>
+    <section class="revpage" id="page"><p class="muted">Loading…</p></section>
+  </main>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let tz = '', posts = [], offset = 0, name = 'this shop';
+  const when = (ms) => { try { return new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: tz || undefined }); } catch { return ''; } };
+  function tiles(list) {
+    return list.map((p, i) => `<button class="gal-tile" data-i="${i}" aria-label="Open post${p.caption ? ': ' + esc(p.caption.slice(0, 60)) : ''}"><img src="${esc(p.photos[0])}" alt="" loading="lazy">${p.photos.length > 1 ? `<span class="gal-multi">${p.photos.length} photos</span>` : ''}</button>`).join('');
+  }
+  async function load(more) {
+    const r = await fetch('/api/gallery?offset=' + (more ? offset : 0));
+    if (r.status === 404) { $('page').innerHTML = `<h1>Gallery</h1><p class="muted">${esc(name)} doesn’t have a gallery right now.</p>`; return; }
+    const d = await r.json();
+    if (!more) { posts = []; }
+    posts = posts.concat(d.posts); offset = posts.length;
+    $('page').innerHTML = `<div class="gal-head"><h1>${esc(name)} gallery</h1><p class="muted">Photos from the studio.</p></div>` +
+      (posts.length ? `<div class="gal-grid" id="grid">${tiles(posts)}</div>${d.more ? '<p class="center mt"><button class="btn" id="more">Show more</button></p>' : ''}` : '<p class="muted">Nothing here yet. Check back soon!</p>');
+    const g = $('grid'); if (g) g.onclick = (e) => { const b = e.target.closest('.gal-tile'); if (b) view(Number(b.dataset.i), 0); };
+    if ($('more')) $('more').onclick = () => load(true);
+  }
+  let lastFocus = null;
+  function view(i, k) {
+    const p = posts[i]; if (!p) return;
+    lastFocus = document.activeElement;
+    let back = $('galback'); if (back) back.remove();
+    back = document.createElement('div'); back.className = 'gal-back'; back.id = 'galback';
+    const n = p.photos.length;
+    back.innerHTML = `<div class="gal-box" role="dialog" aria-modal="true" aria-label="Photo">
+      <button class="gal-x" id="galx" aria-label="Close">×</button>
+      <div class="gal-photo"><img src="${esc(p.photos[k])}" alt="${esc(p.caption.slice(0, 120))}">${n > 1 ? '<button class="gal-nav gal-prev" aria-label="Previous photo">‹</button><button class="gal-nav gal-next" aria-label="Next photo">›</button>' : ''}</div>
+      <div class="gal-info">${p.caption ? `<p class="gal-cap">${esc(p.caption)}</p>` : ''}<div class="small muted">${esc(when(p.at))}${n > 1 ? ` · photo ${k + 1} of ${n}` : ''}</div>
+        ${p.shop ? `<p style="margin:12px 0 0"><a class="btn btn-primary" href="${esc(p.shop.url)}">Shop this: ${esc(p.shop.name)}</a></p>` : ''}</div></div>`;
+    document.body.appendChild(back);
+    const close = () => { back.remove(); document.removeEventListener('keydown', key); if (lastFocus && lastFocus.focus) lastFocus.focus(); };
+    const go = (d) => { back.remove(); document.removeEventListener('keydown', key); view(i, (k + d + n) % n); };
+    const key = (e) => { if (e.key === 'Escape') close(); else if (n > 1 && e.key === 'ArrowLeft') go(-1); else if (n > 1 && e.key === 'ArrowRight') go(1); };
+    document.addEventListener('keydown', key);
+    $('galx').onclick = close; back.onclick = (e) => { if (e.target === back) close(); };
+    if (n > 1) { back.querySelector('.gal-prev').onclick = () => go(-1); back.querySelector('.gal-next').onclick = () => go(1); }
+    $('galx').focus();
+  }
+  fetch('/api/settings').then((r) => r.json()).then((s) => {
+    OutpostBrand.apply(s); tz = s.timezone || ''; name = s.store_name || name; document.title = 'Gallery — ' + name;
+    return load(false);
+  }).catch(() => { $('page').innerHTML = '<p>Couldn’t load this page. Please try again.</p>'; });
+})();
+</script>
+</body>
+</html>

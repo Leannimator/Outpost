@@ -103,6 +103,7 @@
     if (s.handmade_statement) { $('handmade').hidden = false; $('handmade').innerHTML = `<h2>Made by hand</h2><p>${esc(s.handmade_statement)}</p>`; }
     OutpostBrand.apply(s); document.title = (curLine() ? curLine().name + ' — ' : '') + s.store_name + (curLine() ? '' : ' — Shop');
     products = p; paintLines(); paintCats(); paintGrid(); paintCart();
+    { const want = Number(new URLSearchParams(location.search).get('p')); if (want && products.some((x) => x.id === want)) showDetails(want); }   // a "Shop this" link from the Gallery opens that product
     if (s.captcha_site_key && !resting) loadCaptcha(s.captcha_site_key);
   });
 
