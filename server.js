@@ -1031,6 +1031,20 @@ app.post('/webhook', express.raw({ type: 'application/json', inflate: false }), 
 
 // The product import takes up to 2000 rows, which is more than the normal 100 KB limit, so it gets a bigger one (and only after sign-in).
 app.use('/api/admin/products/import', requireAdmin, express.json({ limit: '3mb', inflate: false }));
+// ---------- email provider webhook (raw body — must come BEFORE express.json): bounces and spam complaints switch a person off ----------
+app.post('/api/email/webhook', express.raw({ type: 'application/json', inflate: false, limit: '100kb' }), (req, res) => {
+  const secret = process.env.RESEND_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).end();
+  const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+  if (!require('./mailer').verifyWebhook(raw, { 'svix-id': req.get('svix-id'), 'svix-timestamp': req.get('svix-timestamp'), 'svix-signature': req.get('svix-signature') }, secret)) return res.status(400).end();
+  let ev; try { ev = JSON.parse(raw); } catch { return res.status(400).end(); }
+  const d = ev && ev.data || {}, to = (Array.isArray(d.to) ? d.to : [d.to]).filter((x) => typeof x === 'string').slice(0, 10);
+  const permanent = ev.type === 'email.bounced' && (!d.bounce || String(d.bounce.type || 'Permanent').toLowerCase() === 'permanent');
+  if (permanent) for (const a of to) db.prepare('UPDATE subscribers SET bounced = 1 WHERE lower(email) = lower(?)').run(a);
+  else if (ev.type === 'email.complained') for (const a of to) db.prepare('UPDATE subscribers SET unsubscribed = 1 WHERE lower(email) = lower(?)').run(a);
+  res.json({ ok: true });
+});
+
 app.use(express.json({ inflate: false }));   // compressed request bodies are refused: nothing here needs them
 // robots.txt: search engines are welcome, AI crawlers are asked to stay away.
 app.get('/robots.txt', (req, res) => {
@@ -1066,7 +1080,7 @@ app.use((req, res, next) => {
   next();
 });
 // Short, shareable addresses: yourshop.com/links goes in your Instagram bio.
-const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html', '/gallery': 'gallery.html' };
+const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html', '/gallery': 'gallery.html', '/unsubscribe': 'unsubscribe.html', '/confirm-email': 'confirm-email.html' };
 for (const [route, file] of Object.entries(CLEAN_PAGES)) app.get(route, (req, res) => res.sendFile(path.join(__dirname, 'public', file)));
 app.get('/theme.css', (req, res) => {
   res.set('Content-Type', 'text/css; charset=utf-8');
@@ -1781,16 +1795,22 @@ app.post('/api/subscribe', h(async (req, res) => {
   const source = String(req.body.source || 'links').replace(/[^a-z0-9_-]/gi, '').slice(0, 20) || 'links';
   // An address already on the list is left exactly as it is: signing up again can't put someone back on the list after
   // the owner marked them unsubscribed (it used to flip them back to subscribed). The visitor sees the same answer either way.
-  db.prepare('INSERT INTO subscribers (email, source, created_at, unsubscribed, consent_at) VALUES (?,?,?,0,?) ON CONFLICT(email) DO NOTHING').run(email, source, Date.now(), Date.now());
+  const token = require('node:crypto').randomBytes(24).toString('base64url'), now = Date.now();
+  const ins = db.prepare('INSERT INTO subscribers (email, source, created_at, unsubscribed, consent_at, confirmed_at, unsub_token) VALUES (?,?,?,0,?,?,?) ON CONFLICT(email) DO NOTHING').run(email, source, now, now, doubleOptIn() ? null : now, token);
+  // Double opt-in: only a brand-new address gets a confirmation email, so this form can't be used to pester someone who is already on the list.
+  if (ins.changes && doubleOptIn() && emailReady()) {
+    const link = `${BASE_URL}/confirm-email?t=${token}`, shop = storeName();
+    sendTransactional({ to: email, subject: `Please confirm your email for ${shop}`, text: `Thanks for signing up for emails from ${shop}.\n\nPlease confirm your address by opening this link:\n${link}\n\nIf you did not sign up, just ignore this message and you will not hear from us.`, html: `<p>Thanks for signing up for emails from ${shop.replace(/[&<>"']/g, '')}.</p><p><a href="${link}">Confirm my email address</a></p><p>If you did not sign up, just ignore this message and you will not hear from us.</p>` }).catch(() => {});
+  }
   res.json({ ok: true });
 }));
 app.get('/api/admin/subscribers', requireAdmin, (req, res) => {
-  res.json(db.prepare('SELECT id, email, source, created_at, consent_at, unsubscribed FROM subscribers ORDER BY created_at DESC, id DESC').all());
+  res.json(db.prepare('SELECT id, email, source, created_at, consent_at, confirmed_at, unsubscribed, bounced FROM subscribers ORDER BY created_at DESC, id DESC').all());
 });
 app.get('/api/admin/subscribers.csv', requireAdmin, (req, res) => {
   const q = (v) => { v = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  const rows = db.prepare('SELECT email, source, created_at, unsubscribed FROM subscribers ORDER BY created_at, id').all();
-  const lines = ['email,joined,source,status'].concat(rows.map((r) => [q(r.email), new Date(r.created_at).toISOString().slice(0, 10), q(r.source), r.unsubscribed ? 'unsubscribed' : 'subscribed'].join(',')));
+  const rows = db.prepare('SELECT email, source, created_at, unsubscribed, bounced FROM subscribers ORDER BY created_at, id').all();
+  const lines = ['email,joined,source,status'].concat(rows.map((r) => [q(r.email), new Date(r.created_at).toISOString().slice(0, 10), q(r.source), r.unsubscribed ? 'unsubscribed' : r.bounced ? 'bounced' : 'subscribed'].join(',')));
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.send(lines.join('\n') + '\n');
 });
@@ -1805,6 +1825,173 @@ app.delete('/api/admin/subscribers/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM subscribers WHERE id=?').run(Number(req.params.id) || 0);
   res.json({ ok: true });
 });
+
+// ---------- email: consent, unsubscribe, double opt-in, and sending in daily batches (Marketing tab, step 4) ----------
+// Off unless the owner switches it on AND a RESEND_API_KEY environment variable exists. A person is emailed only if they ticked the consent box
+// (consent_at), have not unsubscribed, have not bounced, and (when double opt-in is on) have clicked the confirmation link. Receipts and
+// confirmations come first: marketing may only use what is left of the day's cap after a reserve for them.
+const mailer = require('./mailer');
+const EMAIL_TICK_MS = Math.max(50, Number(process.env.OUTPOST_EMAIL_TICK_MS) || 60000);
+const EMAIL_PACE_MS = process.env.OUTPOST_EMAIL_PACE_MS !== undefined ? Math.max(0, Number(process.env.OUTPOST_EMAIL_PACE_MS) || 0) : 600;   // Resend allows about 2 requests a second
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+const intIn = (v, min, max, def) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def; };
+const emailOn = () => getSetting('email_on', '') === '1';
+const emailReady = () => emailOn() && mailer.keyPresent() && !!getSetting('email_from', '');
+const emailCap = () => intIn(getSetting('email_daily_cap', '100'), 1, 100000, 100);
+const emailReserve = () => Math.min(intIn(getSetting('email_reserve', '20'), 0, 100000, 20), emailCap());
+const doubleOptIn = () => getSetting('double_optin', '') === '1';
+const emailUsed = () => { const r = db.prepare('SELECT transactional t, marketing m FROM email_daily WHERE day = ?').get(todayStr()); return { t: r ? r.t : 0, m: r ? r.m : 0 }; };
+const bumpEmail = (kind) => db.prepare(`INSERT INTO email_daily (day, ${kind === 'marketing' ? 'marketing' : 'transactional'}) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET ${kind === 'marketing' ? 'marketing' : 'transactional'} = ${kind === 'marketing' ? 'marketing' : 'transactional'} + 1`).run(todayStr());
+const marketingAllowance = () => { const u = emailUsed(); return Math.max(0, emailCap() - Math.max(emailReserve(), u.t) - u.m); };
+const sendableSql = () => 'unsubscribed = 0 AND bounced = 0 AND consent_at IS NOT NULL' + (doubleOptIn() ? ' AND confirmed_at IS NOT NULL' : '');
+const stillSendable = (s) => !s.unsubscribed && !s.bounced && s.consent_at != null && (!doubleOptIn() || s.confirmed_at != null);
+const subToken = (s) => { if (s.unsub_token) return s.unsub_token; const t = require('node:crypto').randomBytes(24).toString('base64url'); db.prepare('UPDATE subscribers SET unsub_token = ? WHERE id = ? AND unsub_token IS NULL').run(t, s.id); return db.prepare('SELECT unsub_token FROM subscribers WHERE id = ?').get(s.id).unsub_token; };
+const fromAddr = () => getSetting('email_from', '');
+const replyTo = () => getSetting('email_reply_to', '') || undefined;
+function noteEmailResult(r) {
+  if (r.ok) { if (getSetting('email_last_error', '')) setSetting('email_last_error', ''); return; }
+  setSetting('email_last_error', `${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC: ${r.error}${r.kind === 'config' ? ' (check the key and that your sending domain is verified)' : ''}`.slice(0, 300));
+}
+function audienceCounts() {
+  const c = (w) => db.prepare(`SELECT COUNT(*) n FROM subscribers WHERE ${w}`).get().n;
+  return { total: c('1=1'), sendable: c(sendableSql()), unsubscribed: c('unsubscribed = 1'), bounced: c('unsubscribed = 0 AND bounced = 1'), no_consent: c('unsubscribed = 0 AND bounced = 0 AND consent_at IS NULL'), unconfirmed: doubleOptIn() ? c('unsubscribed = 0 AND bounced = 0 AND consent_at IS NOT NULL AND confirmed_at IS NULL') : 0 };
+}
+// Receipts, confirmations, test messages: allowed up to the whole daily cap. A failure here never blocks anything else.
+async function sendTransactional({ to, subject, text, html, headers }) {
+  if (!emailReady()) return { ok: false, error: 'Email is not switched on or set up yet' };
+  const u = emailUsed(); if (u.t + u.m >= emailCap()) return { ok: false, error: 'Today’s sending limit has been reached. Try again tomorrow.' };
+  const r = await mailer.sendMail({ from: fromAddr(), to, reply_to: replyTo(), subject, text, html, headers });
+  if (r.ok) bumpEmail('transactional'); noteEmailResult(r);
+  return r;
+}
+function startCampaign(c) {
+  db.transaction(() => {
+    const subs = db.prepare(`SELECT id, email FROM subscribers WHERE ${sendableSql()} ORDER BY id`).all();
+    const ins = db.prepare('INSERT OR IGNORE INTO email_recipients (campaign_id, subscriber_id, email) VALUES (?,?,?)');
+    for (const s of subs) ins.run(c.id, s.id, s.email);
+    db.prepare("UPDATE email_campaigns SET status = 'sending', started_at = ?, total = ? WHERE id = ?").run(Date.now(), subs.length, c.id);
+  })();
+}
+let emailBusy = false;
+async function emailTick() {
+  if (emailBusy || !emailReady()) return;
+  emailBusy = true;
+  try {
+    for (const c of db.prepare("SELECT * FROM email_campaigns WHERE status = 'scheduled' AND scheduled_at <= ? ORDER BY scheduled_at, id").all(Date.now())) startCampaign(c);
+    for (const c of db.prepare("SELECT * FROM email_campaigns WHERE status = 'sending' ORDER BY id").all()) {
+      let allow = marketingAllowance(), refused = 0;
+      while (allow > 0) {
+        if (db.prepare('SELECT status FROM email_campaigns WHERE id = ?').get(c.id).status !== 'sending') break;
+        const r = db.prepare("SELECT * FROM email_recipients WHERE campaign_id = ? AND status = 'pending' ORDER BY subscriber_id LIMIT 1").get(c.id);
+        if (!r) break;
+        const mark = (st, err = '') => db.prepare('UPDATE email_recipients SET status = ?, sent_at = ?, error = ? WHERE campaign_id = ? AND subscriber_id = ?').run(st, st === 'sent' ? Date.now() : null, err, c.id, r.subscriber_id);
+        const s = db.prepare('SELECT id, email, unsubscribed, bounced, consent_at, confirmed_at, unsub_token FROM subscribers WHERE id = ?').get(r.subscriber_id);
+        if (!s || !stillSendable(s)) { mark('skipped', 'No longer on the list'); continue; }
+        const msg = mailer.compose({ body: c.body, shop: storeName(), address: getSetting('mail_address', ''), unsubUrl: `${BASE_URL}/unsubscribe?t=${subToken(s)}` });
+        const res = await mailer.sendMail({ from: fromAddr(), to: s.email, reply_to: replyTo(), subject: c.subject, text: msg.text, html: msg.html, headers: msg.headers, idempotencyKey: `outpost-c${c.id}-s${s.id}` });
+        if (res.ok) { mark('sent'); bumpEmail('marketing'); allow--; refused = 0; noteEmailResult(res); }
+        else if (res.kind === 'recipient') { mark('failed', res.error); if (++refused >= 3) { noteEmailResult({ ...res, error: 'Several addresses in a row were refused: ' + res.error }); return; } }
+        else { noteEmailResult(res); return; }   // bad key or an outage: stop here, try again next round
+        if (EMAIL_PACE_MS) await sleepMs(EMAIL_PACE_MS);
+      }
+      if (!db.prepare("SELECT 1 FROM email_recipients WHERE campaign_id = ? AND status = 'pending' LIMIT 1").get(c.id)) db.prepare("UPDATE email_campaigns SET status = 'done', finished_at = ? WHERE id = ? AND status = 'sending'").run(Date.now(), c.id);
+    }
+  } catch (e) { console.error('email error:', e && e.message); }
+  finally { emailBusy = false; }
+}
+setInterval(() => { emailTick(); }, EMAIL_TICK_MS).unref();
+
+// Public: unsubscribe (also the one-click POST that mail apps send) and confirm. Unknown links answer the same as good ones.
+const unsubscribeByToken = (t) => { t = String(t || ''); if (!/^[A-Za-z0-9_-]{20,64}$/.test(t)) return; db.prepare('UPDATE subscribers SET unsubscribed = 1 WHERE unsub_token = ?').run(t); };
+app.post('/unsubscribe', (req, res) => { unsubscribeByToken(req.query.t); res.json({ ok: true }); });
+app.post('/api/unsubscribe', (req, res) => { unsubscribeByToken(req.body && req.body.t); res.json({ ok: true }); });
+app.post('/api/confirm-email', (req, res) => {
+  const t = String((req.body && req.body.t) || '');
+  if (/^[A-Za-z0-9_-]{20,64}$/.test(t)) db.prepare('UPDATE subscribers SET confirmed_at = COALESCE(confirmed_at, ?) WHERE unsub_token = ?').run(Date.now(), t);
+  res.json({ ok: true });
+});
+
+const cleanSubject = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
+const EMAIL_BODY_MAX = 20000;
+const campaignOut = (c) => {
+  const n = (st) => db.prepare('SELECT COUNT(*) n FROM email_recipients WHERE campaign_id = ? AND status = ?').get(c.id, st).n;
+  return { ...c, sent: n('sent'), failed: n('failed'), pending: n('pending'), skipped: n('skipped') };
+};
+app.get('/api/admin/email/status', requireAdmin, (req, res) => {
+  const u = emailUsed();
+  res.json({ on: emailOn(), key_present: mailer.keyPresent(), ready: emailReady(), from: fromAddr(), reply_to: getSetting('email_reply_to', ''), mail_address: getSetting('mail_address', ''), daily_cap: emailCap(), reserve: emailReserve(), double_optin: doubleOptIn(), mailing_list_on: getSetting('mailing_list_on', '') === '1',
+    sent_today: { transactional: u.t, marketing: u.m }, allowance_today: emailReady() ? marketingAllowance() : 0, last_error: getSetting('email_last_error', ''), audience: audienceCounts() });
+});
+const FROM_RE = /^(?:[^<>\r\n@]{1,80}<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>|[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)$/;
+app.put('/api/admin/email/settings', requireAdmin, h(async (req, res) => {
+  const b = req.body || {};
+  if (b.from !== undefined) { const v = String(b.from).trim(); if (v && !FROM_RE.test(v)) throw new HttpError(400, 'The from address should look like: Ash & Anchor <hello@your-domain.com>'); setSetting('email_from', v); }
+  if (b.reply_to !== undefined) { const v = String(b.reply_to).trim(); if (v && !Safe.validEmail(Safe.cleanEmail(v))) throw new HttpError(400, 'That reply-to address does not look right'); setSetting('email_reply_to', v); }
+  if (b.mail_address !== undefined) setSetting('mail_address', String(b.mail_address).replace(/\r/g, '').trim().slice(0, 250));
+  if (b.daily_cap !== undefined) setSetting('email_daily_cap', String(intIn(b.daily_cap, 1, 100000, 100)));
+  if (b.reserve !== undefined) setSetting('email_reserve', String(intIn(b.reserve, 0, 100000, 20)));
+  if (b.double_optin !== undefined) setSetting('double_optin', b.double_optin ? '1' : '');
+  if (b.on !== undefined) {
+    if (b.on && (!getSetting('email_from', '') || !getSetting('mail_address', ''))) throw new HttpError(400, 'Add a from address and your mailing address first. Every email must carry a mailing address.');
+    setSetting('email_on', b.on ? '1' : '');
+  }
+  res.json({ ok: true });
+}));
+app.get('/api/admin/email/campaigns', requireAdmin, (req, res) => {
+  res.json(db.prepare('SELECT * FROM email_campaigns ORDER BY id DESC LIMIT 200').all().map(campaignOut));
+});
+app.post('/api/admin/email/campaigns', requireAdmin, h(async (req, res) => {
+  if (db.prepare('SELECT COUNT(*) n FROM email_campaigns').get().n >= 1000) throw new HttpError(400, 'Too many emails saved. Delete some old ones first.');
+  const subject = cleanSubject(req.body.subject), body = String(req.body.body || '').slice(0, EMAIL_BODY_MAX);
+  const id = Number(db.prepare("INSERT INTO email_campaigns (subject, body, status, created_at) VALUES (?,?,'draft',?)").run(subject, body, Date.now()).lastInsertRowid);
+  res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(id)));
+}));
+const campaignOr404 = (id) => { const c = db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(Number(id) || 0); if (!c) throw new HttpError(404, 'Not found'); return c; };
+app.put('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
+  const c = campaignOr404(req.params.id);
+  if (!['draft', 'scheduled'].includes(c.status)) throw new HttpError(409, 'This email has already started sending, so it can no longer be edited.');
+  const subject = req.body.subject !== undefined ? cleanSubject(req.body.subject) : c.subject, body = req.body.body !== undefined ? String(req.body.body).slice(0, EMAIL_BODY_MAX) : c.body;
+  db.prepare('UPDATE email_campaigns SET subject = ?, body = ? WHERE id = ?').run(subject, body, c.id);
+  res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
+}));
+app.delete('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
+  const c = campaignOr404(req.params.id);
+  if (c.status === 'sending') throw new HttpError(409, 'Stop this email first, then delete it.');
+  db.transaction(() => { db.prepare('DELETE FROM email_recipients WHERE campaign_id = ?').run(c.id); db.prepare('DELETE FROM email_campaigns WHERE id = ?').run(c.id); })();
+  res.json({ ok: true });
+}));
+app.post('/api/admin/email/campaigns/:id/schedule', requireAdmin, h(async (req, res) => {
+  const c = campaignOr404(req.params.id);
+  if (!['draft', 'scheduled'].includes(c.status)) throw new HttpError(409, 'This email has already started sending.');
+  if (!emailReady()) throw new HttpError(400, 'Email is not switched on yet. Finish the email setup first.');
+  if (!c.subject.trim() || !c.body.trim()) throw new HttpError(400, 'Add a subject and some text first.');
+  if (!audienceCounts().sendable) throw new HttpError(400, 'Nobody can be emailed yet: no one on the list has agreed to emails (and confirmed, if double opt-in is on).');
+  const at = req.body.now ? Date.now() : Number(req.body.scheduled_at);
+  if (!Number.isFinite(at) || at < Date.now() - 3600e3 || at > Date.now() + 366 * 86400e3) throw new HttpError(400, 'Pick a date and time within the next year.');
+  db.prepare("UPDATE email_campaigns SET status = 'scheduled', scheduled_at = ? WHERE id = ?").run(Math.round(at), c.id);
+  setImmediate(emailTick);
+  res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
+}));
+app.post('/api/admin/email/campaigns/:id/cancel', requireAdmin, h(async (req, res) => {
+  const c = campaignOr404(req.params.id);
+  if (c.status === 'scheduled') db.prepare("UPDATE email_campaigns SET status = 'draft', scheduled_at = NULL WHERE id = ?").run(c.id);
+  else if (c.status === 'sending') db.prepare("UPDATE email_campaigns SET status = 'canceled', finished_at = ? WHERE id = ?").run(Date.now(), c.id);
+  else throw new HttpError(409, 'Nothing to stop.');
+  res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
+}));
+app.post('/api/admin/email/preview', requireAdmin, (req, res) => {
+  const m = mailer.compose({ body: String(req.body.body || '').slice(0, EMAIL_BODY_MAX), shop: storeName(), address: getSetting('mail_address', ''), unsubUrl: `${BASE_URL}/unsubscribe?t=example` });
+  res.json({ html: m.html, text: m.text, audience: audienceCounts().sendable });
+});
+app.post('/api/admin/email/test', requireAdmin, h(async (req, res) => {
+  const to = Safe.cleanEmail(req.body.to);
+  if (!Safe.validEmail(to)) throw new HttpError(400, 'Enter the address to send the test to');
+  const subject = cleanSubject(req.body.subject) || '(no subject)';
+  const m = mailer.compose({ body: String(req.body.body || '').slice(0, EMAIL_BODY_MAX), shop: storeName(), address: getSetting('mail_address', ''), unsubUrl: `${BASE_URL}/unsubscribe?t=example` });
+  const r = await sendTransactional({ to, subject: '[Test] ' + subject, text: m.text, html: m.html, headers: m.headers });
+  if (!r.ok) throw new HttpError(502, r.error || 'The test email could not be sent');
+  res.json({ ok: true });
+}));
 
 
 // ---------- "delete my information" (review items 38, 79) ----------
@@ -1846,6 +2033,7 @@ app.post('/api/admin/privacy/erase', requireAdmin, h(async (req, res) => {
       out.orders++;
     }
     out.subscribers = db.prepare('DELETE FROM subscribers WHERE lower(email)=?').run(email).changes;
+    db.prepare('DELETE FROM email_recipients WHERE lower(email)=?').run(email);
   })();
   logSecurity('privacy_erase', req, `bidders ${out.bidders}, orders ${out.orders}, subscribers ${out.subscribers}`);
   let stripeFailed = 0;

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Unsubscribe</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<main style="max-width:460px;margin:12vh auto;padding:0 18px;text-align:center">
+  <a class="wordmark" data-brand="name" href="/shop">Outpost</a>
+  <div class="card" style="margin-top:18px" id="box"></div>
+</main>
+<script>
+(() => {
+  const t = new URLSearchParams(location.search).get('t') || '';
+  const box = document.getElementById('box');
+  fetch('/api/settings').then((r) => r.json()).then((s) => { if (window.OutpostBrand) OutpostBrand.apply(s); }).catch(() => {});
+  const send = (url, msg) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t }) }).then(() => { box.innerHTML = msg; }).catch(() => { box.innerHTML += '<p class="err-text">Something went wrong. Please try again.</p>'; });
+  if (!t) { box.innerHTML = '<p>This link is missing something. Please use the link from your email.</p>'; return; }
+  box.innerHTML = '<h1 style="font-size:26px">Unsubscribe</h1><p class="muted">Stop getting emails from this shop?</p><button class="btn btn-primary" id="go">Yes, unsubscribe me</button>';
+  document.getElementById('go').onclick = () => send('/api/unsubscribe', '<h1 style="font-size:26px">You are unsubscribed</h1><p class="muted">You will not get any more emails from this shop.</p>');
+})();
+</script>
+</body>
+</html>

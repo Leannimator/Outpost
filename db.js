@@ -388,6 +388,40 @@ for (const o of needToken) setToken.run(crypto.randomBytes(12).toString('hex'), 
   )`);
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_posts_when ON posts (status, scheduled_at)'); } catch { /* speed-up only */ }
 
+  // Email. A subscriber gets a private unsubscribe/confirm token; 'bounced' is set only by the provider's bounce report (never guessed).
+  addCol('subscribers', 'unsub_token', 'TEXT');
+  addCol('subscribers', 'bounced', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('subscribers', 'confirmed_at', 'INTEGER');                    // set when they click the confirmation link (double opt-in)
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_subs_token ON subscribers (unsub_token) WHERE unsub_token IS NOT NULL'); } catch { /* lookup speed-up */ }
+  // A campaign is written once; when it starts, the people it will go to are fixed in email_recipients and sent in daily batches.
+  db.exec(`CREATE TABLE IF NOT EXISTS email_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','scheduled','sending','done','canceled')),
+    scheduled_at INTEGER,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER,
+    total INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS email_recipients (
+    campaign_id INTEGER NOT NULL,
+    subscriber_id INTEGER NOT NULL,
+    email TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed','skipped')),
+    sent_at INTEGER,
+    error TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (campaign_id, subscriber_id)
+  )`);
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_recip_pending ON email_recipients (campaign_id, status)'); } catch { /* speed-up only */ }
+  // How many emails went out each day (shop time), split so receipts and confirmations are never crowded out by a marketing batch.
+  db.exec(`CREATE TABLE IF NOT EXISTS email_daily (
+    day TEXT PRIMARY KEY,
+    transactional INTEGER NOT NULL DEFAULT 0,
+    marketing INTEGER NOT NULL DEFAULT 0
+  )`);
+
   // Indexes: without these the order export and the customers list scanned whole tables once per order (review item 78).
   for (const sql of [
     'CREATE INDEX IF NOT EXISTS idx_items_order ON order_items (order_id)',
