@@ -1859,8 +1859,21 @@ function buildMessage(c, unsubUrl) {
     const p = db.prepare('SELECT id, name, price_cents, image_url, images FROM products WHERE id = ? AND active = 1').get(b.product_id);
     if (p) { let im = p.image_url; try { const a = JSON.parse(p.images || '[]'); if (a[0]) im = a[0]; } catch { /* use image_url */ } products[p.id] = { name: p.name, price: fmtP.format(p.price_cents / 100), image: im || '', url: '/shop?p=' + p.id }; }
   }
+  // Collections: a shop line (whatever is in it when the email goes out) or hand-picked products. Sold-out and hidden items are left out.
+  const collections = {};
+  (design.blocks || []).forEach((b, i) => {
+    if (b.type !== 'collection') return;
+    let rows = [], shopUrl = '/shop';
+    const cols = 'p.id, p.name, p.price_cents, p.image_url, p.images, p.stock';
+    if (b.line_id) {
+      const ln = db.prepare('SELECT slug FROM lines WHERE id = ? AND active = 1').get(b.line_id);
+      if (ln) { shopUrl = '/shop?line=' + encodeURIComponent(ln.slug); rows = db.prepare(`SELECT ${cols} FROM products p JOIN product_lines pl ON pl.product_id = p.id WHERE pl.line_id = ? AND p.active = 1 AND p.stock > 0 ORDER BY p.id DESC LIMIT 6`).all(b.line_id); }
+    } else rows = (b.product_ids || []).map((id) => db.prepare(`SELECT ${cols} FROM products p WHERE p.id = ? AND p.active = 1 AND p.stock > 0`).get(id)).filter(Boolean);
+    const low = lowStock();
+    collections[i] = { shopUrl, items: rows.map((p) => { let im = p.image_url; try { const a = JSON.parse(p.images || '[]'); if (a[0]) im = a[0]; } catch { /* use image_url */ } return { name: p.name, price: fmtP.format(p.price_cents / 100), image: im || '', url: '/shop?p=' + p.id, left: low > 0 && p.stock <= low ? p.stock : 0 }; }) };
+  });
   const th = themeSettings();
-  return mailer.renderDesign(design, { shop, base: BASE_URL, logo: getSetting('logo_url', ''), theme: { bg: th.bg, text: th.text, heading: th.heading, button: th.button, buttontext: th.buttontext, accent: th.accent, link: th.link }, products, linkCode: c.link_code || '', address, unsubUrl, subject: c.subject });
+  return mailer.renderDesign(design, { collections, shop, base: BASE_URL, logo: getSetting('logo_url', ''), theme: { bg: th.bg, text: th.text, heading: th.heading, button: th.button, buttontext: th.buttontext, accent: th.accent, link: th.link }, products, linkCode: c.link_code || '', address, unsubUrl, subject: c.subject });
 }
 function noteEmailResult(r) {
   if (r.ok) { if (getSetting('email_last_error', '')) setSetting('email_last_error', ''); return; }

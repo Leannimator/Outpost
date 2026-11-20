@@ -258,3 +258,35 @@ test('a designed email is saved, previewed and sent with the shop theme, a produ
     assert.equal((await s.j('GET', '/api/admin/email/templates')).status, 401, 'owner only');
   } finally { stop(); }
 });
+
+test('a Collection block shows a shop line (live, newest first, sold-out and hidden left out, "Only N left") or hand-picked items, with a shop-the-collection button', { timeout: 60000 }, async () => {
+  const { s, a, db, fake, stop } = await setup();
+  try {
+    addSub(db, 'fan@example.com'); await turnOn(a, { daily_cap: 100, reserve: 0 });
+    const prod = (name, stock, active = 1) => Number(db.prepare('INSERT INTO products (name, price_cents, stock, active, image_url) VALUES (?,?,?,?,?)').run(name, 2500, stock, active, '/images/' + name.replace(/\W/g, '') + '.jpg').lastInsertRowid);
+    const frog = prod('Frog tile', 10), owl = prod('Owl tile', 2), gone = prod('Sold out tile', 0), hid = prod('Hidden tile', 5, 0), other = prod('Not in line', 4);
+    const line = Number(db.prepare("INSERT INTO lines (name, slug, active) VALUES ('Winter tiles', 'winter-tiles', 1)").run().lastInsertRowid);
+    for (const p of [frog, owl, gone, hid]) db.prepare('INSERT INTO product_lines (product_id, line_id) VALUES (?,?)').run(p, line);
+    const link = (await a.post('/api/admin/marketing/links', { name: 'Collection email' })).data;
+    const mk = (blocks) => ({ template: 'collection', blocks });
+    const prev = async (blocks) => (await a.post('/api/admin/email/preview', { subject: 'New', design: mk(blocks), link_code: link.code })).data.html;
+    const html = await prev([{ type: 'collection', line_id: line, label: 'Shop the collection' }]);
+    assert.ok(html.includes('Frog tile') && html.includes('Owl tile'), 'items in the line');
+    assert.ok(!html.includes('Sold out tile') && !html.includes('Hidden tile') && !html.includes('Not in line'), 'sold-out, hidden and other items are left out');
+    assert.ok(html.indexOf('Owl tile') < html.indexOf('Frog tile'), 'newest first');
+    assert.ok(html.includes('Only 2 left') && !html.includes('Only 10 left'), 'real low stock only');
+    assert.ok(html.includes('/shop?line=winter-tiles&amp;s=' + link.code) && html.includes('>Shop the collection</a>'), 'the button goes to the line, tracked');
+    assert.ok(html.includes('/shop?p=' + frog + '&amp;s=' + link.code), 'each item links to its own page');
+    const picked = await prev([{ type: 'collection', product_ids: [other, frog, gone], label: '' }]);
+    assert.ok(picked.indexOf('Not in line') < picked.indexOf('Frog tile') && !picked.includes('Sold out tile'), 'hand-picked keep their order, sold-out dropped');
+    assert.ok(!picked.includes('>Shop the collection<'), 'no button without a label');
+    assert.ok(!(await prev([{ type: 'heading', text: 'Hi' }, { type: 'collection', line_id: 999 }])).includes('Frog tile'), 'an empty or missing line just shows nothing');
+    const c = (await a.post('/api/admin/email/campaigns', { subject: 'Winter tiles', design: mk([{ type: 'heading', text: 'Winter tiles' }, { type: 'collection', line_id: line, label: 'See everything' }]), link_code: link.code })).data;
+    db.prepare('UPDATE products SET stock = 0 WHERE id = ?').run(owl);   // sells out before the email goes
+    assert.equal((await a.post(`/api/admin/email/campaigns/${c.id}/schedule`, { now: true })).status, 200);
+    assert.ok(await until(() => fake.state.sent.length === 1));
+    assert.ok(fake.state.sent[0].html.includes('Frog tile') && !fake.state.sent[0].html.includes('Owl tile'), 'what is sent reflects stock at send time');
+    assert.match(fake.state.sent[0].text, /Frog tile \(\$25\.00\): http:\/\/localhost:\d+\/shop\?p=\d+&s=/); assert.match(fake.state.sent[0].text, /See everything: http:\/\/localhost:\d+\/shop\?line=winter-tiles/);
+    assert.equal(mailer.cleanDesign({ blocks: [{ type: 'collection', product_ids: [1, 2, 3, 4, 5, 6, 7, 8], line_id: '3' }] }).blocks[0].product_ids.length, 6, 'at most six hand-picked');
+  } finally { stop(); }
+});

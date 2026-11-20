@@ -71,7 +71,7 @@ function readableOn(bg) {   // black or white text, whichever contrasts more
   return 1.05 / (L + 0.05) >= 3.5 ? '#ffffff' : '#111111';   // white (the usual look) unless it would be hard to read on this colour
 }
 const TEMPLATES = ['plain', 'banner', 'feature', 'story'];
-const BLOCKS = ['heading', 'text', 'photo', 'photos', 'button', 'product', 'divider'];
+const BLOCKS = ['heading', 'text', 'photo', 'photos', 'button', 'product', 'collection', 'divider'];
 
 // Turns a design into { html, text }. ctx: { shop, base, logo, theme:{bg,text,heading,button,buttontext,accent,link}, products:{id:{name,price,image,url}}, linkCode, address, unsubUrl }
 function renderDesign(design, ctx) {
@@ -98,7 +98,7 @@ function renderDesign(design, ctx) {
     tx.push(ctx.shop.toUpperCase(), '');
   } else h.push('<tr><td style="height:24px;line-height:24px;font-size:0">&nbsp;</td></tr>');
   const blocks = (design.blocks || []);
-  blocks.forEach((b) => {
+  blocks.forEach((b, bi) => {
     if (b.type === 'heading' && b.text) { h.push(row(`<h1 style="margin:10px 0 12px;font-family:${serif};font-size:28px;line-height:34px;font-weight:bold;color:${head}">${esc(b.text)}</h1>`)); tx.push(b.text, ''); }
     else if (b.type === 'text' && b.text) { h.push(row(`<div style="font-family:${font};font-size:16px;line-height:25px;color:${ink}">${textToHtml(b.text).replace(/<p style="margin:0 0 14px">/g, '<p style="margin:0 0 16px">').replace(/<a href=/g, `<a style="color:${link}" href=`)}</div>`)); tx.push(b.text, ''); }
     else if (b.type === 'photo' && abs(b.url)) { const href = b.link ? track(b.link) : ''; h.push(row(`<div style="margin:4px 0 18px">${img(abs(b.url), b.alt, 536, href)}</div>`)); if (b.alt) tx.push(`[${b.alt}]`, ''); }
@@ -108,6 +108,18 @@ function renderDesign(design, ctx) {
       const p = ctx.products[b.product_id], u = track(p.url);
       h.push(row(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 20px;border:1px solid #e6dfd0;border-radius:10px"><tr>${p.image ? `<td width="40%" valign="top" style="padding:12px">${img(abs(p.image), p.name, 190, u)}</td>` : ''}<td valign="middle" style="padding:12px 16px 12px ${p.image ? 4 : 16}px"><div style="font-family:${serif};font-size:20px;line-height:26px;font-weight:bold;color:${head}">${esc(p.name)}</div><div style="font-family:${font};font-size:16px;color:${ink};margin:4px 0 12px">${esc(p.price)}</div><a href="${esc(u)}" target="_blank" style="display:inline-block;padding:10px 22px;font-family:${font};font-size:15px;font-weight:bold;color:${btnText};background:${accent};text-decoration:none;border-radius:8px">${esc(b.label || 'Shop now')}</a></td></tr></table>`));
       tx.push(`${p.name} (${p.price}): ${u}`, '');
+    }
+    else if (b.type === 'collection' && ctx.collections && ctx.collections[bi] && ctx.collections[bi].items.length) {
+      const col = ctx.collections[bi], items = col.items, cells = [];
+      for (let i = 0; i < items.length; i += 2) {
+        const pair = items.slice(i, i + 2);
+        cells.push(`<tr>${pair.map((p, k) => { const u = track(p.url); return `<td width="50%" valign="top" style="padding:0 ${k === 0 ? 8 : 0}px 18px ${k === 1 ? 8 : 0}px">${p.image ? img(abs(p.image), p.name, 260, u) : ''}<div style="font-family:${serif};font-size:17px;line-height:22px;font-weight:bold;color:${head};margin-top:8px"><a href="${esc(u)}" target="_blank" style="color:${head};text-decoration:none">${esc(p.name)}</a></div><div style="font-family:${font};font-size:15px;color:${ink}">${esc(p.price)}</div>${p.left ? `<div style="font-family:${font};font-size:13px;font-weight:bold;color:${accent}">Only ${p.left} left</div>` : ''}</td>`; }).join('')}${pair.length === 1 ? '<td width="50%"></td>' : ''}</tr>`);
+      }
+      h.push(row(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 4px">${cells.join('')}</table>`));
+      const bu = track(col.shopUrl);
+      if (b.label && bu) h.push(row(button(b.label, bu)));
+      items.forEach((p) => tx.push(`${p.name} (${p.price})${p.left ? ` - only ${p.left} left` : ''}: ${track(p.url)}`));
+      tx.push(''); if (b.label && bu) tx.push(`${b.label}: ${bu}`, '');
     }
     else if (b.type === 'divider') h.push(row(`<hr style="border:0;border-top:1px solid #e6dfd0;margin:8px 0 22px">`));
   });
@@ -134,6 +146,7 @@ function cleanDesign(d) {
     else if (b.type === 'photos') out.blocks.push({ type: 'photos', urls: (Array.isArray(b.urls) ? b.urls : []).slice(0, 3).map(url).filter(Boolean) });
     else if (b.type === 'button') out.blocks.push({ type: 'button', label: str(b.label, 40), url: url(b.url) });
     else if (b.type === 'product') out.blocks.push({ type: 'product', product_id: Number(b.product_id) || 0, label: str(b.label, 30) });
+    else if (b.type === 'collection') out.blocks.push({ type: 'collection', line_id: Number(b.line_id) || 0, product_ids: (Array.isArray(b.product_ids) ? b.product_ids : []).slice(0, 6).map((n) => Number(n) || 0).filter(Boolean), label: str(b.label, 40) });
     else out.blocks.push({ type: 'divider' });
   }
   return out;

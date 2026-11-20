@@ -1178,7 +1178,7 @@
   }
 
   // ---- Marketing: calendar, gallery, post editor, ready to post (all times shown in the shop's timezone) ----
-  const mk = { tz: '', cal: 'week', day: '', posts: [], photos: [], links: [], products: [], on: false, loaded: false };
+  const mk = { lines: [], tz: '', cal: 'week', day: '', posts: [], photos: [], links: [], products: [], on: false, loaded: false };
   const pad2 = (n) => String(n).padStart(2, '0');
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -1203,8 +1203,8 @@
   const postThumb = (p) => p.photos[0] ? `<img src="${esc(p.photos[0])}" alt="">` : '<span class="mk-nophoto">No photo</span>';
 
   async function mkLoad() {
-    const [pp, ph, ln, set, prods] = await Promise.all([api('/api/admin/marketing/posts'), api('/api/admin/marketing/photos'), api('/api/admin/marketing/links'), fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json()).catch(() => [])]);
-    mk.posts = pp.posts; mk.on = !!pp.gallery_on; mk.photos = ph; mk.links = ln.links.filter((l) => !l.archived); mk.products = prods; mk.tz = set.timezone || '';
+    const [pp, ph, ln, set, prods, lns] = await Promise.all([api('/api/admin/marketing/posts'), api('/api/admin/marketing/photos'), api('/api/admin/marketing/links'), fetch('/api/settings').then((r) => r.json()), fetch('/api/products').then((r) => r.json()).catch(() => []), fetch('/api/lines').then((r) => r.json()).catch(() => [])]);
+    mk.posts = pp.posts; mk.on = !!pp.gallery_on; mk.photos = ph; mk.links = ln.links.filter((l) => !l.archived); mk.products = prods; mk.lines = lns; mk.tz = set.timezone || '';
     if (!mk.day) mk.day = keyOf(Date.now());
     mk.loaded = true;
   }
@@ -1519,11 +1519,12 @@
     ['plain', 'Plain', 'A simple letter', () => ({ template: 'plain', blocks: [{ type: 'text', text: '' }] })],
     ['banner', 'Banner', 'Your name on top, then a message and a button', () => ({ template: 'banner', blocks: [{ type: 'heading', text: '' }, { type: 'text', text: '' }, { type: 'button', label: 'Shop now', url: '/shop' }] })],
     ['feature', 'Feature', 'One big photo, a headline and a button', () => ({ template: 'feature', blocks: [{ type: 'photo', url: '', alt: '' }, { type: 'heading', text: '' }, { type: 'text', text: '' }, { type: 'button', label: 'Shop now', url: '/shop' }] })],
+    ['collection', 'Collection', 'Announce several items at once, with a shop-the-collection button', () => ({ template: 'collection', blocks: [{ type: 'photo', url: '', alt: '', link: '' }, { type: 'heading', text: '' }, { type: 'text', text: '' }, { type: 'button', label: 'Shop the collection', url: '/shop' }, { type: 'collection', line_id: 0, product_ids: [], label: 'See everything' }] })],
     ['story', 'Story', 'A row of photos with a short note', () => ({ template: 'story', blocks: [{ type: 'heading', text: '' }, { type: 'photos', urls: ['', ''] }, { type: 'text', text: '' }, { type: 'button', label: 'See what’s new', url: '/gallery' }] })],
   ];
-  const BLOCK_NAMES = { heading: 'Heading', text: 'Text', photo: 'Photo', photos: 'Photo row', button: 'Button', product: 'Product', divider: 'Divider' };
+  const BLOCK_NAMES = { heading: 'Heading', text: 'Text', photo: 'Photo', photos: 'Photo row', button: 'Button', product: 'Product', collection: 'Collection', divider: 'Divider' };
   function mkMail(c, st) {
-    const isNew = !c; const m = openModal('<div id="mebody"></div>', { wide: true }); m.el.style.maxWidth = '1000px'; m.el.style.textAlign = 'left';
+    const isNew = !c; const m = openModal('<div id="mebody"></div>', { wide: true }); m.el.style.textAlign = 'left';
     const locked = c && !['draft', 'scheduled'].includes(c.status);
     const at = c && c.scheduled_at ? c.scheduled_at : null;
     let design = c && c.design ? JSON.parse(JSON.stringify(c.design)) : (c && c.body ? { template: 'plain', blocks: [{ type: 'text', text: c.body }] } : null);
@@ -1532,7 +1533,7 @@
     const clean = () => ({ template: design.template, blocks: design.blocks.map((b) => ({ ...b })) });
     let tm = 0;
     const prev = () => { clearTimeout(tm); tm = setTimeout(async () => { if (!design || !q('#me-prev')) return; try { const d = await post('/api/admin/email/preview', { subject: q('#me-sub') ? q('#me-sub').value : '', design: clean(), link_code: link }); q('#me-prev').srcdoc = d.html; } catch { /* preview only */ } }, 250); };
-    const siteLinks = () => [['/shop', 'My shop'], ['/gallery', 'Gallery'], ...mk.products.slice(0, 40).map((p) => ['/shop?p=' + p.id, p.name])];
+    const siteLinks = () => [['/shop', 'My shop'], ['/gallery', 'Gallery'], ...mk.lines.map((l) => ['/shop?line=' + l.slug, 'Collection: ' + l.name]), ...mk.products.slice(0, 40).map((p) => ['/shop?p=' + p.id, p.name])];
     function blockHtml(b, i) {
       const n = design.blocks.length, ctl = locked ? '' : `<div class="mk-bctl">${i > 0 ? `<button data-up="${i}" title="Move up">↑</button>` : ''}${i < n - 1 ? `<button data-dn="${i}" title="Move down">↓</button>` : ''}<button data-rm="${i}" title="Remove">×</button></div>`;
       const thumb = (u, slot) => `<button class="mk-bthumb" data-pick="${i}:${slot}">${u ? `<img src="${esc(u)}" alt="">` : '<span>Choose photo</span>'}</button>`;
@@ -1543,34 +1544,47 @@
       else if (b.type === 'photos') body = `<div class="row wrap" style="gap:8px">${(b.urls || []).map((u, k) => thumb(u, k)).join('')}${(b.urls || []).length < 3 ? `<button class="btn btn-sm" data-addph="${i}">+ Photo</button>` : ''}${(b.urls || []).length > 1 ? `<button class="btn btn-sm" data-rmph="${i}">− Photo</button>` : ''}</div>`;
       else if (b.type === 'button') body = `<div class="row wrap" style="gap:8px"><input class="input" data-f="${i}:label" maxlength="40" value="${esc(b.label)}" placeholder="Shop now" style="flex:1;min-width:130px"><select class="input" data-f="${i}:url" style="flex:2;min-width:180px">${siteLinks().map(([u, l]) => `<option value="${esc(u)}"${b.url === u ? ' selected' : ''}>${esc(l)}</option>`).join('')}${b.url && !siteLinks().some(([u]) => u === b.url) ? `<option value="${esc(b.url)}" selected>${esc(b.url.slice(0, 50))}</option>` : ''}</select></div><div class="small muted" style="margin-top:4px">Short and active works best: “Shop now”, “See the new tiles”.</div>`;
       else if (b.type === 'product') body = `<div class="row wrap" style="gap:8px"><select class="input" data-f="${i}:product_id" style="flex:2;min-width:180px"><option value="0">Choose a product…</option>${mk.products.map((p) => `<option value="${p.id}"${p.id === b.product_id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select><input class="input" data-f="${i}:label" maxlength="30" value="${esc(b.label || '')}" placeholder="Shop now" style="flex:1;min-width:110px"></div><div class="small muted" style="margin-top:4px">Shows the photo, name and current price, with a button.</div>`;
+      else if (b.type === 'collection') { const byLine = !!b.line_id || !(b.product_ids || []).length && mk.lines.length > 0 && b.mode !== 'pick'; body = `<div class="seg" style="margin-bottom:8px"><button data-cmode="${i}:line" class="${byLine ? 'on' : ''}">A product line</button><button data-cmode="${i}:pick" class="${byLine ? '' : 'on'}">Hand-picked</button></div>${byLine ? `<select class="input" data-f="${i}:line_id"><option value="0">Choose a line…</option>${mk.lines.map((l) => `<option value="${l.id}"${l.id === b.line_id ? ' selected' : ''}>${esc(l.name)} (${l.count})</option>`).join('')}</select><div class="small muted" style="margin-top:4px">Shows what’s in the line when the email goes out, up to 6 items. Sold-out items are left out.</div>` : `<div class="mk-cpick">${mk.products.map((p) => `<label class="row" style="gap:6px"><input type="checkbox" data-cprod="${i}:${p.id}" ${(b.product_ids || []).includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('') || '<span class="muted small">No products yet.</span>'}</div><div class="small muted" style="margin-top:4px">Pick up to 6. They appear in the order you tick them.</div>`}<input class="input" data-f="${i}:label" maxlength="40" value="${esc(b.label || '')}" placeholder="Button under the grid (optional)" style="margin-top:8px">`; }
       else body = '<div class="small muted">A thin line between sections.</div>';
       const grid = pick && pick.i === i ? `<div class="mk-pickgrid" style="margin-top:8px">${mk.photos.map((ph) => `<button class="mk-pk" data-set="${esc(ph.url)}"><img src="${esc(ph.url)}" alt=""></button>`).join('')}<label class="mk-pk" style="display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;text-align:center">Upload new<input type="file" accept="image/*" data-up-new hidden></label></div>` : '';
       return `<div class="mk-block"><div class="mk-bh"><b>${BLOCK_NAMES[b.type]}</b>${ctl}</div>${body}${grid}</div>`;
     }
+    const MODS = [['heading', 'Aa', 'Headline'], ['text', '¶', 'Paragraph'], ['photo', '▣', 'One big photo'], ['photos', '▦', 'Row of photos'], ['button', '▭', 'Shop now button'], ['product', '◫', 'One product'], ['collection', '⊞', 'Several products'], ['divider', '—', 'A thin line']];
+    let pvOn = true, pvWide = false, endNext = false;
+    try { const sv = JSON.parse(localStorage.getItem('outpost_mail_pv') || 'null'); if (sv) { pvOn = sv.on !== false; pvWide = !!sv.wide; } else pvOn = window.innerWidth >= 1100; } catch { pvOn = window.innerWidth >= 1100; }
+    const savePv = () => { try { localStorage.setItem('outpost_mail_pv', JSON.stringify({ on: pvOn, wide: pvWide })); } catch { /* light convenience only */ } };
+    m.el.classList.add('me-modal'); m.el.style.maxWidth = 'min(1440px, 97vw)';
     function paint() {
       const dis = locked ? 'disabled' : '';
-      $('#mebody', m.el).innerHTML = `<h2 style="font-size:22px;margin-bottom:8px">${isNew ? 'New email' : locked ? 'Email' : 'Edit email'}</h2>
-      <div class="mk-ed" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)"><div>
-        <label class="field"><span class="label">Subject</span><input class="input" id="me-sub" maxlength="150" value="${esc(subject)}" ${dis}></label>
-        ${!design ? `<div class="label">Start from</div><div class="mk-presets">${PRESETS.map(([k, n, d]) => `<button class="mk-preset" data-preset="${k}"><i class="mk-pv mk-pv-${k}"></i><b>${n}</b><span class="small muted">${d}</span></button>`).join('')}</div>${templates.length ? `<div class="label" style="margin-top:10px">Your templates</div><div class="row wrap" style="gap:6px">${templates.map((t) => `<span class="mk-tchip"><button class="btn btn-sm" data-tpl="${t.id}">${esc(t.name)}</button><button class="mk-tx" data-tdel="${t.id}" title="Delete template" aria-label="Delete template ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}`
-        : `<div class="row wrap" style="gap:8px;align-items:center;margin-bottom:8px"><span class="label" style="margin:0">Header</span><div class="seg" id="me-hdr"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}" ${dis}>Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}" ${dis}>Banner</button></div></div>
-          ${design.blocks.map(blockHtml).join('')}
-          ${locked ? '' : `<div class="row wrap" style="gap:6px;margin:8px 0">${['heading', 'text', 'photo', 'photos', 'button', 'product', 'divider'].map((t) => `<button class="btn btn-sm" data-add="${t}">+ ${BLOCK_NAMES[t]}</button>`).join('')}</div>`}
-          <label class="field"><span class="label">Count sales from this email</span><select class="input" id="me-link" ${dis}><option value="">Don’t track</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === link ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select><span class="hint">Shop links in the email get this tracked link, so Sales by link shows what the email earned. Make one in Tracked links.</span></label>
-          ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><input class="input" id="me-to" type="email" placeholder="you@example.com" style="max-width:220px"><button class="btn btn-sm" id="me-test">Send me a test</button><button class="btn btn-sm" id="me-tpl">Save as template</button></div>`}`}
-        <div id="memsg" style="margin-top:6px"></div></div>
-      <div><div class="label">Preview</div>${design ? "" : '<div class="hint">Pick a layout on the left and your email appears here.</div>'}<iframe class="mk-mailprev" id="me-prev" ${design ? "" : 'hidden'} sandbox="" title="Email preview" style="width:100%;height:520px;border:1px solid var(--line,#e4dccb)"></iframe>
-        <p style="margin:10px 0 6px"><b>${st.audience.sendable}</b> ${st.audience.sendable === 1 ? 'person' : 'people'} will get this. Today ${st.allowance_today} can go out; the rest follows in daily batches, so receipts always go first.</p>
-        ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><span class="small">Send</span><select class="input" id="me-when" style="width:auto"><option value="at">On a date and time</option><option value="now">As soon as possible</option></select><input class="input" type="date" id="me-date" value="${at ? keyOf(at) : ''}" style="width:auto"><input class="input" type="time" id="me-time" value="${at ? (() => { const p = zparts(at); return pad2(p.h) + ':' + pad2(p.mi); })() : '10:00'}" style="width:auto"></div><div class="small muted" style="margin-top:2px">Times in ${esc(mk.tz || 'your computer’s time zone')}</div>`}</div></div>
-      <div class="row wrap" style="gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" data-close>Close</button>
-        ${c && c.status === 'scheduled' ? '<button class="btn" id="me-unsched">Unschedule</button>' : ''}${c && c.status === 'sending' ? '<button class="btn btn-danger" id="me-stop">Stop sending</button>' : ''}${c && c.status !== 'sending' ? '<button class="btn btn-danger" id="me-del">Delete</button>' : ''}
-        ${locked || !design ? '' : '<button class="btn" id="me-save">Save draft</button><button class="btn btn-primary" id="me-go">Schedule</button>'}</div>`;
+      const oldBuild = q('.me-build'), keepTop = oldBuild ? oldBuild.scrollTop : 0, oldPal = q('.me-pal'), palTop = oldPal ? oldPal.scrollTop : 0;
+      const top = `<div class="me-top"><h2>${isNew ? 'New email' : locked ? 'Email' : 'Edit email'}</h2>
+        <label class="me-sub"><span class="label">Subject</span><input class="input" id="me-sub" maxlength="150" value="${esc(subject)}" ${dis}></label>
+        ${design ? `<div class="me-tools"><div class="seg" role="group" aria-label="Preview"><button id="me-pv" class="${pvOn ? 'on' : ''}" aria-pressed="${pvOn}">Preview</button>${pvOn ? `<button id="me-pw" title="Make the preview wider">${pvWide ? 'Narrow' : 'Wide'}</button>` : ''}</div></div>` : ''}<button class="btn btn-sm" data-close>Close</button></div>`;
+      if (!design) {
+        $('#mebody', m.el).innerHTML = `${top}<div class="me-start"><div class="label">Start from</div><div class="mk-presets">${PRESETS.map(([k, n, d]) => `<button class="mk-preset" data-preset="${k}"><i class="mk-pv mk-pv-${k}"></i><b>${n}</b><span class="small muted">${d}</span></button>`).join('')}</div>${templates.length ? `<div class="label" style="margin-top:10px">Your templates</div><div class="row wrap" style="gap:6px">${templates.map((t) => `<span class="mk-tchip"><button class="btn btn-sm" data-tpl="${t.id}">${esc(t.name)}</button><button class="mk-tx" data-tdel="${t.id}" title="Delete template" aria-label="Delete template ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}<div id="memsg" style="margin-top:6px"></div></div>`;
+        wire(); return;
+      }
+      const cols = [locked ? '' : '176px', 'minmax(0,1fr)', pvOn ? (pvWide ? '680px' : '410px') : ''].filter(Boolean).join(' ');
+      const pal = locked ? '' : `<aside class="me-pal" aria-label="Add a module"><div class="label">Header</div><div class="seg" id="me-hdr" style="margin:0 0 12px"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}">Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}">Banner</button></div>
+        <div class="label">Add a module</div>${MODS.map(([t, g, d]) => `<button class="me-mod" data-add="${t}"><i>${g}</i><span><b>${BLOCK_NAMES[t]}</b><small>${d}</small></span></button>`).join('')}</aside>`;
+      const build = `<section class="me-build">${design.blocks.map(blockHtml).join('') || '<div class="empty">Add a module from the left to begin.</div>'}
+        <div class="card" style="margin:10px 0 0"><label class="field" style="margin:0"><span class="label">Count sales from this email</span><select class="input" id="me-link" ${dis}><option value="">Don’t track</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === link ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select><span class="hint">Shop links in the email get this tracked link, so Sales by link shows what the email earned. Make one in Tracked links.</span></label>
+          ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center;margin-top:10px"><input class="input" id="me-to" type="email" placeholder="you@example.com" style="max-width:220px"><button class="btn btn-sm" id="me-test">Send me a test</button><button class="btn btn-sm" id="me-tpl">Save as template</button></div>`}</div></section>`;
+      const pv = pvOn ? `<section class="me-pvp" aria-label="Email preview"><iframe id="me-prev" sandbox="" title="Email preview"></iframe></section>` : '';
+      $('#mebody', m.el).innerHTML = `${top}<div class="me-grid" style="grid-template-columns:${cols}">${pal}${build}${pv}</div>
+        <div id="memsg" class="me-msg"></div>
+        <div class="me-foot"><div class="me-aud"><b>${st.audience.sendable}</b> ${st.audience.sendable === 1 ? 'person' : 'people'} will get this. <span class="muted small">Up to ${st.allowance_today} go out today, the rest in daily batches, so receipts always go first.</span></div>
+          ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><select class="input" id="me-when" style="width:auto"><option value="at">Send on a date and time</option><option value="now">Send as soon as possible</option></select><input class="input" type="date" id="me-date" value="${at ? keyOf(at) : ''}" style="width:auto"><input class="input" type="time" id="me-time" value="${at ? (() => { const p = zparts(at); return pad2(p.h) + ':' + pad2(p.mi); })() : '10:00'}" style="width:auto"><span class="small muted">${esc(mk.tz || 'your computer’s time zone')}</span></div>`}
+          <div class="row wrap" style="gap:8px;margin-left:auto">${c && c.status === 'scheduled' ? '<button class="btn" id="me-unsched">Unschedule</button>' : ''}${c && c.status === 'sending' ? '<button class="btn btn-danger" id="me-stop">Stop sending</button>' : ''}${c && c.status !== 'sending' ? '<button class="btn btn-danger" id="me-del">Delete</button>' : ''}${locked ? '' : '<button class="btn" id="me-save">Save draft</button><button class="btn btn-primary" id="me-go">Schedule</button>'}</div></div>`;
+      const nb = q('.me-build'); if (nb) nb.scrollTop = endNext ? nb.scrollHeight : keepTop; endNext = false; const np = q('.me-pal'); if (np) np.scrollTop = palTop;
       wire(); prev();
     }
     const msg = (h) => { q('#memsg').innerHTML = h; };
-    const keep = () => { if (q('#me-sub')) subject = q('#me-sub').value; if (!design) return; m.el.querySelectorAll('[data-f]').forEach((el) => { const [i, f] = el.dataset.f.split(':'); const b = design.blocks[Number(i)]; if (b) b[f] = f === 'product_id' ? Number(el.value) : el.value; }); if (q('#me-link')) link = q('#me-link').value; };
+    const keep = () => { if (q('#me-sub')) subject = q('#me-sub').value; if (!design) return; m.el.querySelectorAll('[data-f]').forEach((el) => { const [i, f] = el.dataset.f.split(':'); const b = design.blocks[Number(i)]; if (b) b[f] = (f === 'product_id' || f === 'line_id') ? Number(el.value) : el.value; }); if (q('#me-link')) link = q('#me-link').value; };
     function wire() {
       m.el.querySelector('[data-close]').onclick = m.close;
+      if (q('#me-pv')) q('#me-pv').onclick = () => { keep(); pvOn = !pvOn; savePv(); paint(); };
+      if (q('#me-pw')) q('#me-pw').onclick = () => { keep(); pvWide = !pvWide; savePv(); paint(); };
       if (q('#me-sub')) q('#me-sub').oninput = () => { subject = q('#me-sub').value; prev(); };
       m.el.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { keep(); design = PRESETS.find((p) => p[0] === b.dataset.preset)[3](); paint(); }; });
       m.el.querySelectorAll('[data-tpl]').forEach((b) => { b.onclick = () => { keep(); design = JSON.parse(JSON.stringify(templates.find((t) => t.id === Number(b.dataset.tpl)).design)); paint(); }; });
@@ -1580,7 +1594,10 @@
       if (q('#me-link')) q('#me-link').onchange = () => { keep(); prev(); };
       
       m.el.querySelectorAll('#me-hdr button').forEach((b) => { b.onclick = () => { keep(); design.template = b.dataset.h; paint(); }; });
-      m.el.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => { keep(); const t = b.dataset.add; design.blocks.push(t === 'heading' || t === 'text' ? { type: t, text: '' } : t === 'photo' ? { type: t, url: '', alt: '', link: '' } : t === 'photos' ? { type: t, urls: ['', ''] } : t === 'button' ? { type: t, label: 'Shop now', url: '/shop' } : t === 'product' ? { type: t, product_id: 0, label: '' } : { type: 'divider' }); paint(); }; });
+      m.el.querySelectorAll('[data-cmode]').forEach((b) => { b.onclick = () => { keep(); const [i, mode] = b.dataset.cmode.split(':'); const bl = design.blocks[Number(i)]; bl.mode = mode; if (mode === 'line') bl.product_ids = []; else bl.line_id = 0; paint(); }; });
+      m.el.querySelectorAll('[data-cprod]').forEach((el) => { el.onchange = () => { keep(); const [i, id] = el.dataset.cprod.split(':').map(Number); const bl = design.blocks[i]; bl.mode = 'pick'; bl.product_ids = bl.product_ids || []; const at = bl.product_ids.indexOf(id); if (el.checked) { if (at < 0) { if (bl.product_ids.length >= 6) { el.checked = false; return msg('<div class="msg err">Six items at most keeps the email short.</div>'); } bl.product_ids.push(id); } } else if (at >= 0) bl.product_ids.splice(at, 1); prev(); }; });
+      m.el.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => { keep(); const t = b.dataset.add; design.blocks.push(t === 'heading' || t === 'text' ? { type: t, text: '' } : t === 'photo' ? { type: t, url: '', alt: '', link: '' } : t === 'photos' ? { type: t, urls: ['', ''] } : t === 'button' ? { type: t, label: 'Shop now', url: '/shop' } : t === 'product' ? { type: t, product_id: 0, label: '' } : t === 'collection' ? { type: t, line_id: 0, product_ids: [], label: 'See everything' } : { type: 'divider' }); paint(); }; });
+      m.el.querySelectorAll('[data-add]').forEach((b) => { const o = b.onclick; b.onclick = () => { endNext = true; o(); }; });
       const mv = (i, d) => { keep(); const j = i + d; [design.blocks[i], design.blocks[j]] = [design.blocks[j], design.blocks[i]]; pick = null; paint(); };
       m.el.querySelectorAll('[data-up]').forEach((b) => { b.onclick = () => mv(Number(b.dataset.up), -1); });
       m.el.querySelectorAll('[data-dn]').forEach((b) => { b.onclick = () => mv(Number(b.dataset.dn), 1); });
