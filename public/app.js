@@ -141,6 +141,11 @@
       cm.el.querySelector('[data-n]').onclick = () => end(null); cm.el.querySelector('[data-y]').onclick = () => end(inp.value.trim() || null);
     });
   }
+  // When the browser won't copy for us: show the text ready to select, in a box that matches the app.
+  function copyBox(title, text) {
+    const cm = openModal(`<h2 style="font-size:22px;margin-bottom:8px">${esc(title)}</h2><input class="input" data-v readonly value="${esc(text)}" style="margin-bottom:12px"><div class="row" style="justify-content:center"><button class="btn btn-primary" data-x>Done</button></div>`);
+    const inp = cm.el.querySelector('[data-v]'); inp.focus(); inp.select(); cm.el.querySelector('[data-x]').onclick = cm.close;
+  }
   // Close button for an editor: nothing happens silently to unsaved work.
   const guardClose = (m, isDirty) => async () => {
     if (!isDirty()) return m.close();
@@ -536,7 +541,7 @@
         if (w === 'active') set.active = v === '1';
         else if (w === 'stock_add' || w === 'price_percent') { if (v.trim() === '' || !Number.isFinite(Number(v))) return ($('#pmsg').innerHTML = '<div class="msg err">Enter a number</div>'); set[w] = Number(v); if (w === 'stock_add' && !Number.isInteger(set[w])) return ($('#pmsg').innerHTML = '<div class="msg err">Stock change must be a whole number, like +5 or -2</div>'); }
         else set[w] = v;
-        if (w === 'price_percent' && !confirm(`Change the price of ${picked.size} product${picked.size === 1 ? '' : 's'} by ${v}%?`)) return;
+        if (w === 'price_percent' && !(await confirmBox({ title: 'Change prices?', body: `This changes the price of ${picked.size} product${picked.size === 1 ? '' : 's'} by ${esc(v)}%.`, yes: 'Change prices' }))) return;
         const go = $('#bk-go'); if (go.disabled && go.dataset.busy) return; go.disabled = true; go.dataset.busy = '1';
         try { const r = await post('/api/admin/products/bulk', { ids: [...picked], set }); toast(r.skipped_stock ? `Updated ${r.updated}. ${r.skipped_stock} with options were skipped for stock (edit those one by one).` : `Updated ${r.updated}`); picked.clear(); list = await api('/api/admin/products'); $('#pmsg').innerHTML = ''; paint(); }
         catch (e) { $('#pmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; if ($('#bk-go')) { $('#bk-go').disabled = false; delete $('#bk-go').dataset.busy; } }
@@ -793,7 +798,7 @@
       if ($('#lpicx')) $('#lpicx').onclick = () => { keep(); d.image_url = ''; paintEdit(); };
       $('#lcancel').onclick = () => { editing = null; draft = null; paintEdit(); };
       if ($('#ldel')) $('#ldel').onclick = async () => {
-        if (!confirm('Delete this line? The products stay in your shop. Only the group goes away.')) return;
+        if (!(await confirmBox({ title: 'Delete this line?', body: 'The products stay in your shop. Only the group goes away.', yes: 'Delete', danger: true }))) return;
         try { await api('/api/admin/lines/' + editing, { method: 'DELETE' }); editing = null; draft = null; lines = await api('/api/admin/lines'); paintList(); paintEdit(); toast('Deleted'); } catch (err) { $('#lmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
       };
       $('#lsave').onclick = async () => {
@@ -871,18 +876,18 @@
       try {
         if (act === 'block') {
           const em = b.dataset.email;
-          if (!confirm(`Block ${em}? They won’t be able to bid or check out, and their bids on open lots come off the board.`)) return;
+          if (!(await confirmBox({ title: `Block ${em}?`, body: 'They won’t be able to bid or check out, and their bids on open lots come off the board.', yes: 'Block', danger: true }))) return;
           await post('/api/admin/blocks', { kind: 'email', value: em, note: 'Blocked from a bid list' }); toast('Blocked'); return load();
         }
         if (act === 'bids') { open.has(id) ? open.delete(id) : open.add(id); return paint(); }
         if (act === 'copy') {
-          try { await navigator.clipboard.writeText(a.pay_url); toast('Payment link copied'); } catch { prompt('Copy this payment link:', a.pay_url); }
+          try { await navigator.clipboard.writeText(a.pay_url); toast('Payment link copied'); } catch { copyBox('Copy this payment link', a.pay_url); }
           return;
         }
-        if (act === 'end' && confirm('End this lot now? The highest bidder wins.')) await post(`/api/admin/auctions/${id}/end`);
-        else if (act === 'cancel' && confirm('Cancel this lot? Bidders will no longer see it.')) await post(`/api/admin/auctions/${id}/cancel`);
-        else if (act === 'next' && a.winner_full && confirm(`Remove ${a.winner_full.name}'s bid (${fmt(a.final_bid_cents)}) and offer this lot to the next-highest bidder?`)) await post(`/api/admin/auctions/${id}/next-bidder`, { expected_bid_id: a.winner_bid_id });
-        else if (act === 'void' && confirm('Remove this bid?')) await post(`/api/admin/bids/${id}/void`);
+        if (act === 'end' && (await confirmBox({ title: 'End this lot now?', body: 'The highest bidder wins.', yes: 'End lot', no: 'Keep it open' }))) await post(`/api/admin/auctions/${id}/end`);
+        else if (act === 'cancel' && (await confirmBox({ title: 'Cancel this lot?', body: 'Bidders will no longer see it.', yes: 'Cancel lot', no: 'Keep lot', danger: true }))) await post(`/api/admin/auctions/${id}/cancel`);
+        else if (act === 'next' && a.winner_full && (await confirmBox({ title: 'Offer to the next bidder?', body: `This removes ${esc(a.winner_full.name)}’s bid (${fmt(a.final_bid_cents)}) and offers the lot to the next-highest bidder.`, yes: 'Remove bid and offer', danger: true }))) await post(`/api/admin/auctions/${id}/next-bidder`, { expected_bid_id: a.winner_bid_id });
+        else if (act === 'void' && (await confirmBox({ title: 'Remove this bid?', body: 'It comes off the board.', yes: 'Remove bid', danger: true }))) await post(`/api/admin/bids/${id}/void`);
         else return;
         await load();
       } catch (err) { $('#amsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
@@ -1017,7 +1022,7 @@
       if (lr || la) {
         const o = orders.find((x) => x.id === Number((lr || la).dataset.lrefund || (lr || la).dataset.laccept));
         const cents = o.late_paid_cents || o.total_cents;
-        const sure = lr ? confirm(`Refund ${fmt(cents)} to the buyer for order #${o.id}? The money goes back through Stripe.`) : confirm(`Keep the payment and reopen order #${o.id} as paid? It will count as a sale and you ship it.`);
+        const sure = lr ? (await confirmBox({ title: `Refund ${fmt(cents)}?`, body: `The money for order #${o.id} goes back to the buyer through Stripe.`, yes: 'Refund', danger: true })) : (await confirmBox({ title: 'Keep the payment?', body: `Order #${o.id} is reopened as paid. It counts as a sale and you ship it.`, yes: 'Reopen as paid' }));
         if (!sure) return;
         (lr || la).disabled = true;
         try { await post(`/api/admin/orders/${o.id}/${lr ? 'late-refund' : 'accept-late'}`); toast(lr ? 'Refunded' : 'Order reopened as paid'); await reload(); }
@@ -1026,7 +1031,7 @@
       }
       const mg = e.target.closest('[data-manage]');
       if (mg) return manageOrder(orders.find((o) => o.id === Number(mg.dataset.manage)), reload);
-      const b = e.target.closest('[data-cancel]'); if (!b || !confirm('Cancel this unpaid order?')) return;
+      const b = e.target.closest('[data-cancel]'); if (!b || !(await confirmBox({ title: 'Cancel this unpaid order?', body: 'The buyer won’t be able to pay for it.', yes: 'Cancel order', no: 'Keep order', danger: true }))) return;
       try { await post(`/api/admin/orders/${b.dataset.cancel}/cancel`); await reload(); }
       catch (err) { $('#omsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
     };
@@ -1094,7 +1099,7 @@
       const cents = toCents(q('#ramt').value);
       if (!Number.isInteger(cents) || cents < 1 || cents > left) return (q('#rmsg').innerHTML = `<div class="msg err">Enter an amount between $0.01 and ${fmt(left)}</div>`);
       const already = q('#ralready') ? q('#ralready').checked : false;
-      if (!confirm(`Refund ${fmt(cents)} on order #${o.id}?${o.payment_method === 'card' && !already ? ' This sends the money back to the buyer’s card through Stripe.' : ''}`)) return;
+      if (!(await confirmBox({ title: `Refund ${fmt(cents)}?`, body: `Order #${o.id}.${o.payment_method === 'card' && !already ? ' This sends the money back to the buyer’s card through Stripe.' : ''}`, yes: 'Refund', danger: true }))) return;
       q('#rgo').disabled = true;
       try { const rr = await post(`/api/admin/orders/${o.id}/refund`, { amount_cents: cents, note: q('#rnote').value, restock: q('#rstock').checked, already_refunded: already }); toast(rr && rr.restock_waiting ? 'Refund recorded. The items go back in stock once the order is fully refunded.' : 'Refund recorded'); m.close(); done(); }
       catch (e) { q('#rmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; q('#rgo').disabled = false; }
@@ -1872,7 +1877,7 @@
     };
     body.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = async () => {
       const l = d.links.find((x) => x.id === Number(b.dataset.copy));
-      try { await navigator.clipboard.writeText(l.url); toast('Copied'); } catch { prompt('Copy this address:', l.url); }
+      try { await navigator.clipboard.writeText(l.url); toast('Copied'); } catch { copyBox('Copy this address', l.url); }
     }; });
     body.querySelectorAll('[data-arc]').forEach((b) => { b.onclick = async () => {
       const l = d.links.find((x) => x.id === Number(b.dataset.arc));
@@ -1963,7 +1968,7 @@
       try {
         // If the links were changed somewhere else (another tab or device) since this page opened, ask before overwriting them.
         const fresh = await api('/api/admin/links');
-        if (strip(fresh.links) !== baseline && !confirm('Your links were changed somewhere else since you opened this page. Save anyway and replace those changes?')) { saving = false; return; }
+        if (strip(fresh.links) !== baseline && !(await confirmBox({ title: 'Your links changed somewhere else', body: 'They were changed in another tab or device since you opened this page. Save anyway and replace those changes?', yes: 'Save and replace', no: 'Go back', danger: true }))) { saving = false; return; }
         const clean = list.map(({ _k, ...l }) => l);
         const r = await put('/api/admin/settings', { links: clean, links_intro: $('#lintro').value, mailing_list_on: $('#lmail').checked });
         settings = { ...settings, links: r.links, links_intro: r.links_intro, mailing_list_on: r.mailing_list_on };
@@ -2427,7 +2432,7 @@
       });
       return out.join('\n\n');
     };
-    document.querySelectorAll('[data-startfrom]').forEach((b) => { b.onclick = () => { const k = b.dataset.startfrom, box = $('#' + k + 'custom'); if (box.value.trim() && !confirm('Replace what you’ve written with Outpost’s version?')) return; box.value = legalText(k); }; });
+    document.querySelectorAll('[data-startfrom]').forEach((b) => { b.onclick = async () => { const k = b.dataset.startfrom, box = $('#' + k + 'custom'); if (box.value.trim() && !(await confirmBox({ title: 'Replace what you’ve written?', body: 'Outpost’s version takes its place.', yes: 'Replace', no: 'Keep mine', danger: true }))) return; box.value = legalText(k); }; });
     $('#polsave').onclick = async () => {
       try {
         const r = await put('/api/admin/settings', { policy: { ...pol, ship_note: $('#pship').value, governing_law: $('#plaw').value, privacy_extra: $('#ppriv').value, terms_extra: $('#pterm').value, privacy_custom: $('#privacycustom').value, terms_custom: $('#termscustom').value, privacy_own: $('#privacyown').checked, terms_own: $('#termsown').checked } });
@@ -2606,7 +2611,7 @@
       const t = e.target.closest('[data-dt]'), x = e.target.closest('[data-dx]');
       try {
         if (t) { const d = dlist.find((y) => y.id === Number(t.dataset.dt)); await put('/api/admin/discounts/' + d.id, { active: !d.active }); }
-        else if (x && confirm('Delete this code?')) await api('/api/admin/discounts/' + x.dataset.dx, { method: 'DELETE' });
+        else if (x && (await confirmBox({ title: 'Delete this code?', body: 'Shoppers can no longer use it.', yes: 'Delete', danger: true }))) await api('/api/admin/discounts/' + x.dataset.dx, { method: 'DELETE' });
         else return;
         dlist = await api('/api/admin/discounts'); dPaint();
       } catch (err) { $('#dmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }

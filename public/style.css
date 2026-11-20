@@ -664,3 +664,5 @@ details.more summary{cursor:pointer;color:var(--forest);font-weight:600}
 .plink { background: none; border: 0; padding: 0; font: inherit; font-weight: 700; color: var(--ink); cursor: pointer; text-align: left; text-decoration: underline dotted; text-underline-offset: 3px; }
 .plink:hover { text-decoration: underline; }
 .chip.tag .mk-tx { margin-left: 2px; }
+/* Taller sidebar (section headings): scroll the menu itself so "View shop" never slides under Sign out */
+@media (min-width: 721px) { .nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; } .side-foot { flex: none; padding-top: 10px; } }
