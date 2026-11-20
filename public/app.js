@@ -114,6 +114,25 @@
     return { el: back.firstElementChild, close: () => back.remove() };
   }
 
+  // A small yes/no box in the same style, for things that can't be undone or that would throw work away.
+  function confirmBox({ title, body, yes = 'Yes', no = 'Cancel', danger = false }) {
+    return new Promise((resolve) => {
+      const cm = openModal(`<h2 style="font-size:22px;margin-bottom:8px">${esc(title)}</h2><p class="muted" style="margin:0 0 14px;line-height:1.45">${body}</p>
+        <div class="row" style="gap:10px;justify-content:center"><button class="btn" data-n>${esc(no)}</button><button class="btn btn-primary" data-y${danger ? ' style="background:var(--bad,#b42318)"' : ''}>${esc(yes)}</button></div>`);
+      cm.el.setAttribute('role', 'alertdialog'); cm.el.setAttribute('aria-modal', 'true');
+      const end = (v) => { document.removeEventListener('keydown', onKey); cm.close(); resolve(v); };
+      const onKey = (ev) => { if (ev.key === 'Escape') end(false); };
+      document.addEventListener('keydown', onKey);
+      cm.el.querySelector('[data-n]').onclick = () => end(false); cm.el.querySelector('[data-y]').onclick = () => end(true);
+      cm.el.querySelector(danger ? '[data-n]' : '[data-y]').focus();
+    });
+  }
+  // Close button for an editor: nothing happens silently to unsaved work.
+  const guardClose = (m, isDirty) => async () => {
+    if (!isDirty()) return m.close();
+    if (await confirmBox({ title: 'Close without saving?', body: 'You have changes that haven’t been saved. They’ll be lost.', yes: 'Discard changes', no: 'Keep editing', danger: true })) m.close();
+  };
+
   const pic = (url, name, cls = 'thumb') => url
     ? `<img class="${cls}" src="${esc(url)}" alt="">`
     : `<div class="${cls} ph">${esc((name || '?').trim().charAt(0).toUpperCase())}</div>`;
@@ -1295,6 +1314,7 @@
     const s = existing ? { caption: existing.caption, photos: [...existing.photos], link_code: existing.link_code || '', product_id: existing.product_id || 0, scheduled_at: existing.scheduled_at, to_gallery: existing.to_gallery, to_instagram: existing.to_instagram, to_facebook: existing.to_facebook }
       : { caption: '', photos: [], link_code: '', product_id: 0, scheduled_at: preset.at || null, to_gallery: true, to_instagram: false, to_facebook: false };
     let ratio = '4/5', pick = false;
+    let snap0 = null; const snapOf = () => JSON.stringify(s) + '|' + (q0('#edcap') ? q0('#edcap').value : s.caption); const q0 = (x) => document.querySelector('.modal #edbody ' + x) || null;
     const m = openModal('<div id="edbody"></div>', { wide: true });
     m.el.style.maxWidth = '860px'; m.el.style.textAlign = 'left';
     const dateVal = () => (s.scheduled_at ? keyOf(s.scheduled_at) : ''); const timeVal = () => (s.scheduled_at ? (() => { const p = zparts(s.scheduled_at); return pad2(p.h) + ':' + pad2(p.mi); })() : '');
@@ -1333,7 +1353,8 @@
           mk.photos = await api('/api/admin/marketing/photos'); paint();
         } catch (er) { q('#edmsg').innerHTML = `<div class="msg err">${esc(er.message || 'That photo could not be added')}</div>`; }
       };
-      q('[data-close]').onclick = m.close;
+      if (snap0 === null) snap0 = snapOf();
+      q('[data-close]').onclick = guardClose(m, () => snapOf() !== snap0);
       q('#eddraft').onclick = () => save('draft'); q('#edsched').onclick = () => save('scheduled');
       if (q('#eddel')) q('#eddel').onclick = async () => { if (!confirm('Delete this post? Its photos stay in your gallery photos.')) return; try { await api('/api/admin/marketing/posts/' + existing.id, { method: 'DELETE' }); m.close(); await refresh(); } catch (er) { toast(er.message); } };
     }
@@ -1452,7 +1473,7 @@
         ${rows.length ? `<div class="card" style="overflow-x:auto;padding:0"><table><thead><tr><th>#</th><th>When</th><th>Caption</th><th>Photo</th><th>Status</th></tr></thead><tbody>${rows.map((r, i) => `<tr><td>${i + 1}</td><td class="small">${esc(r.raw[0])} ${esc(r.raw[1])}</td><td class="small" style="max-width:280px">${esc(r.caption.slice(0, 80))}</td><td class="small">${esc(r.raw[3])}</td><td>${r.bad.length ? r.bad.map((b) => `<span class="badge b-pending">${esc(b)}</span>`).join(' ') : '<span class="badge b-paid">Ready</span>'}</td></tr>`).join('')}</tbody></table></div>
         <div class="row wrap" style="gap:10px;margin-top:10px;align-items:center;justify-content:flex-end"><span class="small muted">${ready} ready${problems ? `, ${problems} need attention` : ''}</span>${problems ? '<label class="row small" style="gap:6px"><input type="checkbox" id="bkdr" checked> Save the others as drafts</label>' : ''}<button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="bkgo" ${ready || problems ? '' : 'disabled'}>${ready ? `Schedule ${ready} post${ready === 1 ? '' : 's'}` : 'Save as drafts'}</button></div>` : '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" data-close>Close</button></div>'}`;
       const q = (x) => $(x, m.el);
-      m.el.querySelectorAll('[data-close]').forEach((b) => { b.onclick = m.close; });
+      m.el.querySelectorAll('[data-close]').forEach((b) => { b.onclick = guardClose(m, () => files.size > 0); });
       q('#bkcheck').onclick = () => { m._text = q('#bktext').value; load(m._text); paint(); };
       q('#bkcsv').onchange = async (e) => { const f = e.target.files[0]; if (!f) return; m._text = await f.text(); load(m._text); paint(); };
       q('#bktpl').onclick = (e) => { e.preventDefault(); const url = URL.createObjectURL(new Blob(['date,time,caption,photo,link,product,where\n2026-12-01,10:00 AM,"New tiles are up!",frog1.jpg,,,Gallery\n2026-12-03,2:30 PM,"Studio shelf this morning",shelf.jpg,,,"Gallery, Instagram"\n'], { type: 'text/csv' })); const l = document.createElement('a'); l.href = url; l.download = 'outpost-posts-template.csv'; document.body.appendChild(l); l.click(); l.remove(); };
@@ -1543,6 +1564,7 @@
     const at = c && c.scheduled_at ? c.scheduled_at : null;
     let design = c && c.design ? JSON.parse(JSON.stringify(c.design)) : (c && c.body ? { template: 'plain', blocks: [{ type: 'text', text: c.body }] } : null);
     let link = c ? c.link_code || '' : ''; let pick = null, templates = []; let subject = c ? c.subject : '';
+    const snapOf = () => JSON.stringify([subject, design, link]); const snap0 = snapOf();
     const q = (x) => $(x, m.el);
     const clean = () => ({ template: design.template, blocks: design.blocks.map((b) => ({ ...b })) });
     let tm = 0;
@@ -1596,7 +1618,8 @@
     const msg = (h) => { q('#memsg').innerHTML = h; };
     const keep = () => { if (q('#me-sub')) subject = q('#me-sub').value; if (!design) return; m.el.querySelectorAll('[data-f]').forEach((el) => { const [i, f] = el.dataset.f.split(':'); const b = design.blocks[Number(i)]; if (b) b[f] = (f === 'product_id' || f === 'line_id') ? Number(el.value) : el.value; }); if (q('#me-link')) link = q('#me-link').value; };
     function wire() {
-      m.el.querySelector('[data-close]').onclick = m.close;
+      m.el.querySelector('[data-close]').onclick = guardClose(m, () => { keep(); return !locked && snapOf() !== snap0; });
+      if (q('#me-when')) q('#me-when').onchange = () => { if (q('#me-go')) q('#me-go').textContent = q('#me-when').value === 'now' ? 'Send now' : 'Schedule'; };
       if (q('#me-pv')) q('#me-pv').onclick = () => { keep(); pvOn = !pvOn; savePv(); paint(); };
       if (q('#me-pw')) q('#me-pw').onclick = () => { keep(); pvWide = !pvWide; savePv(); paint(); };
       if (q('#me-sub')) q('#me-sub').oninput = () => { subject = q('#me-sub').value; prev(); };
@@ -1629,8 +1652,13 @@
         try {
           const when = q('#me-when').value; let body = { now: true };
           if (when === 'at') { const d = q('#me-date').value, t = q('#me-time').value; if (!d || !t) return msg('<div class="msg err">Pick a date and time, or choose “As soon as possible”.</div>'); body = { scheduled_at: zoned(d, Number(t.slice(0, 2)), Number(t.slice(3, 5))) }; }
-          await saveDraft(); await post(`/api/admin/email/campaigns/${c.id}/schedule`, body); done(when === 'now' ? 'Sending started' : 'Scheduled');
-        } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); }
+          keep(); const n = st.audience.sendable;
+          const late = body.scheduled_at && body.scheduled_at < Date.now();
+          const goes = body.now || late ? 'right away' : 'on ' + esc(dayLabel(keyOf(body.scheduled_at))) + ' at ' + esc(clock(body.scheduled_at));
+          if (!(await confirmBox({ title: body.now || late ? 'Send this email now?' : 'Schedule this email?', body: `“${esc(subject || 'No subject')}” will go to <b>${n}</b> ${n === 1 ? 'person' : 'people'} ${goes}.${late && !body.now ? ' That time has already passed.' : ''} Once it starts sending, it can be stopped but not taken back.`, yes: body.now || late ? 'Send now' : 'Schedule', no: 'Not yet' }))) return;
+          q('#me-go').disabled = true;
+          await saveDraft(); await post(`/api/admin/email/campaigns/${c.id}/schedule`, body); done(when === 'now' || late ? 'Sending started' : 'Scheduled');
+        } catch (e) { if (q('#me-go')) q('#me-go').disabled = false; msg(`<div class="msg err">${esc(e.message)}</div>`); }
       };
       if (q('#me-test')) q('#me-test').onclick = async () => { try { keep(); msg('<div class="msg">Sending…</div>'); await post('/api/admin/email/test', { to: q('#me-to').value, subject: q('#me-sub').value, design: clean(), link_code: link }); msg('<div class="msg ok">Test sent. Check your inbox.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
       if (q('#me-tpl')) q('#me-tpl').onclick = async () => { const name = prompt('Name this template'); if (!name) return; try { keep(); const t = await post('/api/admin/email/templates', { name, design: clean() }); templates.unshift(t); msg('<div class="msg ok">Saved. You’ll find it under “Your templates” on a new email.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };

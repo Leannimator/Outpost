@@ -12,11 +12,12 @@
 - **Where visitors come from:** if you arrive through a link I shared (for example from Instagram or an email), I add one to a daily count for that link, and note the link on your order if you buy. I don't keep your address or build a profile of you.
 
 ## What I don't do
-I don't sell your information. I don't run advertising trackers. Outpost does not send marketing emails by itself.
+I don't sell your information. I don't run advertising trackers. I only send marketing emails to people who ticked the box to receive them, and every email has an unsubscribe link that works with one click.
 
 ## Who else sees it
 - **Stripe** processes payments (see stripe.com/privacy).
 - **Cloudflare Turnstile**, if turned on, checks that you're a person.
+- **Resend**, if I've turned on email, delivers my emails. It sees your email address and the message, and no one else does.
 - **My hosting company** stores the shop's data.
 - **Shipping carriers** get your name and address to deliver your order.
 
