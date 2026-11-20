@@ -405,6 +405,14 @@ for (const o of needToken) setToken.run(crypto.randomBytes(12).toString('hex'), 
     finished_at INTEGER,
     total INTEGER NOT NULL DEFAULT 0
   )`);
+  addCol('email_campaigns', 'design', "TEXT NOT NULL DEFAULT ''");          // layout blocks as JSON ('' = a plain-text email)
+  addCol('email_campaigns', 'link_code', "TEXT NOT NULL DEFAULT ''");       // tracked link added to shop links so sales can be counted
+  db.exec(`CREATE TABLE IF NOT EXISTS email_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    design TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
   db.exec(`CREATE TABLE IF NOT EXISTS email_recipients (
     campaign_id INTEGER NOT NULL,
     subscriber_id INTEGER NOT NULL,

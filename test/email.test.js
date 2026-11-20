@@ -203,3 +203,58 @@ test('the key never lands in the database or the status, and deleting a person r
     try { const t = (await off.j('POST', '/api/admin/login', { password: PASSWORD })).data.token; const st = (await off.j('GET', '/api/admin/email/status', undefined, { 'x-admin-token': t })).data; assert.equal(st.key_present, false); assert.equal(st.ready, false); assert.equal((await off.j('POST', '/api/email/webhook', {})).status, 503, 'no webhook secret: not listening'); } finally { off.stop(); }
   } finally { stop(); }
 });
+
+test('designed emails: buttons, photos and product cards are email-safe, links are cleaned, shop links carry the tracking code', () => {
+  const d = mailer.cleanDesign({ template: 'feature', blocks: [
+    { type: 'photo', url: '/images/a.jpg', alt: 'Blue frog tile', link: '/shop?p=3' },
+    { type: 'heading', text: 'New <b>tiles</b>' }, { type: 'text', text: 'Hello\n\nhttps://example.com/x' },
+    { type: 'button', label: 'Shop now', url: 'javascript:alert(1)' }, { type: 'button', label: 'Shop now', url: '/shop' }, { type: 'button', label: 'Other', url: 'https://other.example/p' },
+    { type: 'photos', urls: ['/images/1.jpg', 'data:image/png;base64,AAAA', '/images/2.jpg', '/images/3.jpg', '/images/4.jpg'] },
+    { type: 'product', product_id: 7, label: 'Buy it' }, { type: 'evil', text: 'x' }, { type: 'divider' }] });
+  assert.equal(d.blocks.length, 9, 'unknown block types are dropped');
+  assert.equal(d.blocks.filter((b) => b.type === 'button')[0].url, '', 'the javascript: button has no address');
+  assert.deepEqual(d.blocks.find((b) => b.type === 'photos').urls, ['/images/1.jpg', '/images/2.jpg'], 'only 3 photos max and no data: addresses (the 4th and 5th are cut)');
+  const r = mailer.renderDesign(d, { shop: 'Ash & Anchor', base: 'https://shop.test', logo: '/images/logo.png', theme: { button: '#f72d00' }, products: { 7: { name: 'Blue frog', price: '$25.00', image: '/images/p.jpg', url: '/shop?p=7' } }, linkCode: 'email', address: '1 Main St', unsubUrl: 'https://shop.test/unsubscribe?t=abc', subject: 'Hi' });
+  assert.ok(!r.html.includes('javascript:') && !r.html.includes('<b>tiles') && r.html.includes('&lt;b&gt;tiles'), 'nothing unsafe gets through');
+  assert.ok(r.html.includes('bgcolor="#f72d00"') && /<a href="https:\/\/shop\.test\/shop\?s=email"[^>]*>Shop now<\/a>/.test(r.html), 'a bulletproof button on a coloured cell with the tracked shop link');
+  assert.ok(r.html.includes('href="https://other.example/p"') && !r.html.includes('other.example/p?s='), 'outside links are left alone');
+  assert.ok(r.html.includes('alt="Blue frog tile"') && r.html.includes('src="https://shop.test/images/a.jpg"'), 'photos are absolute and have alt text');
+  assert.ok(r.html.includes('Blue frog') && r.html.includes('$25.00') && r.html.includes('shop?p=7&amp;s=email') && r.html.includes('Buy it'), 'product card with price, link and button label');
+  assert.ok(r.html.includes('max-width:600px') && r.html.includes('role="presentation"') && r.html.includes('Unsubscribe'), '600px table layout with a footer');
+  assert.match(r.text, /Shop now: https:\/\/shop\.test\/shop\?s=email/); assert.match(r.text, /\[Blue frog tile\]/); assert.match(r.text, /Unsubscribe: https:\/\/shop\.test\/unsubscribe\?t=abc/);
+  assert.equal(r.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
+  assert.match(r.html, /color:#ffffff/, 'white text on the orange button (picked for contrast)');
+});
+
+test('a designed email is saved, previewed and sent with the shop theme, a product card and the tracked link; templates can be saved and removed', { timeout: 60000 }, async () => {
+  const { s, a, db, fake, stop } = await setup();
+  try {
+    addSub(db, 'fan@example.com');
+    await turnOn(a, { daily_cap: 100, reserve: 0 });
+    const pid = Number(db.prepare("INSERT INTO products (name, price_cents, stock, active, image_url) VALUES ('Blue frog tile', 2500, 3, 1, '/images/frog.jpg')").run().lastInsertRowid);
+    const link = (await a.post('/api/admin/marketing/links', { name: 'Email: December' })).data;
+    const design = { template: 'banner', blocks: [{ type: 'heading', text: 'New tiles' }, { type: 'text', text: 'They are here.' }, { type: 'product', product_id: pid, label: 'Get it' }, { type: 'button', label: 'Shop now', url: '/shop' }] };
+    const pv = (await a.post('/api/admin/email/preview', { subject: 'Hi', design, link_code: link.code })).data;
+    assert.ok(pv.html.includes('Blue frog tile') && pv.html.includes('$25.00'));
+    assert.ok(pv.html.includes('s=' + link.code) && pv.html.includes('Get it'), 'preview shows the real thing');
+    assert.equal((await a.post('/api/admin/email/campaigns', { subject: 'x', design, link_code: 'nope' })).status, 400, 'an unknown tracked link is refused');
+    const c = (await a.post('/api/admin/email/campaigns', { subject: 'New tiles', design, link_code: link.code })).data;
+    assert.equal(c.design.blocks.length, 4); assert.equal(c.link_code, link.code); assert.match(c.body, /New tiles/);
+    assert.equal((await a.put(`/api/admin/email/campaigns/${c.id}`, { design: { template: 'plain', blocks: [] } })).status, 200);
+    assert.equal((await a.post(`/api/admin/email/campaigns/${c.id}/schedule`, { now: true })).status, 400, 'an empty design cannot be sent');
+    await a.put(`/api/admin/email/campaigns/${c.id}`, { design });
+    assert.equal((await a.post(`/api/admin/email/campaigns/${c.id}/schedule`, { now: true })).status, 200);
+    assert.ok(await until(() => fake.state.sent.length === 1));
+    const m = fake.state.sent[0];
+    assert.ok(m.html.includes('Blue frog tile') && m.html.includes('/shop?p=' + pid) && m.html.includes('s=' + link.code), 'the product card and tracked links are in the sent email');
+    assert.match(m.html, /unsubscribe\?t=[\w-]{20,}/); assert.match(m.text, /Shop now: http:\/\/localhost:\d+\/shop\?s=/); assert.match(m.text, /Blue frog tile \(\$25\.00\)/);
+    assert.equal(m.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
+    // templates
+    assert.equal((await a.post('/api/admin/email/templates', { name: '', design })).status, 400);
+    assert.equal((await a.post('/api/admin/email/templates', { name: 'Monthly', design: { template: 'plain', blocks: [] } })).status, 400, 'an empty design is not worth saving');
+    const t = (await a.post('/api/admin/email/templates', { name: 'Monthly drop', design })).data;
+    const list = (await a.get('/api/admin/email/templates')).data; assert.equal(list.length, 1); assert.equal(list[0].design.blocks[2].product_id, pid);
+    assert.equal((await a.del('/api/admin/email/templates/' + t.id)).status, 200); assert.equal((await a.get('/api/admin/email/templates')).data.length, 0);
+    assert.equal((await s.j('GET', '/api/admin/email/templates')).status, 401, 'owner only');
+  } finally { stop(); }
+});

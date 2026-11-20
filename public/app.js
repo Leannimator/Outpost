@@ -207,7 +207,7 @@
     [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/lines$/, viewLines, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
     [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
-    [/^#\/marketing(?:\/(calendar|gallery|ready|links|sources))?$/, viewMarketing, 'marketing'], [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
+    [/^#\/marketing(?:\/(calendar|gallery|ready|email|links|sources))?$/, viewMarketing, 'marketing'], [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
   ];
 
   async function route() {
@@ -1162,7 +1162,7 @@
     view().innerHTML = `
       <div class="topbar"><h1>Marketing</h1></div>
       <div class="seg" id="mktabs">
-        ${[['calendar', 'Calendar'], ['gallery', 'Gallery'], ['ready', 'Ready to post'], ['links', 'Tracked links'], ['sources', 'Sales by source']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}${k === 'ready' ? '<span class="nav-badge"></span>' : ''}</button>`).join('')}
+        ${[['calendar', 'Calendar'], ['gallery', 'Gallery'], ['ready', 'Ready to post'], ['email', 'Email'], ['links', 'Tracked links'], ['sources', 'Sales by source']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}${k === 'ready' ? '<span class="nav-badge"></span>' : ''}</button>`).join('')}
       </div>
       <div id="mkbody" style="margin-top:12px"></div>`;
     document.querySelectorAll('#mktabs button').forEach((b) => { b.onclick = () => { location.hash = '#/marketing/' + b.dataset.t; }; });
@@ -1172,6 +1172,7 @@
       if (tab === 'links') return await mktLinks(seq);
       if (tab === 'gallery') return await mktGallery(seq);
       if (tab === 'ready') return await mktReady(seq);
+      if (tab === 'email') return await mktEmail(seq);
       return await mktCalendar(seq);
     } catch (e) { if (seq === routeSeq) $('#mkbody').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
   }
@@ -1337,7 +1338,7 @@
     }
     paint();
   }
-  async function refresh() { await mkLoad(); const t = ($('#mktabs .on') || {}).dataset; const tab = (t && t.t) || 'calendar'; ({ calendar: mktCalendar, gallery: mktGallery, ready: mktReady })[tab]?.(routeSeq); mkBadge(); }
+  async function refresh() { await mkLoad(); const t = ($('#mktabs .on') || {}).dataset; const tab = (t && t.t) || 'calendar'; ({ calendar: mktCalendar, gallery: mktGallery, ready: mktReady, email: mktEmail })[tab]?.(routeSeq); mkBadge(); }
 
   // Gallery (curate) ------------------------------------------------------------
   async function mktGallery(seq) {
@@ -1459,6 +1460,154 @@
         m.close(); toast(`${made} scheduled${drafts ? `, ${drafts} saved as drafts` : ''}${failed ? `, ${failed} failed` : ''}`); await refresh();
       };
     }
+    paint();
+  }
+
+  // Email tab ------------------------------------------------------------
+  const mailBadge = { draft: ['Draft', ''], scheduled: ['Scheduled', 'b-pending'], sending: ['Sending', 'b-info'], done: ['Done', 'b-paid'], canceled: ['Stopped', ''] };
+  async function mktEmail(seq) {
+    if (!mk.loaded) await mkLoad();
+    const [st, list] = await Promise.all([api('/api/admin/email/status'), api('/api/admin/email/campaigns')]); if (seq !== routeSeq) return;
+    const a = st.audience, left = st.allowance_today;
+    const row = (c) => {
+      const pct = c.total ? Math.round(100 * c.sent / c.total) : 0;
+      const sub = c.status === 'scheduled' ? `Goes out ${dayLabel(keyOf(c.scheduled_at))} · ${clock(c.scheduled_at)}` : c.status === 'sending' ? `Sent ${c.sent} of ${c.total}${c.pending ? '. The rest goes out in the next daily batch.' : ''}` : c.status === 'done' ? `Sent to ${c.sent} ${c.sent === 1 ? 'person' : 'people'} on ${dayLabel(keyOf(c.finished_at || c.created_at))}${c.failed ? ` · ${c.failed} could not be sent` : ''}` : c.status === 'canceled' ? `Stopped after ${c.sent} of ${c.total}` : 'Not scheduled yet';
+      return `<div class="mk-mrow" data-mail="${c.id}"><div style="flex:1;min-width:200px"><b>${esc(c.subject) || 'No subject yet'}</b><div class="small muted">${esc(sub)}</div>${c.status === 'sending' ? `<div class="mk-bar"><i style="width:${pct}%"></i></div>` : ''}</div><span class="badge ${mailBadge[c.status][1]}">${mailBadge[c.status][0]}</span></div>`;
+    };
+    $('#mkbody').innerHTML = `
+      <div class="card" style="margin-bottom:14px">
+        <div class="row wrap" style="gap:10px;align-items:center;justify-content:space-between">
+          <div><h2 style="font-size:22px;margin:0">${st.ready ? 'Email is on' : st.key_present ? 'Email is off' : 'Email isn’t set up yet'}</h2>
+            <p class="hint" style="margin:2px 0 0">${st.ready ? 'Sending from ' + esc(st.from) : st.key_present ? 'Turn it on in Email settings when you’re ready.' : 'It needs a free Resend account and one key. Nothing is sent until then. The steps are in Email settings.'}</p></div>
+          <button class="btn" id="mailset">Email settings</button></div>
+        ${st.ready ? `<div class="row wrap" style="gap:10px;margin-top:12px">
+          <div class="mk-stat"><div class="small muted">Can be emailed</div><b>${a.sendable}</b></div>
+          <div class="mk-stat"><div class="small muted">Sent today</div><b>${st.sent_today.transactional + st.sent_today.marketing}</b><span class="small muted"> of ${st.daily_cap}</span></div>
+          <div class="mk-stat"><div class="small muted">Left for marketing today</div><b>${left}</b></div></div>
+          <p class="hint" style="margin-top:8px">Not counted: ${a.unsubscribed} unsubscribed${a.bounced ? `, ${a.bounced} bounced` : ''}${a.unconfirmed ? `, ${a.unconfirmed} waiting to confirm` : ''}${a.no_consent ? `, ${a.no_consent} who never agreed to emails` : ''}. ${st.reserve} of the daily limit is kept back for confirmations and receipts.</p>` : ''}
+        ${st.last_error ? `<div class="msg err" style="margin-top:10px">${esc(st.last_error)}</div>` : ''}
+      </div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px"><h2 style="font-size:22px;margin:0">Your emails</h2><button class="btn btn-primary" id="mailnew">New email</button></div>
+        ${list.length ? list.map(row).join('') : '<div class="empty">No emails yet. Write one to everyone who signed up on your shop, and Outpost handles the unsubscribe link and the sending limits.</div>'}
+      </div>`;
+    $('#mailnew').onclick = () => mkMail(null, st);
+    $('#mailset').onclick = () => mkMailSettings(st);
+    $('#mkbody').onclick = (e) => { const r = e.target.closest('[data-mail]'); if (r) mkMail(list.find((c) => c.id === Number(r.dataset.mail)), st); };
+  }
+  function mkMailSettings(st) {
+    const m = openModal('<div id="msbody"></div>', { wide: true }); m.el.style.maxWidth = '620px'; m.el.style.textAlign = 'left';
+    $('#msbody', m.el).innerHTML = `<h2 style="font-size:22px;margin-bottom:4px">Email settings</h2>
+      ${st.key_present ? '<p class="hint"><span class="badge b-paid">Key found</span> The Resend key is saved in Render, not in Outpost.</p>' : '<div class="msg" style="text-align:left"><b>One-time setup, all free</b><br>1. Make a free account at resend.com and add your shop’s domain.<br>2. Add the records it shows you (and a DMARC record) in Cloudflare DNS, set to “DNS only”.<br>3. In Render, add an environment variable named <code>RESEND_API_KEY</code> with your key, then restart.<br>4. Optional: add a webhook to <code>/api/email/webhook</code> and save its secret as <code>RESEND_WEBHOOK_SECRET</code>, so bounces and spam complaints switch people off automatically.</div>'}
+      <label class="field"><span class="label">From</span><input class="input" id="ms-from" value="${esc(st.from)}" placeholder="Ash &amp; Anchor &lt;hello@your-domain.com&gt;"></label>
+      <label class="field"><span class="label">Replies go to <span class="small muted">(optional)</span></span><input class="input" id="ms-reply" value="${esc(st.reply_to)}" placeholder="you@example.com"></label>
+      <label class="field"><span class="label">Mailing address for the footer</span><textarea class="input" id="ms-addr" rows="2" placeholder="Ash &amp; Anchor, 1 Main St, Portland OR 97201">${esc(st.mail_address)}</textarea><span class="hint">Email law requires a real mailing address in every marketing email. A P.O. box works.</span></label>
+      <div class="row wrap" style="gap:10px"><label class="field" style="flex:1;min-width:150px"><span class="label">Daily sending limit</span><input class="input" id="ms-cap" type="number" min="1" value="${st.daily_cap}"><span class="hint">The free plan allows 100 a day.</span></label>
+        <label class="field" style="flex:1;min-width:150px"><span class="label">Kept back for receipts</span><input class="input" id="ms-res" type="number" min="0" value="${st.reserve}"><span class="hint">Marketing never uses these.</span></label></div>
+      <label class="row" style="gap:8px;margin:6px 0"><input type="checkbox" id="ms-doi" ${st.double_optin ? 'checked' : ''}> <span><b>Ask new subscribers to confirm</b><br><span class="small muted">They get one email with a confirm link and only receive marketing after clicking it. Recommended.</span></span></label>
+      <label class="row" style="gap:8px;margin:6px 0 10px"><input type="checkbox" id="ms-on" ${st.on ? 'checked' : ''}> <span><b>Email is on</b></span></label>
+      <div id="msmsg"></div>
+      <div class="row wrap" style="gap:8px;justify-content:flex-end"><button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="mssave">Save</button></div>`;
+    m.el.querySelector('[data-close]').onclick = m.close;
+    $('#mssave', m.el).onclick = async () => {
+      const q = (x) => $(x, m.el);
+      try { await put('/api/admin/email/settings', { from: q('#ms-from').value, reply_to: q('#ms-reply').value, mail_address: q('#ms-addr').value, daily_cap: q('#ms-cap').value, reserve: q('#ms-res').value, double_optin: q('#ms-doi').checked, on: q('#ms-on').checked }); m.close(); toast('Saved'); mktEmail(routeSeq); }
+      catch (e) { q('#msmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+    };
+  }
+  const PRESETS = [
+    ['plain', 'Plain', 'A simple letter', () => ({ template: 'plain', blocks: [{ type: 'text', text: '' }] })],
+    ['banner', 'Banner', 'Your name on top, then a message and a button', () => ({ template: 'banner', blocks: [{ type: 'heading', text: '' }, { type: 'text', text: '' }, { type: 'button', label: 'Shop now', url: '/shop' }] })],
+    ['feature', 'Feature', 'One big photo, a headline and a button', () => ({ template: 'feature', blocks: [{ type: 'photo', url: '', alt: '' }, { type: 'heading', text: '' }, { type: 'text', text: '' }, { type: 'button', label: 'Shop now', url: '/shop' }] })],
+    ['story', 'Story', 'A row of photos with a short note', () => ({ template: 'story', blocks: [{ type: 'heading', text: '' }, { type: 'photos', urls: ['', ''] }, { type: 'text', text: '' }, { type: 'button', label: 'See what’s new', url: '/gallery' }] })],
+  ];
+  const BLOCK_NAMES = { heading: 'Heading', text: 'Text', photo: 'Photo', photos: 'Photo row', button: 'Button', product: 'Product', divider: 'Divider' };
+  function mkMail(c, st) {
+    const isNew = !c; const m = openModal('<div id="mebody"></div>', { wide: true }); m.el.style.maxWidth = '1000px'; m.el.style.textAlign = 'left';
+    const locked = c && !['draft', 'scheduled'].includes(c.status);
+    const at = c && c.scheduled_at ? c.scheduled_at : null;
+    let design = c && c.design ? JSON.parse(JSON.stringify(c.design)) : (c && c.body ? { template: 'plain', blocks: [{ type: 'text', text: c.body }] } : null);
+    let link = c ? c.link_code || '' : ''; let pick = null, templates = []; let subject = c ? c.subject : '';
+    const q = (x) => $(x, m.el);
+    const clean = () => ({ template: design.template, blocks: design.blocks.map((b) => ({ ...b })) });
+    let tm = 0;
+    const prev = () => { clearTimeout(tm); tm = setTimeout(async () => { if (!design || !q('#me-prev')) return; try { const d = await post('/api/admin/email/preview', { subject: q('#me-sub') ? q('#me-sub').value : '', design: clean(), link_code: link }); q('#me-prev').srcdoc = d.html; } catch { /* preview only */ } }, 250); };
+    const siteLinks = () => [['/shop', 'My shop'], ['/gallery', 'Gallery'], ...mk.products.slice(0, 40).map((p) => ['/shop?p=' + p.id, p.name])];
+    function blockHtml(b, i) {
+      const n = design.blocks.length, ctl = locked ? '' : `<div class="mk-bctl">${i > 0 ? `<button data-up="${i}" title="Move up">↑</button>` : ''}${i < n - 1 ? `<button data-dn="${i}" title="Move down">↓</button>` : ''}<button data-rm="${i}" title="Remove">×</button></div>`;
+      const thumb = (u, slot) => `<button class="mk-bthumb" data-pick="${i}:${slot}">${u ? `<img src="${esc(u)}" alt="">` : '<span>Choose photo</span>'}</button>`;
+      let body = '';
+      if (b.type === 'heading') body = `<input class="input" data-f="${i}:text" maxlength="200" value="${esc(b.text)}" placeholder="Headline">`;
+      else if (b.type === 'text') body = `<textarea class="input" data-f="${i}:text" rows="4" placeholder="Write your message. A blank line starts a new paragraph.">${esc(b.text)}</textarea>`;
+      else if (b.type === 'photo') body = `<div class="row wrap" style="gap:10px;align-items:flex-start">${thumb(b.url, 0)}<div style="flex:1;min-width:180px"><input class="input" data-f="${i}:alt" maxlength="150" value="${esc(b.alt || '')}" placeholder="Describe the photo (shown if images are off)"><select class="input" data-f="${i}:link" style="margin-top:6px"><option value="">Photo doesn’t link anywhere</option>${siteLinks().map(([u, l]) => `<option value="${esc(u)}"${b.link === u ? ' selected' : ''}>Links to: ${esc(l)}</option>`).join('')}</select></div></div>`;
+      else if (b.type === 'photos') body = `<div class="row wrap" style="gap:8px">${(b.urls || []).map((u, k) => thumb(u, k)).join('')}${(b.urls || []).length < 3 ? `<button class="btn btn-sm" data-addph="${i}">+ Photo</button>` : ''}${(b.urls || []).length > 1 ? `<button class="btn btn-sm" data-rmph="${i}">− Photo</button>` : ''}</div>`;
+      else if (b.type === 'button') body = `<div class="row wrap" style="gap:8px"><input class="input" data-f="${i}:label" maxlength="40" value="${esc(b.label)}" placeholder="Shop now" style="flex:1;min-width:130px"><select class="input" data-f="${i}:url" style="flex:2;min-width:180px">${siteLinks().map(([u, l]) => `<option value="${esc(u)}"${b.url === u ? ' selected' : ''}>${esc(l)}</option>`).join('')}${b.url && !siteLinks().some(([u]) => u === b.url) ? `<option value="${esc(b.url)}" selected>${esc(b.url.slice(0, 50))}</option>` : ''}</select></div><div class="small muted" style="margin-top:4px">Short and active works best: “Shop now”, “See the new tiles”.</div>`;
+      else if (b.type === 'product') body = `<div class="row wrap" style="gap:8px"><select class="input" data-f="${i}:product_id" style="flex:2;min-width:180px"><option value="0">Choose a product…</option>${mk.products.map((p) => `<option value="${p.id}"${p.id === b.product_id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select><input class="input" data-f="${i}:label" maxlength="30" value="${esc(b.label || '')}" placeholder="Shop now" style="flex:1;min-width:110px"></div><div class="small muted" style="margin-top:4px">Shows the photo, name and current price, with a button.</div>`;
+      else body = '<div class="small muted">A thin line between sections.</div>';
+      const grid = pick && pick.i === i ? `<div class="mk-pickgrid" style="margin-top:8px">${mk.photos.map((ph) => `<button class="mk-pk" data-set="${esc(ph.url)}"><img src="${esc(ph.url)}" alt=""></button>`).join('')}<label class="mk-pk" style="display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;text-align:center">Upload new<input type="file" accept="image/*" data-up-new hidden></label></div>` : '';
+      return `<div class="mk-block"><div class="mk-bh"><b>${BLOCK_NAMES[b.type]}</b>${ctl}</div>${body}${grid}</div>`;
+    }
+    function paint() {
+      const dis = locked ? 'disabled' : '';
+      $('#mebody', m.el).innerHTML = `<h2 style="font-size:22px;margin-bottom:8px">${isNew ? 'New email' : locked ? 'Email' : 'Edit email'}</h2>
+      <div class="mk-ed" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)"><div>
+        <label class="field"><span class="label">Subject</span><input class="input" id="me-sub" maxlength="150" value="${esc(subject)}" ${dis}></label>
+        ${!design ? `<div class="label">Start from</div><div class="mk-presets">${PRESETS.map(([k, n, d]) => `<button class="mk-preset" data-preset="${k}"><i class="mk-pv mk-pv-${k}"></i><b>${n}</b><span class="small muted">${d}</span></button>`).join('')}</div>${templates.length ? `<div class="label" style="margin-top:10px">Your templates</div><div class="row wrap" style="gap:6px">${templates.map((t) => `<span class="mk-tchip"><button class="btn btn-sm" data-tpl="${t.id}">${esc(t.name)}</button><button class="mk-tx" data-tdel="${t.id}" title="Delete template" aria-label="Delete template ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}`
+        : `<div class="row wrap" style="gap:8px;align-items:center;margin-bottom:8px"><span class="label" style="margin:0">Header</span><div class="seg" id="me-hdr"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}" ${dis}>Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}" ${dis}>Banner</button></div></div>
+          ${design.blocks.map(blockHtml).join('')}
+          ${locked ? '' : `<div class="row wrap" style="gap:6px;margin:8px 0">${['heading', 'text', 'photo', 'photos', 'button', 'product', 'divider'].map((t) => `<button class="btn btn-sm" data-add="${t}">+ ${BLOCK_NAMES[t]}</button>`).join('')}</div>`}
+          <label class="field"><span class="label">Count sales from this email</span><select class="input" id="me-link" ${dis}><option value="">Don’t track</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === link ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select><span class="hint">Shop links in the email get this tracked link, so Sales by source shows what the email earned. Make one in Tracked links.</span></label>
+          ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><input class="input" id="me-to" type="email" placeholder="you@example.com" style="max-width:220px"><button class="btn btn-sm" id="me-test">Send me a test</button><button class="btn btn-sm" id="me-tpl">Save as template</button></div>`}`}
+        <div id="memsg" style="margin-top:6px"></div></div>
+      <div><div class="label">Preview</div>${design ? "" : '<div class="hint">Pick a layout on the left and your email appears here.</div>'}<iframe class="mk-mailprev" id="me-prev" ${design ? "" : 'hidden'} sandbox="" title="Email preview" style="width:100%;height:520px;border:1px solid var(--line,#e4dccb)"></iframe>
+        <p style="margin:10px 0 6px"><b>${st.audience.sendable}</b> ${st.audience.sendable === 1 ? 'person' : 'people'} will get this. Today ${st.allowance_today} can go out; the rest follows in daily batches, so receipts always go first.</p>
+        ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center"><span class="small">Send</span><select class="input" id="me-when" style="width:auto"><option value="at">On a date and time</option><option value="now">As soon as possible</option></select><input class="input" type="date" id="me-date" value="${at ? keyOf(at) : ''}" style="width:auto"><input class="input" type="time" id="me-time" value="${at ? (() => { const p = zparts(at); return pad2(p.h) + ':' + pad2(p.mi); })() : '10:00'}" style="width:auto"></div><div class="small muted" style="margin-top:2px">Times in ${esc(mk.tz || 'your computer’s time zone')}</div>`}</div></div>
+      <div class="row wrap" style="gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" data-close>Close</button>
+        ${c && c.status === 'scheduled' ? '<button class="btn" id="me-unsched">Unschedule</button>' : ''}${c && c.status === 'sending' ? '<button class="btn btn-danger" id="me-stop">Stop sending</button>' : ''}${c && c.status !== 'sending' ? '<button class="btn btn-danger" id="me-del">Delete</button>' : ''}
+        ${locked || !design ? '' : '<button class="btn" id="me-save">Save draft</button><button class="btn btn-primary" id="me-go">Schedule</button>'}</div>`;
+      wire(); prev();
+    }
+    const msg = (h) => { q('#memsg').innerHTML = h; };
+    const keep = () => { if (q('#me-sub')) subject = q('#me-sub').value; if (!design) return; m.el.querySelectorAll('[data-f]').forEach((el) => { const [i, f] = el.dataset.f.split(':'); const b = design.blocks[Number(i)]; if (b) b[f] = f === 'product_id' ? Number(el.value) : el.value; }); if (q('#me-link')) link = q('#me-link').value; };
+    function wire() {
+      m.el.querySelector('[data-close]').onclick = m.close;
+      if (q('#me-sub')) q('#me-sub').oninput = () => { subject = q('#me-sub').value; prev(); };
+      m.el.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { keep(); design = PRESETS.find((p) => p[0] === b.dataset.preset)[3](); paint(); }; });
+      m.el.querySelectorAll('[data-tpl]').forEach((b) => { b.onclick = () => { keep(); design = JSON.parse(JSON.stringify(templates.find((t) => t.id === Number(b.dataset.tpl)).design)); paint(); }; });
+      m.el.querySelectorAll('[data-tdel]').forEach((b) => { b.onclick = async () => { if (!confirm('Delete this template?')) return; await api('/api/admin/email/templates/' + b.dataset.tdel, { method: 'DELETE' }); templates = templates.filter((t) => t.id !== Number(b.dataset.tdel)); paint(); }; });
+      if (!design) return;
+      m.el.querySelectorAll('[data-f]').forEach((el) => { el.oninput = el.onchange = () => { keep(); if (el.tagName === 'SELECT' && el.dataset.f.endsWith(':product_id')) { /* repaint not needed */ } prev(); }; });
+      if (q('#me-link')) q('#me-link').onchange = () => { keep(); prev(); };
+      
+      m.el.querySelectorAll('#me-hdr button').forEach((b) => { b.onclick = () => { keep(); design.template = b.dataset.h; paint(); }; });
+      m.el.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => { keep(); const t = b.dataset.add; design.blocks.push(t === 'heading' || t === 'text' ? { type: t, text: '' } : t === 'photo' ? { type: t, url: '', alt: '', link: '' } : t === 'photos' ? { type: t, urls: ['', ''] } : t === 'button' ? { type: t, label: 'Shop now', url: '/shop' } : t === 'product' ? { type: t, product_id: 0, label: '' } : { type: 'divider' }); paint(); }; });
+      const mv = (i, d) => { keep(); const j = i + d; [design.blocks[i], design.blocks[j]] = [design.blocks[j], design.blocks[i]]; pick = null; paint(); };
+      m.el.querySelectorAll('[data-up]').forEach((b) => { b.onclick = () => mv(Number(b.dataset.up), -1); });
+      m.el.querySelectorAll('[data-dn]').forEach((b) => { b.onclick = () => mv(Number(b.dataset.dn), 1); });
+      m.el.querySelectorAll('[data-rm]').forEach((b) => { b.onclick = () => { keep(); design.blocks.splice(Number(b.dataset.rm), 1); pick = null; paint(); }; });
+      m.el.querySelectorAll('[data-addph]').forEach((b) => { b.onclick = () => { keep(); design.blocks[Number(b.dataset.addph)].urls.push(''); paint(); }; });
+      m.el.querySelectorAll('[data-rmph]').forEach((b) => { b.onclick = () => { keep(); design.blocks[Number(b.dataset.rmph)].urls.pop(); paint(); }; });
+      m.el.querySelectorAll('[data-pick]').forEach((b) => { b.onclick = () => { keep(); const [i, slot] = b.dataset.pick.split(':').map(Number); pick = pick && pick.i === i && pick.slot === slot ? null : { i, slot }; paint(); }; });
+      const setPhoto = (url) => { const b = design.blocks[pick.i]; if (b.type === 'photo') b.url = url; else b.urls[pick.slot] = url; pick = null; paint(); };
+      m.el.querySelectorAll('[data-set]').forEach((b) => { b.onclick = () => { keep(); setPhoto(b.dataset.set); }; });
+      const up = m.el.querySelector('[data-up-new]'); if (up) up.onchange = async (e) => { const f = e.target.files[0]; if (!f) return; keep(); try { msg('<div class="msg">Uploading…</div>'); const url = await uploadImage(await jpegFrom(f)); await post('/api/admin/marketing/photos', { url }); mk.photos = await api('/api/admin/marketing/photos'); setPhoto(url); } catch (er) { msg(`<div class="msg err">${esc(er.message)}</div>`); } };
+      const done = (t) => { m.close(); toast(t); mktEmail(routeSeq); };
+      const saveDraft = async () => { keep(); const b = { subject: q('#me-sub').value, design: clean(), link_code: link }; c = c ? await put('/api/admin/email/campaigns/' + c.id, b) : await post('/api/admin/email/campaigns', b); return c; };
+      if (q('#me-save')) q('#me-save').onclick = async () => { try { await saveDraft(); done('Draft saved'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-go')) q('#me-go').onclick = async () => {
+        try {
+          const when = q('#me-when').value; let body = { now: true };
+          if (when === 'at') { const d = q('#me-date').value, t = q('#me-time').value; if (!d || !t) return msg('<div class="msg err">Pick a date and time, or choose “As soon as possible”.</div>'); body = { scheduled_at: zoned(d, Number(t.slice(0, 2)), Number(t.slice(3, 5))) }; }
+          await saveDraft(); await post(`/api/admin/email/campaigns/${c.id}/schedule`, body); done(when === 'now' ? 'Sending started' : 'Scheduled');
+        } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); }
+      };
+      if (q('#me-test')) q('#me-test').onclick = async () => { try { keep(); msg('<div class="msg">Sending…</div>'); await post('/api/admin/email/test', { to: q('#me-to').value, subject: q('#me-sub').value, design: clean(), link_code: link }); msg('<div class="msg ok">Test sent. Check your inbox.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-tpl')) q('#me-tpl').onclick = async () => { const name = prompt('Name this template'); if (!name) return; try { keep(); const t = await post('/api/admin/email/templates', { name, design: clean() }); templates.unshift(t); msg('<div class="msg ok">Saved. You’ll find it under “Your templates” on a new email.</div>'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-unsched')) q('#me-unsched').onclick = async () => { try { await post(`/api/admin/email/campaigns/${c.id}/cancel`, {}); done('Back to a draft'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-stop')) q('#me-stop').onclick = async () => { if (!confirm('Stop sending this email? People who already got it keep it; nobody else will.')) return; try { await post(`/api/admin/email/campaigns/${c.id}/cancel`, {}); done('Stopped'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+      if (q('#me-del')) q('#me-del').onclick = async () => { if (!confirm('Delete this email?')) return; try { await api('/api/admin/email/campaigns/' + c.id, { method: 'DELETE' }); done('Deleted'); } catch (e) { msg(`<div class="msg err">${esc(e.message)}</div>`); } };
+    }
+    api('/api/admin/email/templates').then((t) => { templates = t; if (!design) paint(); }).catch(() => {});
     paint();
   }
 

@@ -1848,6 +1848,20 @@ const stillSendable = (s) => !s.unsubscribed && !s.bounced && s.consent_at != nu
 const subToken = (s) => { if (s.unsub_token) return s.unsub_token; const t = require('node:crypto').randomBytes(24).toString('base64url'); db.prepare('UPDATE subscribers SET unsub_token = ? WHERE id = ? AND unsub_token IS NULL').run(t, s.id); return db.prepare('SELECT unsub_token FROM subscribers WHERE id = ?').get(s.id).unsub_token; };
 const fromAddr = () => getSetting('email_from', '');
 const replyTo = () => getSetting('email_reply_to', '') || undefined;
+// Builds the message for one recipient from a campaign: a designed layout, or the older plain-text body.
+function buildMessage(c, unsubUrl) {
+  const shop = storeName(), address = getSetting('mail_address', '');
+  let design = null; try { design = c.design ? JSON.parse(c.design) : null; } catch { design = null; }
+  if (!design) return mailer.compose({ body: c.body, shop, address, unsubUrl });
+  const fmtP = new Intl.NumberFormat('en-US', { style: 'currency', currency: CURRENCY.toUpperCase() });
+  const products = {};
+  for (const b of design.blocks || []) if (b.type === 'product' && !products[b.product_id]) {
+    const p = db.prepare('SELECT id, name, price_cents, image_url, images FROM products WHERE id = ? AND active = 1').get(b.product_id);
+    if (p) { let im = p.image_url; try { const a = JSON.parse(p.images || '[]'); if (a[0]) im = a[0]; } catch { /* use image_url */ } products[p.id] = { name: p.name, price: fmtP.format(p.price_cents / 100), image: im || '', url: '/shop?p=' + p.id }; }
+  }
+  const th = themeSettings();
+  return mailer.renderDesign(design, { shop, base: BASE_URL, logo: getSetting('logo_url', ''), theme: { bg: th.bg, text: th.text, heading: th.heading, button: th.button, buttontext: th.buttontext, accent: th.accent, link: th.link }, products, linkCode: c.link_code || '', address, unsubUrl, subject: c.subject });
+}
 function noteEmailResult(r) {
   if (r.ok) { if (getSetting('email_last_error', '')) setSetting('email_last_error', ''); return; }
   setSetting('email_last_error', `${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC: ${r.error}${r.kind === 'config' ? ' (check the key and that your sending domain is verified)' : ''}`.slice(0, 300));
@@ -1887,7 +1901,7 @@ async function emailTick() {
         const mark = (st, err = '') => db.prepare('UPDATE email_recipients SET status = ?, sent_at = ?, error = ? WHERE campaign_id = ? AND subscriber_id = ?').run(st, st === 'sent' ? Date.now() : null, err, c.id, r.subscriber_id);
         const s = db.prepare('SELECT id, email, unsubscribed, bounced, consent_at, confirmed_at, unsub_token FROM subscribers WHERE id = ?').get(r.subscriber_id);
         if (!s || !stillSendable(s)) { mark('skipped', 'No longer on the list'); continue; }
-        const msg = mailer.compose({ body: c.body, shop: storeName(), address: getSetting('mail_address', ''), unsubUrl: `${BASE_URL}/unsubscribe?t=${subToken(s)}` });
+        const msg = buildMessage(c, `${BASE_URL}/unsubscribe?t=${subToken(s)}`);
         const res = await mailer.sendMail({ from: fromAddr(), to: s.email, reply_to: replyTo(), subject: c.subject, text: msg.text, html: msg.html, headers: msg.headers, idempotencyKey: `outpost-c${c.id}-s${s.id}` });
         if (res.ok) { mark('sent'); bumpEmail('marketing'); allow--; refused = 0; noteEmailResult(res); }
         else if (res.kind === 'recipient') { mark('failed', res.error); if (++refused >= 3) { noteEmailResult({ ...res, error: 'Several addresses in a row were refused: ' + res.error }); return; } }
@@ -1913,9 +1927,12 @@ app.post('/api/confirm-email', (req, res) => {
 
 const cleanSubject = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
 const EMAIL_BODY_MAX = 20000;
+const designText = (d) => d.blocks.filter((b) => b.type === 'heading' || b.type === 'text').map((b) => b.text).join('\n\n').slice(0, EMAIL_BODY_MAX) || (d.blocks.length ? '(designed email)' : '');
+const cleanCampaignLink = (v) => { v = String(v || '').trim().toLowerCase(); if (!v) return ''; const l = db.prepare('SELECT code FROM tracked_links WHERE code = ? AND archived = 0').get(v); if (!l) throw new HttpError(400, 'That tracked link does not exist'); return l.code; };
 const campaignOut = (c) => {
   const n = (st) => db.prepare('SELECT COUNT(*) n FROM email_recipients WHERE campaign_id = ? AND status = ?').get(c.id, st).n;
-  return { ...c, sent: n('sent'), failed: n('failed'), pending: n('pending'), skipped: n('skipped') };
+  let design = null; try { design = c.design ? JSON.parse(c.design) : null; } catch { design = null; }
+  return { ...c, design, sent: n('sent'), failed: n('failed'), pending: n('pending'), skipped: n('skipped') };
 };
 app.get('/api/admin/email/status', requireAdmin, (req, res) => {
   const u = emailUsed();
@@ -1943,15 +1960,19 @@ app.get('/api/admin/email/campaigns', requireAdmin, (req, res) => {
 app.post('/api/admin/email/campaigns', requireAdmin, h(async (req, res) => {
   if (db.prepare('SELECT COUNT(*) n FROM email_campaigns').get().n >= 1000) throw new HttpError(400, 'Too many emails saved. Delete some old ones first.');
   const subject = cleanSubject(req.body.subject), body = String(req.body.body || '').slice(0, EMAIL_BODY_MAX);
-  const id = Number(db.prepare("INSERT INTO email_campaigns (subject, body, status, created_at) VALUES (?,?,'draft',?)").run(subject, body, Date.now()).lastInsertRowid);
+  const design = req.body.design ? mailer.cleanDesign(req.body.design) : null, link = cleanCampaignLink(req.body.link_code);
+  const id = Number(db.prepare("INSERT INTO email_campaigns (subject, body, status, created_at, design, link_code) VALUES (?,?,'draft',?,?,?)").run(subject, design ? designText(design) : body, Date.now(), design ? JSON.stringify(design) : '', link).lastInsertRowid);
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(id)));
 }));
 const campaignOr404 = (id) => { const c = db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(Number(id) || 0); if (!c) throw new HttpError(404, 'Not found'); return c; };
 app.put('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
   const c = campaignOr404(req.params.id);
   if (!['draft', 'scheduled'].includes(c.status)) throw new HttpError(409, 'This email has already started sending, so it can no longer be edited.');
-  const subject = req.body.subject !== undefined ? cleanSubject(req.body.subject) : c.subject, body = req.body.body !== undefined ? String(req.body.body).slice(0, EMAIL_BODY_MAX) : c.body;
-  db.prepare('UPDATE email_campaigns SET subject = ?, body = ? WHERE id = ?').run(subject, body, c.id);
+  const subject = req.body.subject !== undefined ? cleanSubject(req.body.subject) : c.subject;
+  let body = req.body.body !== undefined ? String(req.body.body).slice(0, EMAIL_BODY_MAX) : c.body, designJson = c.design;
+  if (req.body.design !== undefined) { const d = req.body.design ? mailer.cleanDesign(req.body.design) : null; designJson = d ? JSON.stringify(d) : ''; if (d) body = designText(d); }
+  const link = req.body.link_code !== undefined ? cleanCampaignLink(req.body.link_code) : c.link_code;
+  db.prepare('UPDATE email_campaigns SET subject = ?, body = ?, design = ?, link_code = ? WHERE id = ?').run(subject, body, designJson, link, c.id);
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
 }));
 app.delete('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
@@ -1964,7 +1985,7 @@ app.post('/api/admin/email/campaigns/:id/schedule', requireAdmin, h(async (req, 
   const c = campaignOr404(req.params.id);
   if (!['draft', 'scheduled'].includes(c.status)) throw new HttpError(409, 'This email has already started sending.');
   if (!emailReady()) throw new HttpError(400, 'Email is not switched on yet. Finish the email setup first.');
-  if (!c.subject.trim() || !c.body.trim()) throw new HttpError(400, 'Add a subject and some text first.');
+  if (!c.subject.trim() || !c.body.trim()) throw new HttpError(400, 'Add a subject and some content first.');
   if (!audienceCounts().sendable) throw new HttpError(400, 'Nobody can be emailed yet: no one on the list has agreed to emails (and confirmed, if double opt-in is on).');
   const at = req.body.now ? Date.now() : Number(req.body.scheduled_at);
   if (!Number.isFinite(at) || at < Date.now() - 3600e3 || at > Date.now() + 366 * 86400e3) throw new HttpError(400, 'Pick a date and time within the next year.');
@@ -1979,15 +2000,28 @@ app.post('/api/admin/email/campaigns/:id/cancel', requireAdmin, h(async (req, re
   else throw new HttpError(409, 'Nothing to stop.');
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
 }));
+app.get('/api/admin/email/templates', requireAdmin, (req, res) => {
+  res.json(db.prepare('SELECT id, name, design FROM email_templates ORDER BY id DESC LIMIT 100').all().map((t) => { let d = null; try { d = JSON.parse(t.design); } catch { /* skip */ } return { id: t.id, name: t.name, design: d }; }).filter((t) => t.design));
+});
+app.post('/api/admin/email/templates', requireAdmin, h(async (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 60), d = mailer.cleanDesign(req.body.design);
+  if (!name) throw new HttpError(400, 'Give the template a name'); if (!d || !d.blocks.length) throw new HttpError(400, 'Add something to the email first');
+  if (db.prepare('SELECT COUNT(*) n FROM email_templates').get().n >= 100) throw new HttpError(400, 'Too many templates. Delete one first.');
+  const id = Number(db.prepare('INSERT INTO email_templates (name, design, created_at) VALUES (?,?,?)').run(name, JSON.stringify(d), Date.now()).lastInsertRowid);
+  res.json({ id, name, design: d });
+}));
+app.delete('/api/admin/email/templates/:id', requireAdmin, (req, res) => { db.prepare('DELETE FROM email_templates WHERE id = ?').run(Number(req.params.id) || 0); res.json({ ok: true }); });
 app.post('/api/admin/email/preview', requireAdmin, (req, res) => {
-  const m = mailer.compose({ body: String(req.body.body || '').slice(0, EMAIL_BODY_MAX), shop: storeName(), address: getSetting('mail_address', ''), unsubUrl: `${BASE_URL}/unsubscribe?t=example` });
+  const d = req.body.design ? mailer.cleanDesign(req.body.design) : null;
+  const m = buildMessage({ body: String(req.body.body || '').slice(0, EMAIL_BODY_MAX), design: d ? JSON.stringify(d) : '', link_code: req.body.link_code ? cleanCampaignLink(req.body.link_code) : '', subject: cleanSubject(req.body.subject) }, `${BASE_URL}/unsubscribe?t=example`);
   res.json({ html: m.html, text: m.text, audience: audienceCounts().sendable });
 });
 app.post('/api/admin/email/test', requireAdmin, h(async (req, res) => {
   const to = Safe.cleanEmail(req.body.to);
   if (!Safe.validEmail(to)) throw new HttpError(400, 'Enter the address to send the test to');
   const subject = cleanSubject(req.body.subject) || '(no subject)';
-  const m = mailer.compose({ body: String(req.body.body || '').slice(0, EMAIL_BODY_MAX), shop: storeName(), address: getSetting('mail_address', ''), unsubUrl: `${BASE_URL}/unsubscribe?t=example` });
+  const d = req.body.design ? mailer.cleanDesign(req.body.design) : null;
+  const m = buildMessage({ body: String(req.body.body || '').slice(0, EMAIL_BODY_MAX), design: d ? JSON.stringify(d) : '', link_code: req.body.link_code ? cleanCampaignLink(req.body.link_code) : '', subject }, `${BASE_URL}/unsubscribe?t=example`);
   const r = await sendTransactional({ to, subject: '[Test] ' + subject, text: m.text, html: m.html, headers: m.headers });
   if (!r.ok) throw new HttpError(502, r.error || 'The test email could not be sent');
   res.json({ ok: true });

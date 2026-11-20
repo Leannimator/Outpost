@@ -611,3 +611,21 @@ details.more summary{cursor:pointer;color:var(--forest);font-weight:600}
 .mk-spb { position: absolute; inset: auto 0 0 0; display: flex; justify-content: center; gap: 2px; background: rgba(35, 43, 40, .6); border-radius: 0 0 8px 8px; } .mk-spb button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 15px; padding: 0 4px; }
 .mk-pickgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; max-height: 180px; overflow: auto; margin-bottom: 8px; }
 .mk-pk { border: 2px solid transparent; padding: 0; border-radius: 8px; overflow: hidden; aspect-ratio: 1; cursor: pointer; background: none; } .mk-pk.on { border-color: var(--forest); } .mk-pk img { width: 100%; height: 100%; object-fit: cover; }
+.mk-mrow { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line, #e4dccb); cursor: pointer; flex-wrap: wrap; }
+.mk-stat { background: var(--cream-2); border-radius: 12px; padding: 10px 16px; min-width: 150px; } .mk-stat b { font-size: 24px; font-family: var(--serif, inherit); }
+.mk-bar { height: 7px; background: var(--cream-2); border-radius: 4px; overflow: hidden; margin-top: 6px; max-width: 420px; } .mk-bar i { display: block; height: 100%; background: var(--forest); }
+.mk-mailprev { border: 1px solid var(--line, #e4dccb); border-radius: 12px; background: #fff; max-height: 330px; overflow: auto; }
+.mk-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mk-preset { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; border: 1px solid var(--line, #e4dccb); background: #fff; border-radius: 12px; padding: 10px; cursor: pointer; }
+.mk-preset:hover { border-color: var(--forest); }
+.mk-pv { display: block; width: 100%; height: 74px; border-radius: 8px; background: var(--cream-2); position: relative; overflow: hidden; }
+.mk-pv::before, .mk-pv::after { content: ''; position: absolute; left: 14%; right: 14%; border-radius: 3px; }
+.mk-pv-plain::before { top: 14px; height: 5px; background: #cfc6b3; box-shadow: 0 10px 0 #cfc6b3, 0 20px 0 #cfc6b3, 0 30px 0 #cfc6b3; } .mk-pv-plain::after { display: none; }
+.mk-pv-banner::before { top: 8px; height: 8px; background: #cfc6b3; border-bottom: 2px solid var(--forest); box-shadow: 0 16px 0 -2px #cfc6b3, 0 26px 0 -2px #cfc6b3; } .mk-pv-banner::after { bottom: 8px; height: 10px; left: 34%; right: 34%; background: var(--forest); }
+.mk-pv-feature::before { top: 6px; height: 34px; background: #d9c9a8; box-shadow: 0 40px 0 -2px #cfc6b3; } .mk-pv-feature::after { bottom: 5px; height: 8px; left: 36%; right: 36%; background: var(--forest); }
+.mk-pv-story::before { top: 14px; height: 30px; left: 10%; right: 66%; background: #d9c9a8; box-shadow: 34px 0 0 #c9d3bd, 68px 0 0 #d6c1cb; } .mk-pv-story::after { bottom: 8px; height: 5px; background: #cfc6b3; }
+.mk-block { border: 1px solid var(--line, #e4dccb); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; background: var(--card); }
+.mk-bh { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 13px; } .mk-bctl { display: flex; gap: 4px; }
+.mk-bctl button, .mk-tx { border: 0; background: var(--cream-2); border-radius: 8px; width: 28px; height: 28px; cursor: pointer; font-size: 15px; }
+.mk-bthumb { width: 96px; height: 96px; border: 1px dashed var(--line, #cfc6b3); border-radius: 10px; background: var(--cream-2); padding: 0; overflow: hidden; cursor: pointer; font-size: 12px; } .mk-bthumb img { width: 100%; height: 100%; object-fit: cover; }
+.mk-tchip { display: inline-flex; gap: 2px; align-items: center; }
