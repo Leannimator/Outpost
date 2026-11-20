@@ -1243,7 +1243,7 @@
         <div class="seg" id="calmode">${['week', 'month', 'list'].map((v) => `<button data-v="${v}" class="${mk.cal === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
         ${mk.cal !== 'list' ? `<button class="btn btn-sm" id="calprev" aria-label="Previous">‹</button><button class="btn btn-sm" id="caltoday">Today</button><button class="btn btn-sm" id="calnext" aria-label="Next">›</button>` : ''}
         <b style="flex:1">${esc(head)}</b><span class="small muted">Times in ${esc(mk.tz || 'your computer’s time zone')}</span>
-        <button class="btn btn-primary" id="newpost">New post</button></div>
+        <button class="btn" id="bulkadd">Bulk add</button><button class="btn btn-primary" id="newpost">New post</button></div>
       ${grid}
       ${drafts.length ? `<div class="card" style="margin-top:12px"><h2 style="font-size:20px;margin-bottom:6px">Drafts</h2><div class="mk-drafts">${drafts.map((p) => `<button class="mk-draft" data-post="${p.id}">${postThumb(p)}<span>${esc(p.caption.slice(0, 40)) || 'Untitled'}</span></button>`).join('')}</div></div>` : ''}
       <p class="hint" style="margin-top:8px">Click an empty time slot to add a post there. Drag a post to move it. Posts for the Gallery appear on your public page when their time arrives. Instagram and Facebook posts show up in “Ready to post” for you to post by hand.</p>`;
@@ -1251,6 +1251,7 @@
     const step = (n) => { mk.day = mk.cal === 'month' ? (() => { const { y, m } = keyParts(mk.day); const t = new Date(Date.UTC(y, m - 1 + n, 1)); return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-01`; })() : addDays(mk.day, 7 * n); mktCalendar(routeSeq); };
     if ($('#calprev')) { $('#calprev').onclick = () => step(-1); $('#calnext').onclick = () => step(1); $('#caltoday').onclick = () => { mk.day = keyOf(Date.now()); mktCalendar(routeSeq); }; }
     $('#newpost').onclick = () => mkEditor(null, {});
+    $('#bulkadd').onclick = () => mkBulk();
     body.onclick = (e) => {
       const c = e.target.closest('[data-post]'); if (c) { return mkEditor(mk.posts.find((p) => p.id === Number(c.dataset.post))); }
       const cell = e.target.closest('[data-day]'); if (cell) mkEditor(null, { at: zoned(cell.dataset.day, Number(cell.dataset.hour), 0) });
@@ -1369,6 +1370,96 @@
       const ids = mk.posts.map((p) => p.id).filter((i) => i !== drag); ids.splice(ids.indexOf(Number(t.dataset.id)), 0, drag); drag = 0;
       try { await post('/api/admin/marketing/posts/order', { ids }); await mkLoad(); mktGallery(routeSeq); } catch (er) { toast(er.message); }
     };
+  }
+
+  // Bulk add: paste from a spreadsheet (or open a CSV), check every row, attach photos by file name, then create the posts ------
+  function parseTable(text) {
+    const t = String(text || '').replace(/\r\n?/g, '\n').replace(/^﻿/, '');
+    const delim = t.split('\n', 1)[0].includes('\t') ? '\t' : ',';
+    const rows = []; let row = [], cell = '', q = false;
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (q) { if (c === '"') { if (t[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; }
+      else if (c === '"' && cell === '') q = true;
+      else if (c === delim) { row.push(cell); cell = ''; }
+      else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      else cell += c;
+    }
+    row.push(cell); if (row.some((x) => x.trim()) || rows.length === 0) rows.push(row);
+    return rows.filter((r) => r.some((x) => x.trim()));
+  }
+  function parseDate(v) {
+    v = String(v || '').trim(); let m;
+    if ((m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+    if ((m = v.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/))) { const y = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : keyParts(keyOf(Date.now())).y; return `${y}-${pad2(m[1])}-${pad2(m[2])}`; }
+    return '';
+  }
+  function parseTime(v) {
+    v = String(v || '').trim().toLowerCase(); if (!v) return { h: 10, mi: 0 };
+    const m = v.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/); if (!m) return null;
+    let h = Number(m[1]); const mi = Number(m[2] || 0); if (m[3] === 'pm' && h < 12) h += 12; if (m[3] === 'am' && h === 12) h = 0;
+    return h > 23 || mi > 59 ? null : { h, mi };
+  }
+  function mkBulk() {
+    const files = new Map();   // lower-case file name -> uploaded gallery photo address
+    let rows = [];
+    const m = openModal('<div id="bkbody"></div>', { wide: true });
+    m.el.style.maxWidth = '980px'; m.el.style.textAlign = 'left';
+    const HEAD = ['date', 'time', 'caption', 'photo', 'link', 'product', 'where'];
+    const stem = (n) => n.toLowerCase().replace(/\.[a-z0-9]+$/, '');
+    function check(cells) {
+      const g = (i) => String(cells[i] || '').trim(); const bad = [];
+      const day = parseDate(g(0)); const tm = parseTime(g(1)); let at = null;
+      if (!day || !tm) bad.push('Bad date or time'); else { at = zoned(day, tm.h, tm.mi); if (at < Date.now() - 60000) bad.push('In the past'); }
+      const names = g(3).split(/[;|]/).map((x) => x.trim()).filter(Boolean); const photos = []; const missing = [];
+      names.forEach((n) => { const u = files.get(n.toLowerCase()) || files.get(stem(n)); if (u) photos.push(u); else missing.push(n); });
+      if (!names.length) bad.push('No photo'); else if (missing.length) bad.push('Photo not added: ' + missing.join(', '));
+      let link_code = null; if (g(4)) { const l = mk.links.find((x) => x.name.toLowerCase() === g(4).toLowerCase() || x.code === g(4).toLowerCase()); if (l) link_code = l.code; else bad.push('Unknown link'); }
+      let product_id = null; if (g(5)) { const p = mk.products.find((x) => x.name.toLowerCase() === g(5).toLowerCase()); if (p) product_id = p.id; else bad.push('Unknown product'); }
+      const w = g(6).toLowerCase(); const to_instagram = /insta|\big\b/.test(w), to_facebook = /face|\bfb\b/.test(w); const to_gallery = w ? /gall/.test(w) || !(to_instagram || to_facebook) : true;
+      if (g(2).length > 2200) bad.push('Caption too long');
+      return { caption: g(2), photos, link_code, product_id, scheduled_at: at, to_gallery, to_instagram, to_facebook, bad, raw: [g(0), g(1), g(2), g(3)] };
+    }
+    function load(text) {
+      let t = parseTable(text); if (!t.length) { rows = []; return; }
+      const first = t[0].map((x) => x.trim().toLowerCase());
+      if (first.includes('caption') || first.includes('date')) { const idx = HEAD.map((h) => { const i = first.findIndex((x) => x === h || (h === 'photo' && /photo|image/.test(x)) || (h === 'where' && /where|dest/.test(x))); return i; }); t = t.slice(1); rows = t.map((r) => check(idx.map((i) => (i >= 0 ? r[i] : '')))); }
+      else rows = t.map((r) => check(r));
+    }
+    function paint(msg) {
+      const ready = rows.filter((r) => !r.bad.length).length, problems = rows.length - ready;
+      $('#bkbody', m.el).innerHTML = `<h2 style="font-size:22px;margin-bottom:4px">Bulk add posts</h2>
+        <p class="hint">Copy rows from Google Sheets or Excel and paste them below, or open a CSV file. Columns in this order: <b>date, time, caption, photo file name, link, product, where</b>. “Where” can be Gallery, Instagram, Facebook (or a mix). Link and product are optional and match by name.</p>
+        <div class="row wrap" style="gap:6px;margin-bottom:6px"><label class="btn btn-sm" style="cursor:pointer">Open a CSV file<input type="file" id="bkcsv" accept=".csv,.tsv,.txt,text/csv" hidden></label><a href="#" class="small" id="bktpl">Download a template</a></div>
+        <textarea class="input" id="bktext" rows="5" placeholder="2026-12-01&#9;10:00 AM&#9;New tiles are up!&#9;frog1.jpg&#9;Instagram bio&#9;Blue frog tile&#9;Gallery, Instagram">${esc($('#bktext', m.el) ? $('#bktext', m.el).value : (m._text || ''))}</textarea>
+        <div class="row wrap" style="gap:6px;margin:8px 0;align-items:center"><button class="btn btn-sm btn-primary" id="bkcheck">Check rows</button><label class="btn btn-sm" style="cursor:pointer">Add photos<input type="file" id="bkphotos" accept="image/*" multiple hidden></label><span class="small muted">${new Set(files.values()).size} photo${new Set(files.values()).size === 1 ? '' : 's'} added. Photos match the file names in your sheet.</span></div>
+        <div id="bkmsg">${msg || ''}</div>
+        ${rows.length ? `<div class="card" style="overflow-x:auto;padding:0"><table><thead><tr><th>#</th><th>When</th><th>Caption</th><th>Photo</th><th>Status</th></tr></thead><tbody>${rows.map((r, i) => `<tr><td>${i + 1}</td><td class="small">${esc(r.raw[0])} ${esc(r.raw[1])}</td><td class="small" style="max-width:280px">${esc(r.caption.slice(0, 80))}</td><td class="small">${esc(r.raw[3])}</td><td>${r.bad.length ? r.bad.map((b) => `<span class="badge b-pending">${esc(b)}</span>`).join(' ') : '<span class="badge b-paid">Ready</span>'}</td></tr>`).join('')}</tbody></table></div>
+        <div class="row wrap" style="gap:10px;margin-top:10px;align-items:center;justify-content:flex-end"><span class="small muted">${ready} ready${problems ? `, ${problems} need attention` : ''}</span>${problems ? '<label class="row small" style="gap:6px"><input type="checkbox" id="bkdr" checked> Save the others as drafts</label>' : ''}<button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="bkgo" ${ready || problems ? '' : 'disabled'}>${ready ? `Schedule ${ready} post${ready === 1 ? '' : 's'}` : 'Save as drafts'}</button></div>` : '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" data-close>Close</button></div>'}`;
+      const q = (x) => $(x, m.el);
+      m.el.querySelectorAll('[data-close]').forEach((b) => { b.onclick = m.close; });
+      q('#bkcheck').onclick = () => { m._text = q('#bktext').value; load(m._text); paint(); };
+      q('#bkcsv').onchange = async (e) => { const f = e.target.files[0]; if (!f) return; m._text = await f.text(); load(m._text); paint(); };
+      q('#bktpl').onclick = (e) => { e.preventDefault(); const url = URL.createObjectURL(new Blob(['date,time,caption,photo,link,product,where\n2026-12-01,10:00 AM,"New tiles are up!",frog1.jpg,,,Gallery\n2026-12-03,2:30 PM,"Studio shelf this morning",shelf.jpg,,,"Gallery, Instagram"\n'], { type: 'text/csv' })); const l = document.createElement('a'); l.href = url; l.download = 'outpost-posts-template.csv'; document.body.appendChild(l); l.click(); l.remove(); };
+      q('#bkphotos').onchange = async (e) => {
+        const list = [...e.target.files]; if (!list.length) return; let n = 0;
+        for (const f of list) {
+          try { paint(`<div class="msg">Adding photo ${++n} of ${list.length}…</div>`); const url = await uploadImage(await jpegFrom(f)); await post('/api/admin/marketing/photos', { url }); files.set(f.name.toLowerCase(), url); files.set(stem(f.name), url); }
+          catch (er) { paint(`<div class="msg err">${esc(f.name)}: ${esc(er.message)}</div>`); return; }
+        }
+        m._text = q('#bktext') ? q('#bktext').value : m._text; load(m._text); paint(`<div class="msg ok">${list.length} photo${list.length === 1 ? '' : 's'} added.</div>`);
+      };
+      if (q('#bkgo')) q('#bkgo').onclick = async () => {
+        const asDrafts = q('#bkdr') ? q('#bkdr').checked : false; let made = 0, drafts = 0, failed = 0; q('#bkgo').disabled = true;
+        for (const r of rows) {
+          const ok = !r.bad.length; if (!ok && !asDrafts) continue;
+          const body = { caption: r.caption.slice(0, 2200), photos: r.photos, link_code: r.link_code, product_id: r.product_id, scheduled_at: r.scheduled_at, status: ok ? 'scheduled' : 'draft', to_gallery: r.to_gallery, to_instagram: r.to_instagram, to_facebook: r.to_facebook };
+          try { await post('/api/admin/marketing/posts', body); ok ? made++ : drafts++; } catch { failed++; }
+        }
+        m.close(); toast(`${made} scheduled${drafts ? `, ${drafts} saved as drafts` : ''}${failed ? `, ${failed} failed` : ''}`); await refresh();
+      };
+    }
+    paint();
   }
 
   // Ready to post ------------------------------------------------------------
