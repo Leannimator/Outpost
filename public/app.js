@@ -44,6 +44,7 @@
     shop: '<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/><path d="M5 12v8h14v-8"/>',
     products: '<path d="M4 8l8-4 8 4v8l-8 4-8-4V8z"/><path d="M4 8l8 4 8-4M12 12v8"/>',
     orders: '<rect x="6" y="5" width="12" height="16" rx="2"/><path d="M9 5V4h6v1M9 11h6M9 15h4"/>',
+    marketing: '<path d="M4 10v4h3l7 4V6L7 10H4z"/><path d="M17 9a4 4 0 0 1 0 6"/>',
     security: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
     settings: '<path d="M5 7h14M5 12h14M5 17h14"/><circle cx="9" cy="7" r="2" fill="var(--cream-2)"/><circle cx="15" cy="12" r="2" fill="var(--cream-2)"/><circle cx="8" cy="17" r="2" fill="var(--cream-2)"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
@@ -177,7 +178,7 @@
   }
 
   // ---------- shell + router ----------
-  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['reports', 'Reports', '#/reports'], ['security', 'Security', '#/security'], ['settings', 'Settings', '#/settings']];
+  const NAV = [['sell', 'In person', '#/sell'], ['auctions', 'Auctions', '#/auctions'], ['products', 'Products', '#/products'], ['orders', 'Orders', '#/orders'], ['customers', 'Customers', '#/customers'], ['reviews', 'Reviews', '#/reviews'], ['links', 'Links', '#/links'], ['marketing', 'Marketing', '#/marketing'], ['reports', 'Reports', '#/reports'], ['security', 'Security', '#/security'], ['settings', 'Settings', '#/settings']];
 
   function paintResting() { const el = document.getElementById('resting'); if (el) el.hidden = !settings.break_on; }
   function paintBrand() { if (window.OutpostBrand) OutpostBrand.apply(settings); paintResting(); }
@@ -206,7 +207,7 @@
     [/^#\/products\/(new|\d+)$/, viewEditor, 'products'], [/^#\/lines$/, viewLines, 'products'], [/^#\/auctions$/, viewAuctions, 'auctions'],
     [/^#\/auctions\/new$/, viewNewAuction, 'auctions'], [/^#\/orders$/, viewOrders, 'orders'],
     [/^#\/customers$/, viewCustomers, 'customers'], [/^#\/reports$/, viewReports, 'reports'], [/^#\/reviews$/, viewReviews, 'reviews'], [/^#\/links$/, viewLinks, 'links'],
-    [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
+    [/^#\/marketing(?:\/(links|sources))?$/, viewMarketing, 'marketing'], [/^#\/settings$/, viewSettings, 'settings'], [/^#\/security$/, viewSecurity, 'security'],
   ];
 
   async function route() {
@@ -1151,6 +1152,100 @@
   // LINKS (link-in-bio page)
   // =====================================================================
   const SHOP_PAGES = [['store.html', 'My shop'], ['auction.html', 'Auctions'], ['about.html', 'About page'], ['reviews.html', 'Reviews']];
+  // =====================================================================
+  // MARKETING (tracked links, sales by source)
+  // =====================================================================
+  async function viewMarketing(m) {
+    const tab = (m && m[1]) || 'links';
+    const seq = routeSeq;
+    view().innerHTML = `
+      <div class="topbar"><h1>Marketing</h1></div>
+      <div class="seg" id="mktabs">
+        <button data-t="links" class="${tab === 'links' ? 'on' : ''}">Tracked links</button>
+        <button data-t="sources" class="${tab === 'sources' ? 'on' : ''}">Sales by source</button>
+      </div>
+      <div id="mkbody" style="margin-top:12px"></div>`;
+    document.querySelectorAll('#mktabs button').forEach((b) => { b.onclick = () => { location.hash = '#/marketing/' + b.dataset.t; }; });
+    if (tab === 'sources') return mktSources(seq);
+    return mktLinks(seq);
+  }
+
+  async function mktLinks(seq) {
+    const body = $('#mkbody');
+    const d = await api('/api/admin/marketing/links');
+    if (seq !== routeSeq) return;
+    const dests = d.dests;
+    const rowHtml = (l) => `<tr${l.archived ? ' style="opacity:.55"' : ''}>
+      <td><b>${esc(l.name)}</b>${l.archived ? ' <span class="small muted">(archived)</span>' : ''}<div class="small muted">${esc(dests[l.dest] || 'Shop')}</div></td>
+      <td class="small" style="word-break:break-all"><code>${esc(l.dest + '?s=' + l.code)}</code></td>
+      <td>${l.visits_30}<div class="small muted">${l.visits_total} all time</div></td>
+      <td>${l.orders}<div class="small muted">${fmt(l.revenue_cents)}</div></td>
+      <td><div class="row wrap" style="gap:4px;justify-content:flex-end"><button class="btn btn-sm" data-copy="${l.id}">Copy</button><button class="btn btn-sm" data-qr="${l.id}">QR</button><button class="btn btn-sm" data-arc="${l.id}">${l.archived ? 'Restore' : 'Archive'}</button></div></td></tr>`;
+    body.innerHTML = `
+      <div class="card" style="margin-bottom:14px">
+        <h2 style="font-size:22px;margin-bottom:6px">New tracked link</h2>
+        <p class="hint">Put a link like this in an Instagram bio, a post, an email, or on a sign at a market. Outpost counts the visits and the sales that follow. It counts per day only: no cookies, and no visitor addresses are kept.</p>
+        <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
+          <input class="input" id="lname" placeholder="Instagram bio" maxlength="60" style="flex:1;min-width:180px">
+          <select class="input" id="ldest" style="width:auto">${Object.entries(dests).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('')}</select>
+          <button class="btn btn-primary" id="ladd">Add link</button>
+        </div>
+        <div id="lmsg"></div>
+      </div>
+      <div class="card" style="overflow-x:auto">${d.links.length ? `<table><thead><tr><th>Name</th><th>Address</th><th>Visits (30 days)</th><th>Orders</th><th></th></tr></thead><tbody>${d.links.map(rowHtml).join('')}</tbody></table>`
+        : '<div class="empty">No tracked links yet. Make one above, then use it wherever you share your shop.</div>'}</div>
+      <p class="hint" style="margin-top:8px">Orders and sales count paid online orders that came through the link. Someone who visits on one device and buys on another counts as direct.</p>`;
+    $('#ladd').onclick = async () => {
+      const name = $('#lname').value.trim();
+      if (!name) { $('#lmsg').innerHTML = '<div class="msg err">Give the link a name first.</div>'; return; }
+      $('#ladd').disabled = true;
+      try { await post('/api/admin/marketing/links', { name, dest: $('#ldest').value }); toast('Link added'); await mktLinks(seq); }
+      catch (e) { $('#lmsg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; $('#ladd').disabled = false; }
+    };
+    body.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = async () => {
+      const l = d.links.find((x) => x.id === Number(b.dataset.copy));
+      try { await navigator.clipboard.writeText(l.url); toast('Copied'); } catch { prompt('Copy this address:', l.url); }
+    }; });
+    body.querySelectorAll('[data-arc]').forEach((b) => { b.onclick = async () => {
+      const l = d.links.find((x) => x.id === Number(b.dataset.arc));
+      try { await put('/api/admin/marketing/links/' + l.id, { archived: !l.archived }); await mktLinks(seq); } catch (e) { toast(e.message); }
+    }; });
+    body.querySelectorAll('[data-qr]').forEach((b) => { b.onclick = async () => {
+      const l = d.links.find((x) => x.id === Number(b.dataset.qr));
+      try {
+        const r = await api('/api/admin/marketing/links/' + l.id + '/qr');
+        const mdl = openModal(`<h2 style="font-size:22px;margin-bottom:8px">${esc(l.name)}</h2><div class="center"><img src="${esc(r.qr)}" alt="QR code for ${esc(l.name)}" style="width:240px;height:240px"></div><p class="hint center" style="word-break:break-all">${esc(r.url)}</p><p class="hint center">Right-click the code to save it, or print this page.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-close>Close</button></div>`);
+        mdl.el.querySelector('[data-close]').onclick = mdl.close;
+      } catch (e) { toast(e.message); }
+    }; });
+  }
+
+  async function mktSources(seq) {
+    const body = $('#mkbody');
+    let days = Number(store.get('outpost_mk_days') || 30) || 30;
+    const paint = async () => {
+      const d = await api('/api/admin/marketing/sources?days=' + days);
+      if (seq !== routeSeq) return;
+      const max = Math.max(1, ...d.rows.map((r) => r.revenue_cents), d.direct.revenue_cents);
+      const bar = (c, grey) => `<span style="background:var(--cream-2);border-radius:6px;height:12px;display:block"><span style="display:block;height:12px;border-radius:6px;width:${Math.round((c / max) * 100)}%;background:${grey ? '#c9c2b3' : 'var(--forest)'}"></span></span>`;
+      body.innerHTML = `
+        <div class="row" style="margin-bottom:12px"><h2 style="font-size:22px">Where sales come from</h2><div class="spacer"></div>
+          <select class="input" id="dsel" style="width:auto">${[7, 30, 90].map((n) => `<option value="${n}"${n === d.days ? ' selected' : ''}>Last ${n} days</option>`).join('')}</select></div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px">
+          <div class="card"><div class="small muted">Visits</div><div style="font-size:24px;font-weight:600">${d.visits}</div></div>
+          <div class="card"><div class="small muted">Online orders</div><div style="font-size:24px;font-weight:600">${d.orders}</div></div>
+          <div class="card"><div class="small muted">Sales</div><div style="font-size:24px;font-weight:600">${fmt(d.revenue_cents)}</div></div>
+        </div>
+        <div class="card">${d.rows.length || d.direct.orders ? `
+          ${d.rows.map((r) => `<div style="display:grid;grid-template-columns:minmax(0,150px) 1fr 140px;gap:10px;align-items:center;margin-bottom:10px"><span>${esc(r.name)}<div class="small muted">${r.visits} visit${r.visits === 1 ? '' : 's'}</div></span>${bar(r.revenue_cents)}<span style="text-align:right">${fmt(r.revenue_cents)}<div class="small muted">${r.orders} order${r.orders === 1 ? '' : 's'}</div></span></div>`).join('')}
+          <div style="display:grid;grid-template-columns:minmax(0,150px) 1fr 140px;gap:10px;align-items:center"><span>Direct or unknown<div class="small muted">no tracked link</div></span>${bar(d.direct.revenue_cents, true)}<span style="text-align:right">${fmt(d.direct.revenue_cents)}<div class="small muted">${d.direct.orders} order${d.direct.orders === 1 ? '' : 's'}</div></span></div>`
+          : '<div class="empty">Nothing to show yet. Make a tracked link, share it, and the visits and sales will appear here.</div>'}</div>
+        <p class="hint" style="margin-top:8px">Paid online orders only, after refunds. In-person and auction sales are not included here.</p>`;
+      $('#dsel').onchange = (e) => { days = Number(e.target.value); try { store.set('outpost_mk_days', String(days)); } catch { /* ignore */ } paint(); };
+    };
+    await paint();
+  }
+
   async function viewLinks() {
     const [cur, st] = await Promise.all([api('/api/admin/links'), api('/api/admin/status')]);
     let list = (cur.links || []).map((l) => ({ ...l }));

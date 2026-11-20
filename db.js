@@ -340,6 +340,25 @@ for (const o of needToken) setToken.run(crypto.randomBytes(12).toString('hex'), 
     db.exec("UPDATE admin_sessions SET ip = ''");                       // sessions no longer remember an address
   }
 
+  // ----- marketing tab, step 1: tracked links and where orders come from -----
+  // A tracked link is a short code the owner puts in a post, email or QR code. Visits are only COUNTED per day (no cookies, no visitor addresses stored).
+  db.exec(`CREATE TABLE IF NOT EXISTS tracked_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    name TEXT NOT NULL,
+    dest TEXT NOT NULL DEFAULT '/shop',
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS link_visits (
+    code TEXT NOT NULL COLLATE NOCASE,
+    day TEXT NOT NULL,
+    visits INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (code, day)
+  )`);
+  addCol('orders', 'source', "TEXT NOT NULL DEFAULT ''");              // the tracked link a shopper arrived by ('' = direct or unknown)
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_orders_source ON orders (source)'); } catch { /* speed-up only */ }
+
   // Indexes: without these the order export and the customers list scanned whole tables once per order (review item 78).
   for (const sql of [
     'CREATE INDEX IF NOT EXISTS idx_items_order ON order_items (order_id)',

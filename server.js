@@ -1037,6 +1037,34 @@ app.get('/robots.txt', (req, res) => {
   res.set('Cache-Control', 'public, max-age=3600');
   res.type('text/plain').send(AiShield.robotsTxt(aiShieldOn()));
 });
+// ---------- marketing: tracked links (visits are only COUNTED per day; no cookies, no visitor addresses stored) ----------
+const LINK_CODE_RE = /^[a-z0-9][a-z0-9_-]{0,29}$/i;
+const LINK_DESTS = { '/shop': 'Shop', '/links': 'Links page', '/about': 'About page' };
+const LINK_MAX = 200;
+const BOT_UA_RE = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|fetch|monitor|curl|wget|python|headless/i;
+const COUNTED_PAGES = new Set(['/shop', '/links', '/about', '/store.html', '/links.html', '/about.html']);
+// The canonical code of an ACTIVE-or-archived link that really exists, or '' (so made-up codes never reach the database).
+const knownLinkCode = (c) => {
+  c = String(c || '').trim();
+  if (!LINK_CODE_RE.test(c)) return '';
+  const r = db.prepare('SELECT code FROM tracked_links WHERE code = ?').get(c);
+  return r ? r.code : '';
+};
+app.use((req, res, next) => {
+  try {
+    if (req.method === 'GET' && COUNTED_PAGES.has(req.path) && typeof req.query.s === 'string') {
+      const ua = String(req.get('user-agent') || '');
+      if (ua && !BOT_UA_RE.test(ua) && !/prefetch|prerender/i.test(String(req.get('purpose') || req.get('sec-purpose') || ''))) {
+        const code = knownLinkCode(req.query.s);
+        if (code && rlCount('lv:' + ipKey(req), 3600e3) < 120) {
+          rlAdd('lv:' + ipKey(req));
+          db.prepare('INSERT INTO link_visits (code, day, visits) VALUES (?, ?, 1) ON CONFLICT(code, day) DO UPDATE SET visits = visits + 1').run(code, todayStr());
+        }
+      }
+    }
+  } catch (e) { console.warn('Outpost: could not count a link visit (' + (e && e.message) + ').'); }
+  next();
+});
 // Short, shareable addresses: yourshop.com/links goes in your Instagram bio.
 const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html' };
 for (const [route, file] of Object.entries(CLEAN_PAGES)) app.get(route, (req, res) => res.sendFile(path.join(__dirname, 'public', file)));
@@ -1169,6 +1197,7 @@ app.post('/api/checkout', h(async (req, res) => {
   }
   rlAdd('co1:' + ipKey(req)); rlAdd('co2:' + ipKey(req)); rlAdd('coall');
   const orderId = createOrder('online', 'card', 'pending', priced);
+  { const src = knownLinkCode(req.body.source); if (src) db.prepare('UPDATE orders SET source = ? WHERE id = ?').run(src, orderId); }   // which tracked link the shopper arrived by
   const a = priced.address;
   if (a) {
     // The address was entered in Outpost's own checkout and Stripe never asks again, so shipping and tax can't be changed on the payment page.
@@ -1532,6 +1561,71 @@ app.put('/api/admin/settings', requireAdmin, h(async (req, res) => {
 
 app.get('/api/admin/links', requireAdmin, (req, res) => {
   res.json({ links: linksAll(), links_intro: getSetting('links_intro', ''), mailing_list_on: getSetting('mailing_list_on', '') === '1' });
+});
+
+// ---------- marketing: tracked links and where sales come from (owner only) ----------
+const daysAgoStr = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const linkUrl = (l) => `${BASE_URL}${l.dest}?s=${l.code}`;
+const salesBySource = (sinceDays) => {
+  const since = `datetime('now','-${Number(sinceDays) | 0} days')`;
+  const rows = db.prepare(`SELECT source, COUNT(*) n, COALESCE(SUM(total_cents - refunded_cents),0) cents FROM orders WHERE status = 'paid' AND channel = 'online' AND created_at >= ${since} GROUP BY source`).all();
+  const m = new Map(rows.map((r) => [r.source, r]));
+  return m;
+};
+app.get('/api/admin/marketing/links', requireAdmin, (req, res) => {
+  const cut = daysAgoStr(30);
+  const links = db.prepare('SELECT id, code, name, dest, archived, created_at FROM tracked_links ORDER BY archived, created_at DESC, id DESC').all();
+  const v30 = new Map(db.prepare('SELECT code, SUM(visits) v FROM link_visits WHERE day >= ? GROUP BY code').all(cut).map((r) => [r.code.toLowerCase(), r.v]));
+  const vAll = new Map(db.prepare('SELECT code, SUM(visits) v FROM link_visits GROUP BY code').all().map((r) => [r.code.toLowerCase(), r.v]));
+  const sales = new Map(db.prepare("SELECT source, COUNT(*) n, COALESCE(SUM(total_cents - refunded_cents),0) cents FROM orders WHERE status = 'paid' AND source <> '' GROUP BY source COLLATE NOCASE").all().map((r) => [r.source.toLowerCase(), r]));
+  res.json({ dests: LINK_DESTS, links: links.map((l) => ({ ...l, url: linkUrl(l), visits_30: v30.get(l.code.toLowerCase()) || 0, visits_total: vAll.get(l.code.toLowerCase()) || 0, orders: (sales.get(l.code.toLowerCase()) || {}).n || 0, revenue_cents: (sales.get(l.code.toLowerCase()) || {}).cents || 0 })) });
+});
+const slugCode = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'link';
+app.post('/api/admin/marketing/links', requireAdmin, (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 60);
+  if (!name) throw new HttpError(400, 'Give the link a name, like “Instagram bio”.');
+  const dest = Object.prototype.hasOwnProperty.call(LINK_DESTS, req.body.dest) ? req.body.dest : '/shop';
+  if (db.prepare('SELECT COUNT(*) c FROM tracked_links').get().c >= LINK_MAX) throw new HttpError(400, 'That is a lot of links. Archive some you no longer use.');
+  let code = String(req.body.code || '').trim();
+  if (code && !LINK_CODE_RE.test(code)) throw new HttpError(400, 'A link code can use letters, numbers, dashes and underscores (30 at most).');
+  if (!code) code = slugCode(name);
+  const taken = db.prepare('SELECT 1 FROM tracked_links WHERE code = ?');
+  if (req.body.code && taken.get(code)) throw new HttpError(409, 'You already have a link with that code.');
+  let base = code, n = 2;
+  while (taken.get(code)) { code = base.slice(0, 26) + '-' + n++; }
+  const info = db.prepare('INSERT INTO tracked_links (code, name, dest, created_at) VALUES (?, ?, ?, ?)').run(code, name, dest, Date.now());
+  const l = db.prepare('SELECT id, code, name, dest, archived, created_at FROM tracked_links WHERE id = ?').get(info.lastInsertRowid);
+  res.json({ ...l, url: linkUrl(l) });
+});
+app.put('/api/admin/marketing/links/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id) || 0;
+  const l = db.prepare('SELECT * FROM tracked_links WHERE id = ?').get(id);
+  if (!l) throw new HttpError(404, 'That link was not found.');
+  const name = req.body.name === undefined ? l.name : String(req.body.name || '').trim().slice(0, 60);
+  if (!name) throw new HttpError(400, 'Give the link a name.');
+  const archived = req.body.archived === undefined ? l.archived : (req.body.archived ? 1 : 0);
+  db.prepare('UPDATE tracked_links SET name = ?, archived = ? WHERE id = ?').run(name, archived, id);
+  res.json({ ok: true });
+});
+app.get('/api/admin/marketing/links/:id/qr', requireAdmin, h(async (req, res) => {
+  const l = db.prepare('SELECT code, dest FROM tracked_links WHERE id = ?').get(Number(req.params.id) || 0);
+  if (!l) throw new HttpError(404, 'That link was not found.');
+  res.set('Cache-Control', 'no-store');
+  res.json({ url: linkUrl(l), qr: await QRCode.toDataURL(linkUrl(l), { width: 320, margin: 1 }) });
+}));
+app.get('/api/admin/marketing/sources', requireAdmin, (req, res) => {
+  const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+  const cut = daysAgoStr(days);
+  const sales = salesBySource(days);
+  const links = db.prepare('SELECT code, name FROM tracked_links').all();
+  const visits = new Map(db.prepare('SELECT code, SUM(visits) v FROM link_visits WHERE day >= ? GROUP BY code').all(cut).map((r) => [r.code.toLowerCase(), r.v]));
+  const bySource = new Map([...sales].map(([k, v]) => [k.toLowerCase(), v]));
+  const rows = links.map((l) => ({ code: l.code, name: l.name, visits: visits.get(l.code.toLowerCase()) || 0, orders: (bySource.get(l.code.toLowerCase()) || {}).n || 0, revenue_cents: (bySource.get(l.code.toLowerCase()) || {}).cents || 0 }))
+    .filter((r) => r.visits || r.orders).sort((a, b) => b.revenue_cents - a.revenue_cents || b.visits - a.visits);
+  const known = new Set(links.map((l) => l.code.toLowerCase()));
+  let dn = 0, dc = 0;
+  for (const [k, v] of sales) if (k === '' || !known.has(k.toLowerCase())) { dn += v.n; dc += v.cents; }
+  res.json({ days, visits: rows.reduce((a, r) => a + r.visits, 0), orders: rows.reduce((a, r) => a + r.orders, 0) + dn, revenue_cents: rows.reduce((a, r) => a + r.revenue_cents, 0) + dc, rows, direct: { orders: dn, revenue_cents: dc } });
 });
 
 // ---------- email list (download as CSV and import into your own email service; Outpost sends no email) ----------

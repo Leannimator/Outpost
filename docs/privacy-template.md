@@ -9,6 +9,7 @@
 - **Auctions:** the name and email you give when you join to bid, and your bids. If the shop asks for a card first, Stripe keeps the card and I only see the brand and last four digits.
 - **Reviews:** your review, and your first name plus last initial.
 - **Security:** your IP address is used briefly to stop spam and abuse.
+- **Where visitors come from:** if you arrive through a link I shared (for example from Instagram or an email), I add one to a daily count for that link, and note the link on your order if you buy. I don't keep your address or build a profile of you.
 
 ## What I don't do
 I don't sell your information. I don't run advertising trackers. Outpost does not send marketing emails by itself.

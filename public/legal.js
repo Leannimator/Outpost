@@ -37,13 +37,14 @@
         ${s.mailing_list_on ? '<li><b>Email list:</b> your email address, if you choose to sign up for news from us.</li>' : ''}
         <li><b>Reviews:</b> what you write, shown with your first name and last initial.</li>
         <li><b>Safety checks:</b> your IP address and basic browser details, used only to stop spam and fraud.</li>
+        <li><b>Where visitors come from:</b> if you arrive from a link we shared, we add one to a daily count for that link, and note it on your order if you buy. We don’t keep your address or build a profile of you.</li>
       </ul>
       <h2>Payments</h2>
       <p>Card payments are handled by Stripe. Your card number goes straight to Stripe and is never seen or stored by ${name}. Stripe’s own privacy policy covers how they handle it.</p>
       <h2>Who we share it with</h2>
       <p>Only the services needed to run the shop: Stripe for payments and shipping carriers to deliver your order. We don’t sell or rent your information, and we don’t show you third-party ads.</p>
       <h2>Cookies and storage</h2>
-      <p>We store small items in your browser, like what’s in your cart and which bidder you are, so the shop works. We don’t use advertising or tracking cookies.</p>
+      <p>We store small items in your browser, like what’s in your cart and which bidder you are, so the shop works. If you arrive from a link we shared, your browser also remembers which one until you close the tab, so we can note it on your order. We don’t use advertising or tracking cookies.</p>
       ${s.mailing_list_on ? `<h2>Our email list</h2><p>If you join, we use your email only to send news from ${name}. Every email has a way to unsubscribe, or you can ask us at ${contact} and we’ll remove you.</p>` : ''}
       ${p.privacy_extra ? `<h2>More from us</h2>${para(p.privacy_extra)}` : ''}
       <h2>Your choices and contact</h2>
