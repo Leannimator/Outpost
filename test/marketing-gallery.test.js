@@ -143,8 +143,8 @@ test('the Gallery page is served, counted as a visit for a tracked link, and the
     const l = (await a.post('/api/admin/marketing/links', { name: 'Bio link', dest: '/gallery' })).data;
     const r = await fetch(s.base + '/gallery?s=' + l.code, { headers: { 'user-agent': 'Mozilla/5.0 Chrome/120' } });
     assert.equal(r.status, 200); assert.match(await r.text(), /gal-grid|Gallery/);
-    const rows = (await a.get('/api/admin/marketing/links')).data;
-    assert.equal(rows.find((x) => x.code === l.code).visits ?? rows.find((x) => x.code === l.code).total_visits ?? 1, rows.find((x) => x.code === l.code).visits ?? rows.find((x) => x.code === l.code).total_visits ?? 1);
+    const dbh = open(s); const row = dbh.prepare('SELECT SUM(visits) v FROM link_visits WHERE code = ?').get(l.code); dbh.close();
+    assert.equal(row.v, 1, 'one real page load of /gallery counted for the link');
     assert.equal((await s.j('GET', '/api/settings')).data.gallery_on, false);
   } finally { s.stop(); }
 });
