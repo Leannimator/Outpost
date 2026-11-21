@@ -317,3 +317,14 @@ test('every designed email gets its own tracked link automatically; test sends c
     assert.equal(after.allowance_today, before.allowance_today, 'but marketing room is unchanged while the reserve covers it');
   } finally { stop(); }
 });
+
+test('a Banner email can use its own header image in place of the logo, and it survives saving', () => {
+  const ctx = { shop: 'Shop', base: 'http://x.test', logo: '/images/logo.png', address: '', unsubUrl: 'http://x.test/u' };
+  const d = mailer.cleanDesign({ template: 'banner', header_url: '/images/hero.jpg', blocks: [{ type: 'heading', text: 'Hi' }] });
+  assert.equal(d.header_url, '/images/hero.jpg', 'kept when saved');
+  const html = mailer.renderDesign(d, ctx).html;
+  assert.ok(html.includes('http://x.test/images/hero.jpg') && !html.includes('logo.png'), 'the header image replaces the logo');
+  assert.ok(mailer.renderDesign({ template: 'banner', blocks: [] }, ctx).html.includes('logo.png'), 'no header image: the logo shows as before');
+  assert.ok(!mailer.renderDesign({ template: 'plain', header_url: '/images/hero.jpg', blocks: [] }, ctx).html.includes('hero.jpg'), 'Plain has no header');
+  assert.equal(mailer.cleanDesign({ template: 'banner', header_url: 'javascript:alert(1)', blocks: [] }).header_url, undefined, 'unsafe addresses are dropped');
+});
