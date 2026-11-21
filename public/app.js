@@ -2188,7 +2188,6 @@
     const card = (title, inner) => `<div class="card"><h2 style="font-size:22px;margin-bottom:14px">${title}</h2>${inner}</div>`;
     view().innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
-      <div class="msg" style="margin-bottom:14px">Looking for email? Sending emails and the sender address are in <a href="#/marketing/email">Marketing → Email</a>. Your email list is under <a href="#/people/email">People → Email list</a>, and the signup box on your Link page is in <a href="#/links">Link page</a>.</div>
       <div class="settings-col">
         <div style="display:grid;gap:18px;min-width:0">
           <h2 class="sgroup">Your shop</h2>
