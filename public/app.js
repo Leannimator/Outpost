@@ -166,7 +166,7 @@
       <div class="login-wrap"><div class="login-col"><div class="login card">
         <span class="wordmark" data-brand="name">Outpost</span>${inner}
       </div>
-      <div class="login-shop"><div>Looking to shop?</div><a class="btn btn-block" href="/shop">Take me to the shop →</a></div></div></div>`;
+      </div></div>`;
     const finish = (d) => { token = d.token; store.set('outpost_token', token); if (d.device_token) device.set(d.device_token); init(); };
     function passwordStep(m) {
       pending = null;
@@ -655,7 +655,7 @@
           <label class="field"><span class="label">Shop label</span><select class="input" id="badge">${BADGES.map(([k, l]) => `<option value="${k}"${s.badge === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
             <div class="hint">A small tag on the photo. “Sold out” and “Only a few left” appear on their own.</div></label>
           <div class="field"><span class="label">Collections</span><div class="chips" id="linechips"></div>
-            <div class="hint">${allLines.length ? 'A group you put together, like “Winter” or “Gift sets”. Optional. You can pick more than one.' : 'A group you put together, like “Winter” or “Gift sets”. Optional. <a href="#/lines">Make your first collection</a>.'}</div></div>
+            <div class="hint">${allLines.length ? 'A group you put together, like “Winter” or “Gift sets”. Optional. You can pick more than one.' : 'A group you put together, like “Winter” or “Gift sets”. Optional.'}</div></div>
           <div class="field"><span class="label">Tags</span><div class="chips" id="tags"></div></div>
         </div>
       </div>`;
@@ -1054,7 +1054,7 @@
           <label class="field"><span class="label">Tracking number</span><input class="input" id="trk" value="${esc(o.tracking_number || '')}"></label></div>
         <div class="row" style="flex-wrap:wrap"><button class="btn btn-primary btn-sm" id="fsave">Save shipping</button>
           ${o.customer_email ? '<a class="btn btn-sm" id="fmail" href="#">Email buyer…</a>' : '<span class="muted small">No buyer email on this order.</span>'}</div>
-        <div class="hint">“Email buyer” opens a ready-written message in your email app. Marketing emails to your list are sent from <a href="#/marketing/email">Marketing → Email</a>.</div>
+        <div class="hint">“Email buyer” opens a ready-written message in your email app.</div>
         <div id="fmsg"></div></div>` : ''}
       <div class="mgbox"><div class="label">Refund</div>
         ${o.refunded_cents > 0 ? `<div class="small" style="margin-bottom:8px">Already refunded ${fmt(o.refunded_cents)}${o.refund_note ? ` · “${esc(o.refund_note)}”` : ''}.</div>` : ''}
@@ -1255,7 +1255,7 @@
     host.innerHTML = `<div class="row" style="justify-content:flex-end;margin-bottom:8px"><button class="btn" id="erasebtn" style="color:var(--bad,#b42318);border-color:currentColor">Erase a person…</button></div><div id="cmsg"></div><div id="erasebox"></div>
       <div class="card" id="elist" style="margin-bottom:18px"><div class="row" style="flex-wrap:wrap;gap:10px;align-items:center"><div><h2 style="font-size:20px;margin:0">Email list</h2><div class="small muted"><b>${subs.filter((x) => !x.unsubscribed).length}</b> subscribed${subs.some((x) => x.unsubscribed) ? ` · ${subs.filter((x) => x.unsubscribed).length} unsubscribed` : ''}. Only people who ticked the box on your links page.</div></div><span class="spacer"></span><button class="btn btn-primary" id="edl" ${subs.length ? '' : 'disabled'}>Download CSV</button></div>
         ${subs.length ? `<div class="tbl-scroll" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Joined</th><th>From</th><th>Status</th><th></th></tr></thead><tbody id="erows">${subs.slice(0, 50).map((x) => `<tr><td>${esc(x.email)}</td><td class="small">${esc(new Date(x.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }))}</td><td class="small">${esc(x.source || '')}</td><td>${x.unsubscribed ? '<span class="badge b-canceled">Unsubscribed</span>' : x.bounced ? '<span class="badge b-canceled">Bounced</span>' : !x.consent_at ? '<span class="badge">No consent on file</span>' : !x.confirmed_at ? '<span class="badge b-pending">Waiting to confirm</span>' : '<span class="badge b-paid">Subscribed</span>'}</td><td><button class="btn btn-sm" data-eun="${x.id}" data-to="${x.unsubscribed ? 0 : 1}">${x.unsubscribed ? 'Put back on list' : 'Mark unsubscribed'}</button> <button class="btn btn-sm btn-ghost" data-esub="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table>${subs.length > 50 ? `<div class="small muted" style="margin-top:6px">Showing the latest 50. The CSV has everyone.</div>` : ''}</div>` : '<p class="muted small" style="margin:10px 0 0">No signups yet. Turn on the signup box under Links.</p>'}
-        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Write and send emails to this list in <a href="#/marketing/email">Marketing → Email</a>. Only people who agreed, haven’t unsubscribed or bounced (and confirmed, if you ask for that) are ever emailed.</div></div>`;
+        <div class="hint">The CSV (email, joined, source, status) opens in any spreadsheet and imports into Mailchimp, Buttondown, Kit, Klaviyo and most other email services. Only people who agreed, haven’t unsubscribed or bounced (and confirmed, if you ask for that) are ever emailed.</div></div>`;
     // --- erase a person (delete-my-information requests) ---
     $('#erasebtn').onclick = () => {
       $('#erasebox').innerHTML = `<div class="card" style="margin-bottom:18px"><h2 style="font-size:20px;margin:0 0 6px">Erase a person’s information</h2>
@@ -1759,7 +1759,7 @@
       const pal = locked ? '' : `<aside class="me-pal" aria-label="Add a module"><div class="label">Header</div><div class="seg" id="me-hdr" style="margin:0 0 12px"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}">Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}">Banner</button></div>${design.template !== 'plain' ? `<div class="me-hdrimg">${design.header_url ? `<img src="${esc(design.header_url)}" alt="Header image">` : ''}<label class="btn btn-sm">${design.header_url ? 'Change image' : 'Add header image'}<input type="file" accept="image/*" hidden data-hdr-up></label>${design.header_url ? '<button type="button" class="btn btn-sm btn-ghost" data-hdr-rm>Remove</button>' : ''}<div class="small muted">Replaces your logo at the top of this email. A wide image works best.</div></div>` : ''}
         <div class="label">Add a module</div>${MODS.map(([t, g, d]) => `<button class="me-mod" data-add="${t}"><i>${g}</i><span><b>${BLOCK_NAMES[t]}</b><small>${d}</small></span></button>`).join('')}</aside>`;
       const build = `<section class="me-build">${design.blocks.map(blockHtml).join('') || '<div class="empty">Add a module from the left to begin.</div>'}
-        <div class="card" style="margin:10px 0 0"><div class="small muted">Sales from this email are counted automatically. See them in Marketing → Sales by link.</div>
+        <div class="card" style="margin:10px 0 0">
           ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center;margin-top:10px"><input class="input" id="me-to" type="email" placeholder="you@example.com" style="max-width:220px"><button class="btn btn-sm" id="me-test">Send me a test</button><button class="btn btn-sm" id="me-tpl">Save as template</button></div>`}</div></section>`;
       const pv = pvOn ? `<section class="me-pvp" aria-label="Email preview"><iframe id="me-prev" sandbox="" title="Email preview"></iframe></section>` : '';
       $('#mebody', m.el).innerHTML = `${top}<div class="me-grid" style="grid-template-columns:${cols}">${pal}${build}${pv}</div>
@@ -1936,8 +1936,7 @@
           <p class="muted small" style="margin:0 0 10px">One page to put in your Instagram bio (or anywhere else) that points people to your shop, events, classes, anything.</p>
           <div class="row" style="flex-wrap:wrap;gap:8px"><input class="input" id="lurl" readonly value="${esc(base + '/links')}" style="flex:1;min-width:200px"><button class="btn" id="lcopy">Copy</button><a class="btn btn-ghost" href="links.html" target="_blank" rel="noopener">Open ↗</a></div>
           <label class="field" style="margin-top:14px"><span class="label">Short line under your name (optional)</span><input class="input" id="lintro" maxlength="160" placeholder="Linocut prints, ceramics and weekend workshops in Portland" value="${esc(cur.links_intro || '')}"></label>
-          <label class="check"><input type="checkbox" id="lmail" ${cur.mailing_list_on ? 'checked' : ''}> <span>Show an email signup box on this page</span></label><div class="hint" style="margin:2px 0 8px 26px">This only collects sign-ups. Writing and sending emails is in <a href="#/marketing/email">Marketing → Email</a>.</div>
-          <div class="hint">People who sign up are saved under People → Email list, and you can download them to use in any email service.</div></div>
+          <label class="check"><input type="checkbox" id="lmail" ${cur.mailing_list_on ? 'checked' : ''}> <span>Show an email signup box on this page</span></label></div>
         <div class="card"><h2 style="font-size:22px;margin-bottom:6px">Buttons and events</h2>
           <div id="llist"></div>
           <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn" data-add="link">+ Add a link</button><button class="btn" data-add="event">+ Add an event</button><button class="btn" data-add="shop">+ Add a page from my shop</button></div>
@@ -2249,7 +2248,7 @@
               ${[['', 'Not set (nothing shown)'], ['final', 'All sales final'], ['days', 'Refunds within a number of days'], ['exchange', 'Exchanges or store credit only'], ['custom', 'Write my own']].map(([k, l]) => `<option value="${k}"${rp.preset === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
             <label class="field" id="rdaysw"><span class="label">Number of days</span><input class="input" id="rdays" inputmode="numeric" value="${esc(rp.days)}"></label>
             <label class="field" id="rtextw"><span class="label">Your policy, in your words</span><textarea class="input" id="rtext" rows="3" maxlength="500">${esc(rp.custom)}</textarea></label>
-            <div class="hint">Shown to buyers at checkout and on their receipt. Buyers are never charged a fee by Outpost. You do refunds yourself from Orders → Manage.</div>
+            <div class="hint">Shown to buyers at checkout and on their receipt. Buyers are never charged a fee by Outpost.</div>
             <div class="msg" id="rprev" style="margin-top:8px"></div>
             <button class="btn btn-primary mt" id="rsave">Save policy</button><div id="rmsg"></div>`)}
           ${card('Stock and order limits', `

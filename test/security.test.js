@@ -27,3 +27,9 @@ test('every owner page shares one content column: tab bars follow it and no page
   const app = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'app.js'), 'utf8');
   assert.ok(!app.includes('Looking for email?'), 'no pointer banner on the Settings page');
 });
+
+test('owner pages carry no "go look over there" pointer notes', () => {
+  const app = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  for (const t of ['Marketing → Email', 'People → Email list', 'Orders → Manage', 'See them in Marketing', 'Take me to the shop', 'Make your first collection'])
+    assert.ok(!app.includes(t), 'removed pointer: ' + t);
+});

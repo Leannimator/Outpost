@@ -549,8 +549,6 @@ details.more summary{cursor:pointer;color:var(--forest);font-weight:600}
 
 /* sign-in: link to the shop for shoppers who land here by mistake */
 .login-col { width: 100%; max-width: 380px; }
-.login-shop { margin-top: 16px; text-align: center; color: var(--muted); font-size: 14px; }
-.login-shop .btn { margin-top: 10px; text-decoration: none; }
 
 .linkbtn { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
 .rspanel { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
