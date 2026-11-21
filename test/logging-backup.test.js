@@ -122,7 +122,7 @@ test('item 42: a payment problem shows a visitor a plain message, and the owner 
 test('item 43: the owner\'s app refuses inline scripts, and API answers carry a locked-down policy', async () => {
   const s = await startServer();
   try {
-    const owner = (await fetch(s.base + '/')).headers.get('content-security-policy');
+    const owner = (await fetch(s.base + '/login')).headers.get('content-security-policy');
     assert.match(owner, /script-src 'self'(;|$)/); assert.ok(!/unsafe-inline[^;]*;\s*style/.test(owner.split('script-src')[1].split(';')[0]), 'no unsafe-inline for scripts');
     assert.match(owner, /frame-ancestors 'none'/);
     const shop = (await fetch(s.base + '/store.html')).headers.get('content-security-policy');

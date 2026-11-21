@@ -59,7 +59,7 @@ if (/^(true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim())) {
 if (String(process.env.TRUST_PROXY || '').trim().toLowerCase() === 'cloudflare') app.set('trust proxy', require('./proxytrust').cloudflareTrust());
 else if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 app.disable('x-powered-by');
-const OWNER_PAGES = new Set(['/', '/index.html', '/admin.html']);
+const OWNER_PAGES = new Set(['/login', '/admin', '/index.html', '/admin.html']);   // the owner's app lives at /login; the shop is the front door
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'SAMEORIGIN');
@@ -1056,7 +1056,7 @@ const LINK_CODE_RE = /^[a-z0-9][a-z0-9_-]{0,29}$/i;
 const LINK_DESTS = { '/shop': 'Shop', '/gallery': 'Gallery', '/links': 'Links page', '/about': 'About page' };
 const LINK_MAX = 200;
 const BOT_UA_RE = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|fetch|monitor|curl|wget|python|headless/i;
-const COUNTED_PAGES = new Set(['/shop', '/gallery', '/links', '/about', '/store.html', '/gallery.html', '/links.html', '/about.html']);
+const COUNTED_PAGES = new Set(['/', '/shop', '/gallery', '/links', '/about', '/store.html', '/gallery.html', '/links.html', '/about.html']);
 // The canonical code of an ACTIVE-or-archived link that really exists, or '' (so made-up codes never reach the database).
 const knownLinkCode = (c) => {
   c = String(c || '').trim();
@@ -1080,7 +1080,7 @@ app.use((req, res, next) => {
   next();
 });
 // Short, shareable addresses: yourshop.com/links goes in your Instagram bio.
-const CLEAN_PAGES = { '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html', '/gallery': 'gallery.html', '/unsubscribe': 'unsubscribe.html', '/confirm-email': 'confirm-email.html' };
+const CLEAN_PAGES = { '/': 'store.html', '/login': 'index.html', '/admin': 'index.html', '/links': 'links.html', '/privacy': 'privacy.html', '/terms': 'terms.html', '/about': 'about.html', '/shop': 'store.html', '/gallery': 'gallery.html', '/unsubscribe': 'unsubscribe.html', '/confirm-email': 'confirm-email.html' };
 for (const [route, file] of Object.entries(CLEAN_PAGES)) app.get(route, (req, res) => res.sendFile(path.join(__dirname, 'public', file)));
 app.get('/theme.css', (req, res) => {
   res.set('Content-Type', 'text/css; charset=utf-8');
