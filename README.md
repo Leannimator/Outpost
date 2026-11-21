@@ -21,7 +21,7 @@ Requires Node.js 20 or newer (22 LTS recommended).
 ```bash
 npm install
 cp .env.example .env     # then edit .env
-npm start                # http://localhost:3000
+npm start                # shop: http://localhost:3000   owner sign-in: http://localhost:3000/login
 ```
 
 Set `ADMIN_PASSWORD` (and your Stripe **test** keys when you're ready for card payments) in `.env`. Restart after changing `.env`. Online, Outpost refuses to start with a missing or obvious admin password.

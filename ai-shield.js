@@ -54,7 +54,7 @@ function robotsTxt(on) {
 }
 
 // Pages that belong to one customer or to the staff. They should never show up in a search.
-const PRIVATE_PATHS = new Set(['/', '/index.html', '/admin.html', '/receipt.html', '/thanks.html']);
+const PRIVATE_PATHS = new Set(['/login', '/admin', '/index.html', '/admin.html', '/receipt.html', '/thanks.html']);
 
 // enabled():  returns true when the seller has the protection on (it is on unless they turn it off)
 // onBlock(req, agent): called when an AI crawler is turned away (rate-limited here so one busy crawler can't flood a log)
