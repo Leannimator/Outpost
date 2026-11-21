@@ -70,6 +70,9 @@ function readableOn(bg) {   // black or white text, whichever contrasts more
   const L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   return 1.05 / (L + 0.05) >= 3.5 ? '#ffffff' : '#111111';   // white (the usual look) unless it would be hard to read on this colour
 }
+// The email's card is always white, so text colours borrowed from a dark site theme (light text) would vanish. Keep a theme colour only if it reads on white.
+const lum = (c) => { const v = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+const readsOnWhite = (c) => hexOk(c) && 1.05 / (lum(c) + 0.05) >= 4.5;
 const TEMPLATES = ['plain', 'banner', 'feature', 'story'];
 const BLOCKS = ['heading', 'text', 'photo', 'photos', 'button', 'product', 'collection', 'divider'];
 
@@ -78,7 +81,7 @@ function renderDesign(design, ctx) {
   const t = ctx.theme || {};
   const accent = hexOk(t.button) ? t.button : hexOk(t.accent) ? t.accent : '#f72d00';
   const btnText = hexOk(t.buttontext) ? t.buttontext : readableOn(accent);
-  const page = hexOk(t.bg) ? t.bg : '#f4ede0', ink = hexOk(t.text) ? t.text : '#222222', head = hexOk(t.heading) ? t.heading : ink, link = hexOk(t.link) ? t.link : accent;
+  const page = hexOk(t.bg) ? t.bg : '#f4ede0', ink = readsOnWhite(t.text) ? t.text : '#222222', head = readsOnWhite(t.heading) ? t.heading : ink, link = readsOnWhite(t.link) ? t.link : readsOnWhite(accent) ? accent : '#1a5fb4';
   const card = '#ffffff';
   const abs = (u) => { u = String(u || ''); if (u.startsWith('/')) return ctx.base + u; return /^https?:\/\//i.test(u) ? u : ''; };
   const track = (u) => {
