@@ -96,8 +96,9 @@ function renderDesign(design, ctx) {
   const img = (u, alt, w, href) => { const tag = `<img src="${esc(u)}" alt="${esc(alt || '')}" width="${w}" style="display:block;width:100%;max-width:${w}px;height:auto;border:0;border-radius:8px">`; return href ? `<a href="${esc(href)}" target="_blank">${tag}</a>` : tag; };
   const row = (inner, extra = '') => `<tr><td style="${pad};${extra}">${inner}</td></tr>`;
   if (design.template !== 'plain') {
-    const logo = ctx.logo ? abs(ctx.logo) : '';
-    h.push(`<tr><td align="center" style="padding:26px 32px 18px;border-bottom:3px solid ${accent}">${logo ? `<img src="${esc(logo)}" alt="${esc(ctx.shop)}" height="48" style="display:block;height:48px;width:auto;border:0">` : `<span style="font-family:${serif};font-size:26px;font-weight:bold;color:${head}">${esc(ctx.shop)}</span>`}</td></tr>`);
+    const logo = ctx.logo ? abs(ctx.logo) : '', banner = design.header_url ? abs(design.header_url) : '';
+    if (banner) h.push(`<tr><td style="padding:0;border-bottom:3px solid ${accent};border-radius:12px 12px 0 0;overflow:hidden"><img src="${esc(banner)}" alt="${esc(ctx.shop)}" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;border-radius:12px 12px 0 0"></td></tr>`);
+    else h.push(`<tr><td align="center" style="padding:26px 32px 18px;border-bottom:3px solid ${accent}">${logo ? `<img src="${esc(logo)}" alt="${esc(ctx.shop)}" height="48" style="display:block;height:48px;width:auto;border:0">` : `<span style="font-family:${serif};font-size:26px;font-weight:bold;color:${head}">${esc(ctx.shop)}</span>`}</td></tr>`);
     tx.push(ctx.shop.toUpperCase(), '');
   } else h.push('<tr><td style="height:24px;line-height:24px;font-size:0">&nbsp;</td></tr>');
   const blocks = (design.blocks || []);
@@ -141,6 +142,7 @@ function cleanDesign(d) {
   const str = (v, n) => String(v == null ? '' : v).replace(/\r/g, '').slice(0, n);
   const url = (v) => { v = String(v || '').trim().slice(0, 500); return v.startsWith('/') && !v.startsWith('//') ? v : /^https?:\/\/[^\s"'<>]+$/i.test(v) ? v : ''; };
   const out = { template: TEMPLATES.includes(d.template) ? d.template : 'plain', blocks: [] };
+  if (url(d.header_url)) out.header_url = url(d.header_url);
   for (const b of (Array.isArray(d.blocks) ? d.blocks : []).slice(0, 40)) {
     if (!b || !BLOCKS.includes(b.type)) continue;
     if (b.type === 'heading') out.blocks.push({ type: 'heading', text: str(b.text, 200) });

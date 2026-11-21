@@ -507,7 +507,7 @@
     const low = () => Number(settings.low_stock) || 0;
     view().innerHTML = `
       <div class="topbar"><h1>Products</h1><div class="spacer"></div>
-        <a class="btn" href="#/lines">Product lines</a><button class="btn" id="imp">Import CSV</button><button class="btn" id="exp">Export CSV</button>
+        <a class="btn" href="#/lines">Collections</a><button class="btn" id="imp">Import CSV</button><button class="btn" id="exp">Export CSV</button>
         <a class="btn btn-primary" href="#/products/new">+ New product</a></div>
       <div id="pmsg"></div>
       <div class="search">${icon('search')}<input class="input" id="pq" placeholder="Search products…"></div>
@@ -636,7 +636,7 @@
               <datalist id="catlist">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
           </div>
           <label class="field"><span class="label">SKU (optional)</span><input class="input" id="sku" maxlength="40" placeholder="Your own code or barcode number" value="${esc(s.sku)}">
-            <div class="hint">Handy if you number your work or use a barcode scanner at the register. Must be different for every product and option.</div></label>
+            <div class="hint">Your own code or a barcode number. Each one must be different.</div></label>
           <label class="field"><span class="label">Description</span><textarea class="input" id="desc" placeholder="Two color risograph print on recycled paper, 8×10”">${esc(s.description)}</textarea></label>
           <div class="grid2">
             <label class="field"><span class="label">Inventory</span><select class="input" id="active">
@@ -644,18 +644,18 @@
             <label class="field"><span class="label">Quantity</span><input class="input" id="stock" inputmode="numeric" value="${esc(s.stock)}"><div class="hint" id="stockhint" hidden>Added up from your options below.</div></label>
           </div>
           <div class="field"><span class="label">Options (sizes, colors…)</span>
-            <div class="hint" style="margin:0 0 8px">Only if this comes in different versions, like 5×7 and 8×10, or S, M and L. Each option has its own stock. Price: leave it blank to use the product price, or type a different one (like a bigger size). Leave this whole section empty for a single item.</div>
-            <label class="field" style="margin:0 0 10px"><span class="label small">What do you call them?</span><input class="input" id="optlabel" maxlength="24" placeholder="Size, Color, Frame…" value="${esc(s.option_label)}"><div class="hint">Shoppers will see “Choose a size”. Leave blank for “Choose an option”.</div></label>
+            <div class="hint" style="margin:0 0 8px">Only if it comes in versions, like 5×7 and 8×10, or S, M and L. Each option has its own stock. Leave an option’s price blank to use the product price.</div>
+            <label class="field" style="margin:0 0 10px"><span class="label small">What do you call them?</span><input class="input" id="optlabel" maxlength="24" placeholder="Size, Color, Frame…" value="${esc(s.option_label)}"><div class="hint">Shoppers see “Choose a size”. Leave blank for “Choose an option”.</div></label>
             <div id="vars"></div><button class="btn btn-sm" id="addvar" type="button">+ Add an option</button></div>
           <div class="field"><span class="label">Questions for the buyer (optional)</span>
-            <div class="hint" style="margin:0 0 8px">A box the shopper types into, like “Name to engrave” or “Message for the card”. Their answer shows on the order and the packing info. Up to 3.</div>
+            <div class="hint" style="margin:0 0 8px">Lets a shopper type something, like “Name to engrave”. Their answer shows on the order. Up to 3.</div>
             <div id="cfs"></div><button class="btn btn-sm" id="addcf" type="button">+ Add a question</button></div>
           <label class="field"><span class="label">How it’s made (optional)</span><textarea class="input" id="proc" rows="2" maxlength="600" placeholder="Hand-carved linoleum block, printed on a tabletop press with oil-based ink">${esc(s.process)}</textarea>
-            <div class="hint">Shown to shoppers on the product’s Details page. Photos of your process make a great extra picture.</div></label>
+            <div class="hint">Shown on the product’s page.</div></label>
           <label class="field"><span class="label">Shop label</span><select class="input" id="badge">${BADGES.map(([k, l]) => `<option value="${k}"${s.badge === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
-            <div class="hint">A small label on the photo in your shop. “Sold out” and “Only a few left” appear on their own.</div></label>
-          <div class="field"><span class="label">Product lines</span><div class="chips" id="linechips"></div>
-            <div class="hint">${allLines.length ? 'Groups shoppers can browse, like “Frogs” or “Gift sets”. Tap to add or remove. You can pick more than one.' : 'Lines are curated groups shoppers can browse, like “Frogs” or “Gift sets”. <a href="#/lines">Make your first line</a>.'}</div></div>
+            <div class="hint">A small tag on the photo. “Sold out” and “Only a few left” appear on their own.</div></label>
+          <div class="field"><span class="label">Collections</span><div class="chips" id="linechips"></div>
+            <div class="hint">${allLines.length ? 'A group you put together, like “Winter” or “Gift sets”. Optional. You can pick more than one.' : 'A group you put together, like “Winter” or “Gift sets”. Optional. <a href="#/lines">Make your first collection</a>.'}</div></div>
           <div class="field"><span class="label">Tags</span><div class="chips" id="tags"></div></div>
         </div>
       </div>`;
@@ -753,8 +753,8 @@
     let [lines, products] = await Promise.all([api('/api/admin/lines'), api('/api/admin/products')]);
     let editing = null; // null = none, 0 = new, id = existing
     let draft = null;
-    view().innerHTML = `<div class="topbar"><button class="crumb" id="back">← Products</button><div class="spacer"></div><h1 style="font-size:26px">Product lines</h1><div class="spacer"></div><button class="btn btn-primary" id="newline">+ New line</button></div>
-      <p class="muted small" style="margin:0 0 14px">Curated groups shoppers can browse, like “Frogs” or “Gift sets”. A product can be in as many lines as you like. Lines don’t replace categories: a category says what something is, a line says what it goes with.</p>
+    view().innerHTML = `<div class="topbar"><button class="crumb" id="back">← Products</button><div class="spacer"></div><h1 style="font-size:26px">Collections</h1><div class="spacer"></div><button class="btn btn-primary" id="newline">+ New collection</button></div>
+      <p class="muted small" style="margin:0 0 14px">A group you put together, like “Winter” or “Gift sets”. A product can be in as many as you like. A category says what something is (Prints, Mugs); a collection is a group you choose.</p>
       <div id="lmsg"></div><div id="llist" style="display:grid;gap:10px"></div><div id="ledit"></div>`;
     $('#back').onclick = () => { location.hash = '#/products'; };
     const base = (settings.base_url || location.origin).replace(/\/$/, '');
@@ -764,12 +764,12 @@
         <div style="flex:1 1 200px;min-width:0"><div style="font-weight:600;font-size:16px">${esc(l.name)}</div><div class="muted small">${l.count} item${l.count === 1 ? '' : 's'} · ${esc(base)}/shop?line=${esc(l.slug)}</div></div>
         <span class="badge ${l.active ? 'b-paid' : ''}">${l.active ? 'Shown' : 'Hidden'}</span>
         <button class="btn btn-sm btn-ghost" data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="btn btn-sm btn-ghost" data-dn="${i}" ${i === lines.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
-        <button class="btn btn-sm" data-edit="${l.id}">Edit</button></div>`).join('') : '<div class="card empty">No lines yet. Make one, like “Frogs”, then tick the products that belong in it.</div>';
+        <button class="btn btn-sm" data-edit="${l.id}">Edit</button></div>`).join('') : '<div class="card empty">No collections yet. Make one, like “Winter”, then tick the products that belong in it.</div>';
     }
     function paintEdit() {
       if (editing === null) { $('#ledit').innerHTML = ''; return; }
       const d = draft;
-      $('#ledit').innerHTML = `<div class="card" style="margin-top:14px"><h2 style="font-size:22px;margin-bottom:12px">${editing ? 'Editing: ' + esc(d.name || 'line') : 'New line'}</h2>
+      $('#ledit').innerHTML = `<div class="card" style="margin-top:14px"><h2 style="font-size:22px;margin-bottom:12px">${editing ? 'Editing: ' + esc(d.name || 'collection') : 'New collection'}</h2>
         <div class="grid2" style="align-items:start"><div>
           <label class="field"><span class="label">Name</span><input class="input" id="ln" maxlength="40" placeholder="Frogs" value="${esc(d.name)}"></label>
           <label class="field"><span class="label">Short blurb (optional)</span><textarea class="input" id="lb" rows="3" maxlength="300" placeholder="Every frog I’ve ever glazed, printed or doodled.">${esc(d.blurb)}</textarea></label>
@@ -777,14 +777,14 @@
             <div class="row" style="flex-wrap:wrap;gap:8px">${d.image_url ? `<img class="thumb" style="width:56px;height:56px;border-radius:10px;object-fit:cover" src="${esc(d.image_url)}" alt="">` : ''}<button class="btn btn-sm" id="lpic" type="button">${d.image_url ? 'Change photo' : 'Upload a photo'}</button>${d.image_url ? '<button class="btn btn-sm btn-ghost" id="lpicx" type="button">Use a product photo</button>' : ''}</div>
             <input type="file" id="lfile" hidden accept="image/png,image/jpeg,image/gif,image/webp">
             <div class="hint">Leave this alone and the first product’s photo is used.</div></div>
-          <label class="check"><input type="checkbox" id="la" ${d.active ? 'checked' : ''}> <span>Show this line in my shop</span></label>
-          <div class="hint">A line only appears once it has something for sale in it.</div>
+          <label class="check"><input type="checkbox" id="la" ${d.active ? 'checked' : ''}> <span>Show this collection in my shop</span></label>
+          <div class="hint">It only appears once something in it is for sale.</div>
         </div><div>
-          <span class="label">Products in this line (<span id="lcount">${d.product_ids.length}</span>)</span>
+          <span class="label">Products in this collection (<span id="lcount">${d.product_ids.length}</span>)</span>
           <div class="search" style="margin-bottom:8px">${icon('search')}<input class="input" id="lq" placeholder="Search products…"></div>
           <div class="line-pick" id="lpick"></div>
         </div></div>
-        <div class="row" style="margin-top:14px;gap:10px"><button class="btn btn-primary" id="lsave">Save line</button><button class="btn btn-ghost" id="lcancel">Cancel</button><div class="spacer"></div>${editing ? '<button class="btn btn-ghost" id="ldel">Delete line</button>' : ''}</div></div>`;
+        <div class="row" style="margin-top:14px;gap:10px"><button class="btn btn-primary" id="lsave">Save collection</button><button class="btn btn-ghost" id="lcancel">Cancel</button><div class="spacer"></div>${editing ? '<button class="btn btn-ghost" id="ldel">Delete collection</button>' : ''}</div></div>`;
       const paintPick = () => {
         const n = $('#lq').value.trim().toLowerCase();
         $('#lpick').innerHTML = products.filter((p) => !n || (p.name + ' ' + p.category).toLowerCase().includes(n)).map((p) => `<label><input type="checkbox" data-p="${p.id}" ${d.product_ids.includes(p.id) ? 'checked' : ''}> <span>${esc(p.name)}${p.active ? '' : ' <span class="muted small">(hidden)</span>'}</span></label>`).join('') || '<div class="muted small">No matches</div>';
@@ -798,12 +798,12 @@
       if ($('#lpicx')) $('#lpicx').onclick = () => { keep(); d.image_url = ''; paintEdit(); };
       $('#lcancel').onclick = () => { editing = null; draft = null; paintEdit(); };
       if ($('#ldel')) $('#ldel').onclick = async () => {
-        if (!(await confirmBox({ title: 'Delete this line?', body: 'The products stay in your shop. Only the group goes away.', yes: 'Delete', danger: true }))) return;
+        if (!(await confirmBox({ title: 'Delete this collection?', body: 'The products stay in your shop. Only the group goes away.', yes: 'Delete', danger: true }))) return;
         try { await api('/api/admin/lines/' + editing, { method: 'DELETE' }); editing = null; draft = null; lines = await api('/api/admin/lines'); paintList(); paintEdit(); toast('Deleted'); } catch (err) { $('#lmsg').innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
       };
       $('#lsave').onclick = async () => {
         keep();
-        if (!d.name.trim()) return ($('#lmsg').innerHTML = '<div class="msg err">Your line needs a name</div>');
+        if (!d.name.trim()) return ($('#lmsg').innerHTML = '<div class="msg err">Your collection needs a name</div>');
         const body = { name: d.name, blurb: d.blurb, image_url: d.image_url, active: d.active, product_ids: d.product_ids };
         $('#lsave').disabled = true;
         try { editing ? await put('/api/admin/lines/' + editing, body) : await post('/api/admin/lines', body); editing = null; draft = null; lines = await api('/api/admin/lines'); $('#lmsg').innerHTML = ''; paintList(); paintEdit(); toast('Saved'); }
@@ -1664,7 +1664,7 @@
           <div class="mk-stat"><div class="small muted">Can be emailed</div><b>${a.sendable}</b></div>
           <div class="mk-stat"><div class="small muted">Sent today</div><b>${st.sent_today.transactional + st.sent_today.marketing}</b><span class="small muted"> of ${st.daily_cap}</span></div>
           <div class="mk-stat"><div class="small muted">Left for marketing today</div><b>${left}</b></div></div>
-          <p class="hint" style="margin-top:8px">Not counted: ${a.unsubscribed} unsubscribed${a.bounced ? `, ${a.bounced} bounced` : ''}${a.unconfirmed ? `, ${a.unconfirmed} waiting to confirm` : ''}${a.no_consent ? `, ${a.no_consent} who never agreed to emails` : ''}. ${st.reserve} of the daily limit is kept back for confirmations and receipts.</p>` : ''}
+          <p class="hint" style="margin-top:8px">${[a.unsubscribed ? `${a.unsubscribed} unsubscribed` : '', a.bounced ? `${a.bounced} with a bad address` : '', a.unconfirmed ? `${a.unconfirmed} haven’t confirmed yet` : '', a.no_consent ? `${a.no_consent} never agreed to emails` : ''].filter(Boolean).join(', ') ? `Can’t be emailed: ${[a.unsubscribed ? `${a.unsubscribed} unsubscribed` : '', a.bounced ? `${a.bounced} with a bad address` : '', a.unconfirmed ? `${a.unconfirmed} haven’t confirmed yet` : '', a.no_consent ? `${a.no_consent} never agreed to emails` : ''].filter(Boolean).join(', ')}.` : ''}</p>` : ''}
         ${st.last_error ? `<div class="msg err" style="margin-top:10px">${esc(st.last_error)}</div>` : ''}
       </div>
       <div class="card">
@@ -1682,9 +1682,11 @@
       ${st.key_present ? '<p class="hint"><span class="badge b-paid">Key found</span> The Resend key is saved in Render, not in Outpost.</p>' : '<div class="msg" style="text-align:left"><b>One-time setup, all free</b><br>1. Make a free account at resend.com and add your shop’s domain.<br>2. Add the records it shows you (and a DMARC record) in Cloudflare DNS, set to “DNS only”.<br>3. In Render, add an environment variable named <code>RESEND_API_KEY</code> with your key, then restart.<br>4. Optional: add a webhook to <code>/api/email/webhook</code> and save its secret as <code>RESEND_WEBHOOK_SECRET</code>, so bounces and spam complaints switch people off automatically.</div>'}
       <label class="field"><span class="label">From</span><input class="input" id="ms-from" value="${esc(st.from)}" placeholder="Ash &amp; Anchor &lt;hello@your-domain.com&gt;"></label>
       <label class="field"><span class="label">Replies go to <span class="small muted">(optional)</span></span><input class="input" id="ms-reply" value="${esc(st.reply_to)}" placeholder="you@example.com"></label>
-      <label class="field"><span class="label">Mailing address for the footer</span><textarea class="input" id="ms-addr" rows="2" placeholder="Ash &amp; Anchor, 1 Main St, Portland OR 97201">${esc(st.mail_address)}</textarea><span class="hint">Email law requires a real mailing address in every marketing email. A P.O. box works.</span></label>
-      <div class="row wrap" style="gap:10px"><label class="field" style="flex:1;min-width:150px"><span class="label">Daily sending limit</span><input class="input" id="ms-cap" type="number" min="1" value="${st.daily_cap}"><span class="hint">The free plan allows 100 a day.</span></label>
-        <label class="field" style="flex:1;min-width:150px"><span class="label">Kept back for receipts</span><input class="input" id="ms-res" type="number" min="0" value="${st.reserve}"><span class="hint">Marketing never uses these.</span></label></div>
+      <label class="field"><span class="label">Mailing address for the footer</span><textarea class="input" id="ms-addr" rows="2" placeholder="Ash &amp; Anchor, 1 Main St, Portland OR 97201">${esc(st.mail_address)}</textarea><span class="hint">The law requires a real mailing address in every marketing email. It doesn’t have to be your home: a P.O. box or a mailbox service works.</span></label>
+      <details class="field"><summary class="small muted" style="cursor:pointer">Sending limits (most people leave these alone)</summary>
+        <div class="small muted" style="margin:6px 0">Resend’s free plan allows 100 emails a day. Outpost holds some back so receipts and sign-up confirmations always go out, even after a big send.</div>
+        <div class="row wrap" style="gap:10px"><label class="field" style="flex:1;min-width:150px"><span class="label">Emails per day</span><input class="input" id="ms-cap" type="number" min="1" value="${st.daily_cap}"></label>
+          <label class="field" style="flex:1;min-width:150px"><span class="label">Held back for receipts</span><input class="input" id="ms-res" type="number" min="0" value="${st.reserve}"></label></div></details>
       <label class="row" style="gap:8px;margin:6px 0"><input type="checkbox" id="ms-doi" ${st.double_optin ? 'checked' : ''}> <span><b>Ask new subscribers to confirm</b><br><span class="small muted">They get one email with a confirm link and only receive marketing after clicking it. Recommended.</span></span></label>
       <label class="row" style="gap:8px;margin:6px 0 10px"><input type="checkbox" id="ms-on" ${st.on ? 'checked' : ''}> <span><b>Email is on</b></span></label>
       <div id="msmsg"></div>
@@ -1718,7 +1720,7 @@
     const audCount = () => audOpt().sendable;
     const snapOf = () => JSON.stringify([subject, design, link, aud]); const snap0 = snapOf();
     const q = (x) => $(x, m.el);
-    const clean = () => ({ template: design.template, blocks: design.blocks.map((b) => ({ ...b })) });
+    const clean = () => ({ template: design.template, ...(design.header_url ? { header_url: design.header_url } : {}), blocks: design.blocks.map((b) => ({ ...b })) });
     let tm = 0;
     const prev = () => { clearTimeout(tm); tm = setTimeout(async () => { if (!design || !q('#me-prev')) return; try { const d = await post('/api/admin/email/preview', { subject: q('#me-sub') ? q('#me-sub').value : '', design: clean(), link_code: link }); q('#me-prev').srcdoc = d.html; } catch { /* preview only */ } }, 250); };
     const siteLinks = () => [['/shop', 'My shop'], ['/gallery', 'Gallery'], ...mk.lines.map((l) => ['/shop?line=' + l.slug, 'Collection: ' + l.name]), ...mk.products.slice(0, 40).map((p) => ['/shop?p=' + p.id, p.name])];
@@ -1732,7 +1734,7 @@
       else if (b.type === 'photos') body = `<div class="row wrap" style="gap:8px">${(b.urls || []).map((u, k) => thumb(u, k)).join('')}${(b.urls || []).length < 3 ? `<button class="btn btn-sm" data-addph="${i}">+ Photo</button>` : ''}${(b.urls || []).length > 1 ? `<button class="btn btn-sm" data-rmph="${i}">− Photo</button>` : ''}</div>`;
       else if (b.type === 'button') body = `<div class="row wrap" style="gap:8px"><input class="input" data-f="${i}:label" maxlength="40" value="${esc(b.label)}" placeholder="Shop now" style="flex:1;min-width:130px"><select class="input" data-f="${i}:url" style="flex:2;min-width:180px">${siteLinks().map(([u, l]) => `<option value="${esc(u)}"${b.url === u ? ' selected' : ''}>${esc(l)}</option>`).join('')}${b.url && !siteLinks().some(([u]) => u === b.url) ? `<option value="${esc(b.url)}" selected>${esc(b.url.slice(0, 50))}</option>` : ''}</select></div><div class="small muted" style="margin-top:4px">Short and active works best: “Shop now”, “See the new tiles”.</div>`;
       else if (b.type === 'product') body = `<div class="row wrap" style="gap:8px"><select class="input" data-f="${i}:product_id" style="flex:2;min-width:180px"><option value="0">Choose a product…</option>${mk.products.map((p) => `<option value="${p.id}"${p.id === b.product_id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select><input class="input" data-f="${i}:label" maxlength="30" value="${esc(b.label || '')}" placeholder="Shop now" style="flex:1;min-width:110px"></div><div class="small muted" style="margin-top:4px">Shows the photo, name and current price, with a button.</div>`;
-      else if (b.type === 'collection') { const byLine = !!b.line_id || !(b.product_ids || []).length && mk.lines.length > 0 && b.mode !== 'pick'; body = `<div class="seg" style="margin-bottom:8px"><button data-cmode="${i}:line" class="${byLine ? 'on' : ''}">A product line</button><button data-cmode="${i}:pick" class="${byLine ? '' : 'on'}">Hand-picked</button></div>${byLine ? `<select class="input" data-f="${i}:line_id"><option value="0">Choose a line…</option>${mk.lines.map((l) => `<option value="${l.id}"${l.id === b.line_id ? ' selected' : ''}>${esc(l.name)} (${l.count})</option>`).join('')}</select><div class="small muted" style="margin-top:4px">Shows what’s in the line when the email goes out, up to 6 items. Sold-out items are left out.</div>` : `<div class="mk-cpick">${mk.products.map((p) => `<label class="row" style="gap:6px"><input type="checkbox" data-cprod="${i}:${p.id}" ${(b.product_ids || []).includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('') || '<span class="muted small">No products yet.</span>'}</div><div class="small muted" style="margin-top:4px">Pick up to 6. They appear in the order you tick them.</div>`}<input class="input" data-f="${i}:label" maxlength="40" value="${esc(b.label || '')}" placeholder="Button under the grid (optional)" style="margin-top:8px">`; }
+      else if (b.type === 'collection') { const byLine = !!b.line_id || !(b.product_ids || []).length && mk.lines.length > 0 && b.mode !== 'pick'; body = `<div class="seg" style="margin-bottom:8px"><button data-cmode="${i}:line" class="${byLine ? 'on' : ''}">A collection</button><button data-cmode="${i}:pick" class="${byLine ? '' : 'on'}">Hand-picked</button></div>${byLine ? `<select class="input" data-f="${i}:line_id"><option value="0">Choose a collection…</option>${mk.lines.map((l) => `<option value="${l.id}"${l.id === b.line_id ? ' selected' : ''}>${esc(l.name)} (${l.count})</option>`).join('')}</select><div class="small muted" style="margin-top:4px">Shows what’s in the collection when the email goes out, up to 6 items. Sold-out items are left out.</div>` : `<div class="mk-cpick">${mk.products.map((p) => `<label class="row" style="gap:6px"><input type="checkbox" data-cprod="${i}:${p.id}" ${(b.product_ids || []).includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('') || '<span class="muted small">No products yet.</span>'}</div><div class="small muted" style="margin-top:4px">Pick up to 6. They appear in the order you tick them.</div>`}<input class="input" data-f="${i}:label" maxlength="40" value="${esc(b.label || '')}" placeholder="Button under the grid (optional)" style="margin-top:8px">`; }
       else body = '<div class="small muted">A thin line between sections.</div>';
       const grid = pick && pick.i === i ? `<div class="mk-pickgrid" style="margin-top:8px">${mk.photos.map((ph) => `<button class="mk-pk" data-set="${esc(ph.url)}"><img src="${esc(ph.url)}" alt=""></button>`).join('')}<label class="mk-pk" style="display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;text-align:center">Upload new<input type="file" accept="image/*" data-up-new hidden></label></div>` : '';
       return `<div class="mk-block"><div class="mk-bh"><b>${BLOCK_NAMES[b.type]}</b>${ctl}</div>${body}${grid}</div>`;
@@ -1754,7 +1756,7 @@
         wire(); return;
       }
       const cols = [locked ? '' : '176px', 'minmax(0,1fr)', pvOn ? (pvWide ? '680px' : '410px') : ''].filter(Boolean).join(' ');
-      const pal = locked ? '' : `<aside class="me-pal" aria-label="Add a module"><div class="label">Header</div><div class="seg" id="me-hdr" style="margin:0 0 12px"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}">Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}">Banner</button></div>
+      const pal = locked ? '' : `<aside class="me-pal" aria-label="Add a module"><div class="label">Header</div><div class="seg" id="me-hdr" style="margin:0 0 12px"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}">Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}">Banner</button></div>${design.template !== 'plain' ? `<div class="me-hdrimg">${design.header_url ? `<img src="${esc(design.header_url)}" alt="Header image">` : ''}<label class="btn btn-sm">${design.header_url ? 'Change image' : 'Add header image'}<input type="file" accept="image/*" hidden data-hdr-up></label>${design.header_url ? '<button type="button" class="btn btn-sm btn-ghost" data-hdr-rm>Remove</button>' : ''}<div class="small muted">Replaces your logo at the top of this email. A wide image works best.</div></div>` : ''}
         <div class="label">Add a module</div>${MODS.map(([t, g, d]) => `<button class="me-mod" data-add="${t}"><i>${g}</i><span><b>${BLOCK_NAMES[t]}</b><small>${d}</small></span></button>`).join('')}</aside>`;
       const build = `<section class="me-build">${design.blocks.map(blockHtml).join('') || '<div class="empty">Add a module from the left to begin.</div>'}
         <div class="card" style="margin:10px 0 0"><div class="small muted">Sales from this email are counted automatically. See them in Marketing → Sales by link.</div>
@@ -1798,6 +1800,8 @@
       m.el.querySelectorAll('[data-pick]').forEach((b) => { b.onclick = () => { keep(); const [i, slot] = b.dataset.pick.split(':').map(Number); pick = pick && pick.i === i && pick.slot === slot ? null : { i, slot }; paint(); }; });
       const setPhoto = (url) => { const b = design.blocks[pick.i]; if (b.type === 'photo') b.url = url; else b.urls[pick.slot] = url; pick = null; paint(); };
       m.el.querySelectorAll('[data-set]').forEach((b) => { b.onclick = () => { keep(); setPhoto(b.dataset.set); }; });
+      const hup = m.el.querySelector('[data-hdr-up]'); if (hup) hup.onchange = async (e) => { const f = e.target.files[0]; if (!f) return; keep(); try { msg('<div class="msg">Uploading…</div>'); design.header_url = await uploadImage(await jpegFrom(f)); msg(''); paint(); } catch (er) { msg(`<div class="msg err">${esc(er.message)}</div>`); } };
+      const hrm = m.el.querySelector('[data-hdr-rm]'); if (hrm) hrm.onclick = () => { keep(); delete design.header_url; paint(); };
       const up = m.el.querySelector('[data-up-new]'); if (up) up.onchange = async (e) => { const f = e.target.files[0]; if (!f) return; keep(); try { msg('<div class="msg">Uploading…</div>'); const url = await uploadImage(await jpegFrom(f)); await post('/api/admin/marketing/photos', { url }); mk.photos = await api('/api/admin/marketing/photos'); setPhoto(url); } catch (er) { msg(`<div class="msg err">${esc(er.message)}</div>`); } };
       const done = (t) => { m.close(); toast(t); mktEmail(routeSeq); };
       const saveDraft = async () => { keep(); const b = { subject: q('#me-sub').value, design: clean(), link_code: link, audience: aud }; c = c ? await put('/api/admin/email/campaigns/' + c.id, b) : await post('/api/admin/email/campaigns', b); return c; };
@@ -1857,7 +1861,7 @@
     body.innerHTML = `
       <div class="card" style="margin-bottom:14px">
         <h2 style="font-size:22px;margin-bottom:6px">New tracked link</h2>
-        <p class="hint">Put a link like this in an Instagram bio, a post, an email, or on a sign at a market. Outpost counts the visits and the sales that follow. It counts per day only: no cookies, and no visitor addresses are kept.</p>
+        <p class="hint">Make one for each place you share your shop, like your Instagram bio or a sign at a market. Outpost shows the visits and sales each one brings in. Emails make their own link automatically.</p>
         <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
           <input class="input" id="lname" placeholder="Instagram bio" maxlength="60" style="flex:1;min-width:180px">
           <select class="input" id="ldest" style="width:auto">${Object.entries(dests).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('')}</select>
@@ -1865,9 +1869,9 @@
         </div>
         <div id="lmsg"></div>
       </div>
-      <div class="card" style="overflow-x:auto">${d.links.length ? `<table><thead><tr><th>Name</th><th>Address</th><th>Visits (30 days)</th><th>Orders</th><th></th></tr></thead><tbody>${d.links.map(rowHtml).join('')}</tbody></table>`
+      <div class="card" style="overflow-x:auto">${d.links.length ? `<table><thead><tr><th>Name</th><th>Address</th><th>Visits (30 days)</th><th>Orders</th><th></th></tr></thead><tbody>${d.links.filter((l) => !/^Email: /.test(l.name)).map(rowHtml).join('')}</tbody></table>${d.links.some((l) => /^Email: /.test(l.name)) ? `<details style="margin-top:10px"><summary class="small muted" style="cursor:pointer">Links made by your emails (${d.links.filter((l) => /^Email: /.test(l.name)).length})</summary><table class="tbl" style="margin-top:6px"><tbody>${d.links.filter((l) => /^Email: /.test(l.name)).map(rowHtml).join('')}</tbody></table></details>` : ''}`
         : '<div class="empty">No tracked links yet. Make one above, then use it wherever you share your shop.</div>'}</div>
-      <p class="hint" style="margin-top:8px">Orders and sales count paid online orders that came through the link. Someone who visits on one device and buys on another counts as direct.</p>`;
+      <p class="hint" style="margin-top:8px">Counts paid online orders that came through the link. If someone visits on one device and buys on another, it counts as a direct sale.</p>`;
     $('#ladd').onclick = async () => {
       const name = $('#lname').value.trim();
       if (!name) { $('#lmsg').innerHTML = '<div class="msg err">Give the link a name first.</div>'; return; }
@@ -1933,7 +1937,7 @@
           <div class="row" style="flex-wrap:wrap;gap:8px"><input class="input" id="lurl" readonly value="${esc(base + '/links')}" style="flex:1;min-width:200px"><button class="btn" id="lcopy">Copy</button><a class="btn btn-ghost" href="links.html" target="_blank" rel="noopener">Open ↗</a></div>
           <label class="field" style="margin-top:14px"><span class="label">Short line under your name (optional)</span><input class="input" id="lintro" maxlength="160" placeholder="Linocut prints, ceramics and weekend workshops in Portland" value="${esc(cur.links_intro || '')}"></label>
           <label class="check"><input type="checkbox" id="lmail" ${cur.mailing_list_on ? 'checked' : ''}> <span>Show an email signup box on this page</span></label><div class="hint" style="margin:2px 0 8px 26px">This only collects sign-ups. Writing and sending emails is in <a href="#/marketing/email">Marketing → Email</a>.</div>
-          <div class="hint">People who sign up are saved under Customers → Email list, and you can download them to use in any email service.</div></div>
+          <div class="hint">People who sign up are saved under People → Email list, and you can download them to use in any email service.</div></div>
         <div class="card"><h2 style="font-size:22px;margin-bottom:6px">Buttons and events</h2>
           <div id="llist"></div>
           <div class="row mt" style="flex-wrap:wrap;gap:8px"><button class="btn" data-add="link">+ Add a link</button><button class="btn" data-add="event">+ Add an event</button><button class="btn" data-add="shop">+ Add a page from my shop</button></div>
@@ -2086,21 +2090,21 @@
     return `<div class="card" id="lookcard"><h2 style="font-size:22px;margin-bottom:14px">Your look</h2>
       <div class="label">Appearance</div>
       <div class="seg" id="modes">${[['light', 'Light'], ['dark', 'Dark'], ['auto', 'Match visitor\u2019s device']].map(([m, l]) => `<button type="button" data-m="${m}" class="${t.mode === m ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <div class="hint" style="margin-bottom:16px">Dark builds a night version from your colors.</div>
+      <div class="hint" style="margin-bottom:16px">Dark makes a night version from your colors.</div>
       <div class="label">Color palette</div>
       <div class="pals" id="pals">${PAL().map((p, i) => `<button type="button" class="pal" data-i="${i}"><span class="sw"><i style="background:${p.bg}"></i><i style="background:${p.accent}"></i><i style="background:${p.button}"></i></span><em>${p.name}</em></button>`).join('')}</div>
       <div class="label" style="margin-top:6px">Custom colors</div>
-      <div class="hint" style="margin:0 0 8px">Not a fan of the presets? Pick your own. Tapping a preset above fills these in.</div>
+      <div class="hint" style="margin:0 0 8px">Or pick your own.</div>
       <div class="colors">
         <label><span class="label">Background</span><input type="color" id="c-bg" value="${t.bg}"></label>
         <label><span class="label">Highlights</span><input type="color" id="c-accent" value="${t.accent}"></label>
         <label><span class="label">Buttons</span><input type="color" id="c-button" value="${t.button}"></label>
       </div>
-      <div class="hint" id="btnhint">Buttons use white text unless you choose a button text color below, so pick a darker button color.</div>
+      <div class="hint" id="btnhint">Button text is white, so pick a darker button color.</div>
       <div class="label" style="margin-top:18px">Text colors</div>
       <div class="seg" id="tmodes">${[['', 'Standard'], ['same', 'One color for all text'], ['each', 'Choose each']].map(([m, l]) => `<button type="button" data-tm="${m}" class="${(t.textmode || '') === m ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div id="tcolors"></div>
-      <div class="hint">Text colors apply to the light look. In dark mode Outpost picks readable text on its own. Colors that are hard to read against your background can’t be saved.</div>
+      <div class="hint">These are for the light look. Dark mode picks readable text on its own.</div>
       <div class="label" style="margin-top:18px">Your graphics</div>
       <div id="gfx">${GFX.map(([k, name, hint]) => `<div class="gfx" data-k="${k}"><div class="gthumb" id="gt-${k}"></div>
         <div class="ginfo"><b>${name}</b><div class="hint">${hint}</div></div>
@@ -2115,7 +2119,7 @@
     const t = curTheme(), m = t.textmode || '';
     const keys = m === 'same' ? ['text'] : m === 'each' ? ['text', 'heading', 'link', 'buttontext'] : [];
     $('#tcolors').innerHTML = keys.length ? `<div class="colors" style="margin-top:8px">${keys.map((k) => `<label><span class="label">${m === 'same' ? 'All text' : TXT_LABEL[k]}</span><input type="color" id="t-${k}" data-tk="${k}" value="${t[k] || (k === 'link' ? t.button : TXT_DEFAULT[k])}"></label>`).join('')}</div>` : '';
-    $('#btnhint').textContent = !m ? 'Buttons use white text unless you choose a button text color below, so pick a darker button color.' : 'Make sure your button text color stands out against your button color.';
+    $('#btnhint').textContent = !m ? 'Button text is white, so pick a darker button color.' : 'Make sure your button text color stands out against your button color.';
   }
   function textProblem() {
     const t = curTheme(), tc = OutpostBrand.textColors(t), bg = t.bg;
@@ -2222,13 +2226,13 @@
           ${card('Sales tax: in person', `
             <p class="muted small" style="margin:0 0 12px">Used at the register, for markets and events. Charged on every in-person sale.</p>
             <label class="field"><span class="label">Where are you selling?</span><select class="input" id="shome"><option value="">Choose a state to fill in its rate…</option>${Object.entries(STATE_TAX).map(([c, [n]]) => `<option value="${c}"${cur.tax_home === c ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
-            <label class="field"><span class="label">Tax rate (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint" id="srhint">Picking a state fills in its base rate. Your city or county may add a bit more, so check a receipt from your area and adjust it. Heading to an event in another state? Change this before you go. Use 0 for none.</div></label>
+            <label class="field"><span class="label">Tax rate (%)</span><input class="input" id="srate" inputmode="decimal" value="${esc(cur.tax_rate)}"><div class="hint" id="srhint">Picking a state fills in its base rate. Your city or county may add a bit more, so adjust it to match a local receipt. Going to an event in another state? Change it before you go. Use 0 for none.</div></label>
             <button class="btn btn-primary mt" id="taxsave">Save</button><div id="taxmsg"></div>`)}
           ${card('Sales tax: online orders', `
             <p style="margin:0 0 10px">For orders from your shop and auctions, <b>Stripe works out the tax</b> from each buyer’s address and adds it at checkout. You don’t set a rate.</p>
             <div id="taxflag" class="msg err" style="margin:0 0 10px"><b>You need to turn on Stripe Tax.</b> It’s off until you switch it on. Until then, online checkout will show an error and nobody can buy.<span id="taxflagmore"></span></div>
             <p class="small" style="margin:0 0 6px"><b>To turn it on:</b> in your Stripe dashboard open <b>Tax</b>, press <b>Get started</b>, add your business address, and add the states you’re registered to collect tax in.</p>
-            <div class="hint">Stripe charges about 0.5% per sale where you’re registered, and nothing elsewhere. Not sure where you need to register? Ask an accountant.</div>`)}
+            <div class="hint">Stripe adds a small fee (about 0.5%) on sales where you collect tax. Not sure where you need to collect it? Ask an accountant.</div>`)}
           ${card('Shipping', `
             <label class="check"><input type="checkbox" id="shon" ${ship.on ? 'checked' : ''}> <span>Charge for shipping online</span></label>
             <p class="muted small" style="margin:6px 0 12px">Buyers enter their address in the checkout, and the shipping fee for their region is added. A buyer outside every region below can’t check out.</p>
@@ -2305,7 +2309,7 @@
           <p>Payment confirmations (webhook): ${st.webhook ? '<span class="badge b-paid">Ready</span>' : '<span class="badge b-pending">Not set up yet</span>'}</p>
           <h3 style="font-size:18px;margin:18px 0 8px">Share these links</h3>
           <p class="small">Shop: <a href="/store.html" target="_blank" rel="noopener">${esc(base)}/store.html</a><br>Auctions: <a href="/auction.html" target="_blank" rel="noopener">${esc(base)}/auction.html</a></p>
-          <p class="hint">When you put Outpost online, set BASE_URL in your .env to your real web address so links and payment links work for customers.</p></div>
+          </div>
         </div>
       </div>`;
     wireLook();
@@ -2353,7 +2357,7 @@
         box.className = '';
         box.innerHTML = `<div>${mb(u.used_bytes)} MB used of ${mb(u.limit_bytes)} MB</div>
           <div style="height:10px;border-radius:5px;background:var(--line,#e5e7eb);margin:8px 0"><div style="width:${pct}%;height:10px;border-radius:5px;background:var(--accent,#2f5d50)"></div></div>
-          ${u.unused ? `<p class="small" style="margin:0 0 10px">${u.unused} photo${u.unused === 1 ? ' isn’t' : 's aren’t'} used by any product, lot, product line or setting (${mb(u.bytes)} MB).</p><button class="btn" id="phclean">Clean up unused photos…</button><div id="phconfirm"></div>` : '<p class="small muted" style="margin:0">Every photo is in use.</p>'}<div id="phmsg"></div>`;
+          ${u.unused ? `<p class="small" style="margin:0 0 10px">${u.unused} photo${u.unused === 1 ? ' isn’t' : 's aren’t'} used by any product, lot, collection or setting (${mb(u.bytes)} MB).</p><button class="btn" id="phclean">Clean up unused photos…</button><div id="phconfirm"></div>` : '<p class="small muted" style="margin:0">Every photo is in use.</p>'}<div id="phmsg"></div>`;
         if (u.unused) $('#phclean').onclick = () => {
           $('#phconfirm').innerHTML = `<div class="msg err" style="margin-top:10px"><b>Delete ${u.unused} unused photo${u.unused === 1 ? '' : 's'} and free ${mb(u.bytes)} MB?</b><div class="small" style="margin:6px 0 10px">This can’t be undone. Photos that a product, lot or setting uses are never touched.</div><div class="row" style="gap:10px"><button class="btn btn-primary" id="phdel">Delete ${u.unused} photo${u.unused === 1 ? '' : 's'}</button><button class="btn btn-ghost" id="phno">Cancel</button></div></div>`;
           $('#phno').onclick = () => { $('#phconfirm').innerHTML = ''; };
@@ -2648,7 +2652,7 @@
             <div id="sevents"></div>
             <div class="row" style="margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" id="evmore" hidden>Show 25 more</button><button class="btn btn-sm" id="evcsv">Download log (CSV)</button></div>
             <p class="hint" id="evfoot"></p>`)}
-          ${card('Staff sign-ins', `<div id="staffev"></div><p class="hint">Your own sign-ins and any failed tries. They are kept apart from the blocked attempts so they never look like attacks.</p>`)}
+          ${card('Staff sign-ins', `<div id="staffev"></div><p class="hint">Your own sign-ins, including any mistyped passwords.</p>`)}
         </div>
       </div>`;
     // ---- check your setup ----
