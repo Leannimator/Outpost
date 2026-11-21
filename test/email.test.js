@@ -290,3 +290,30 @@ test('a Collection block shows a shop line (live, newest first, sold-out and hid
     assert.equal(mailer.cleanDesign({ blocks: [{ type: 'collection', product_ids: [1, 2, 3, 4, 5, 6, 7, 8], line_id: '3' }] }).blocks[0].product_ids.length, 6, 'at most six hand-picked');
   } finally { stop(); }
 });
+
+test('email text stays readable on the white card even when the shop theme uses light text', () => {
+  const d = { template: 'banner', blocks: [{ type: 'heading', text: 'Hello' }, { type: 'text', text: 'Body' }] };
+  const html = mailer.renderDesign(d, { shop: 'Shop', base: 'http://x.test', theme: { text: '#f5f5f5', heading: '#ffffff', link: '#fafafa' }, address: '', unsubUrl: 'http://x.test/u' }).html;
+  assert.ok(!/color:#ffffff">Hello/i.test(html) && !/color:#f5f5f5/i.test(html), 'light theme colours are not used for text on white');
+  assert.match(html, /<h1[^>]*color:#222222">Hello/, 'falls back to a dark colour');
+  const dark = mailer.renderDesign(d, { shop: 'Shop', base: 'http://x.test', theme: { text: '#333333', heading: '#112244' }, address: '', unsubUrl: 'http://x.test/u' }).html;
+  assert.match(dark, /<h1[^>]*color:#112244">Hello/, 'a readable theme colour is kept');
+});
+
+test('every designed email gets its own tracked link automatically; test sends count toward the daily total but come out of the receipts reserve', { timeout: 60000 }, async () => {
+  const { s, a, fake, stop } = await setup();
+  try {
+    await a.put('/api/admin/email/settings', { from: 'Shop <hello@example.com>', mail_address: '1 Main St', on: true });
+    const c = (await a.post('/api/admin/email/campaigns', { subject: 'Spring tiles', design: { template: 'plain', blocks: [{ type: 'heading', text: 'Hi' }] } })).data;
+    assert.ok(c.link_code, 'a link was made without asking');
+    const links = (await a.get('/api/admin/marketing/links')).data.links;
+    assert.ok(links.some((l) => l.code === c.link_code && l.name === 'Email: Spring tiles'), 'named after the email');
+    const c2 = (await a.put(`/api/admin/email/campaigns/${c.id}`, { subject: 'Spring tiles v2', design: { template: 'plain', blocks: [{ type: 'heading', text: 'Hi again' }] } })).data;
+    assert.equal(c2.link_code, c.link_code, 'editing keeps the same link, no duplicates');
+    const before = (await a.get('/api/admin/email/status')).data;
+    await a.post('/api/admin/email/test', { to: 'me@example.com', subject: 'T', design: { template: 'plain', blocks: [{ type: 'heading', text: 'Hi' }] } });
+    const after = (await a.get('/api/admin/email/status')).data;
+    assert.equal(after.sent_today.transactional, before.sent_today.transactional + 1, 'a test counts toward today');
+    assert.equal(after.allowance_today, before.allowance_today, 'but marketing room is unchanged while the reserve covers it');
+  } finally { stop(); }
+});

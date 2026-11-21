@@ -1748,6 +1748,7 @@
       const top = `<div class="me-top"><h2>${isNew ? 'New email' : locked ? 'Email' : 'Edit email'}</h2>
         <label class="me-sub"><span class="label">Subject</span><input class="input" id="me-sub" maxlength="150" value="${esc(subject)}" ${dis}></label>
         ${design ? `<div class="me-tools"><div class="seg" role="group" aria-label="Preview"><button id="me-pv" class="${pvOn ? 'on' : ''}" aria-pressed="${pvOn}">Preview</button>${pvOn ? `<button id="me-pw" title="Make the preview wider">${pvWide ? 'Narrow' : 'Wide'}</button>` : ''}</div></div>` : ''}<button class="btn btn-sm" data-close>Close</button></div>`;
+      m.el.classList.toggle('me-pick', !design); m.el.style.maxWidth = design ? 'min(1440px, 97vw)' : '';
       if (!design) {
         $('#mebody', m.el).innerHTML = `${top}<div class="me-start">${aud ? `<div class="msg" style="margin-bottom:10px">This email is set to go to <b>${esc(audOpt().label)}</b> (${audCount()}). You can change that before you schedule.</div>` : ''}<div class="label">Start from</div><div class="mk-presets">${PRESETS.map(([k, n, d]) => `<button class="mk-preset" data-preset="${k}"><i class="mk-pv mk-pv-${k}"></i><b>${n}</b><span class="small muted">${d}</span></button>`).join('')}</div>${templates.length ? `<div class="label" style="margin-top:10px">Your templates</div><div class="row wrap" style="gap:6px">${templates.map((t) => `<span class="mk-tchip"><button class="btn btn-sm" data-tpl="${t.id}">${esc(t.name)}</button><button class="mk-tx" data-tdel="${t.id}" title="Delete template" aria-label="Delete template ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}<div id="memsg" style="margin-top:6px"></div></div>`;
         wire(); return;
@@ -1756,7 +1757,7 @@
       const pal = locked ? '' : `<aside class="me-pal" aria-label="Add a module"><div class="label">Header</div><div class="seg" id="me-hdr" style="margin:0 0 12px"><button data-h="plain" class="${design.template === 'plain' ? 'on' : ''}">Plain</button><button data-h="banner" class="${design.template !== 'plain' ? 'on' : ''}">Banner</button></div>
         <div class="label">Add a module</div>${MODS.map(([t, g, d]) => `<button class="me-mod" data-add="${t}"><i>${g}</i><span><b>${BLOCK_NAMES[t]}</b><small>${d}</small></span></button>`).join('')}</aside>`;
       const build = `<section class="me-build">${design.blocks.map(blockHtml).join('') || '<div class="empty">Add a module from the left to begin.</div>'}
-        <div class="card" style="margin:10px 0 0"><label class="field" style="margin:0"><span class="label">Count sales from this email</span><select class="input" id="me-link" ${dis}><option value="">Don’t track</option>${mk.links.map((l) => `<option value="${esc(l.code)}"${l.code === link ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select><span class="hint">Shop links in the email get this tracked link, so Sales by link shows what the email earned. Make one in Tracked links.</span></label>
+        <div class="card" style="margin:10px 0 0"><div class="small muted">Sales from this email are counted automatically. See them in Marketing → Sales by link.</div>
           ${locked ? '' : `<div class="row wrap" style="gap:6px;align-items:center;margin-top:10px"><input class="input" id="me-to" type="email" placeholder="you@example.com" style="max-width:220px"><button class="btn btn-sm" id="me-test">Send me a test</button><button class="btn btn-sm" id="me-tpl">Save as template</button></div>`}</div></section>`;
       const pv = pvOn ? `<section class="me-pvp" aria-label="Email preview"><iframe id="me-prev" sandbox="" title="Email preview"></iframe></section>` : '';
       $('#mebody', m.el).innerHTML = `${top}<div class="me-grid" style="grid-template-columns:${cols}">${pal}${build}${pv}</div>
@@ -1782,7 +1783,6 @@
       m.el.querySelectorAll('[data-tdel]').forEach((b) => { b.onclick = async () => { if (!(await confirmBox({ title: 'Delete this template?', body: 'Emails you already made from it are not affected.', yes: 'Delete', danger: true }))) return; await api('/api/admin/email/templates/' + b.dataset.tdel, { method: 'DELETE' }); templates = templates.filter((t) => t.id !== Number(b.dataset.tdel)); paint(); }; });
       if (!design) return;
       m.el.querySelectorAll('[data-f]').forEach((el) => { el.oninput = el.onchange = () => { keep(); if (el.tagName === 'SELECT' && el.dataset.f.endsWith(':product_id')) { /* repaint not needed */ } prev(); }; });
-      if (q('#me-link')) q('#me-link').onchange = () => { keep(); prev(); };
       
       m.el.querySelectorAll('#me-hdr button').forEach((b) => { b.onclick = () => { keep(); design.template = b.dataset.h; paint(); }; });
       m.el.querySelectorAll('[data-cmode]').forEach((b) => { b.onclick = () => { keep(); const [i, mode] = b.dataset.cmode.split(':'); const bl = design.blocks[Number(i)]; bl.mode = mode; if (mode === 'line') bl.product_ids = []; else bl.line_id = 0; paint(); }; });

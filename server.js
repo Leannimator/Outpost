@@ -1964,6 +1964,16 @@ app.post('/api/confirm-email', (req, res) => {
 const cleanSubject = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
 const EMAIL_BODY_MAX = 20000;
 const designText = (d) => d.blocks.filter((b) => b.type === 'heading' || b.type === 'text').map((b) => b.text).join('\n\n').slice(0, EMAIL_BODY_MAX) || (d.blocks.length ? '(designed email)' : '');
+// Every designed email gets its own tracked link automatically, so Sales by link shows what each email earned without any setup.
+function autoEmailLink(subject) {
+  if (db.prepare('SELECT COUNT(*) c FROM tracked_links').get().c >= LINK_MAX) return '';
+  const name = ('Email: ' + (String(subject || '').trim() || 'Untitled')).slice(0, 60);
+  const taken = db.prepare('SELECT 1 FROM tracked_links WHERE code = ?');
+  let code = slugCode(name), base = code, n = 2;
+  while (taken.get(code)) code = base.slice(0, 26) + '-' + n++;
+  db.prepare('INSERT INTO tracked_links (code, name, dest, created_at) VALUES (?, ?, ?, ?)').run(code, name, '/shop', Date.now());
+  return code;
+}
 const cleanCampaignLink = (v) => { v = String(v || '').trim().toLowerCase(); if (!v) return ''; const l = db.prepare('SELECT code FROM tracked_links WHERE code = ? AND archived = 0').get(v); if (!l) throw new HttpError(400, 'That tracked link does not exist'); return l.code; };
 const audienceOptions = () => [
   { kind: 'all', label: 'Everyone who can be emailed', sendable: sendableIn(null) },
@@ -2001,7 +2011,8 @@ app.get('/api/admin/email/campaigns', requireAdmin, (req, res) => {
 app.post('/api/admin/email/campaigns', requireAdmin, h(async (req, res) => {
   if (db.prepare('SELECT COUNT(*) n FROM email_campaigns').get().n >= 1000) throw new HttpError(400, 'Too many emails saved. Delete some old ones first.');
   const subject = cleanSubject(req.body.subject), body = String(req.body.body || '').slice(0, EMAIL_BODY_MAX);
-  const design = req.body.design ? mailer.cleanDesign(req.body.design) : null, link = cleanCampaignLink(req.body.link_code);
+  const design = req.body.design ? mailer.cleanDesign(req.body.design) : null;
+  const link = cleanCampaignLink(req.body.link_code) || (design ? autoEmailLink(subject) : '');
   const id = Number(db.prepare("INSERT INTO email_campaigns (subject, body, status, created_at, design, link_code, audience) VALUES (?,?,'draft',?,?,?,?)").run(subject, design ? designText(design) : body, Date.now(), design ? JSON.stringify(design) : '', link, JSON.stringify(cleanAudience(req.body.audience) || '')).lastInsertRowid);
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(id)));
 }));
@@ -2012,7 +2023,7 @@ app.put('/api/admin/email/campaigns/:id', requireAdmin, h(async (req, res) => {
   const subject = req.body.subject !== undefined ? cleanSubject(req.body.subject) : c.subject;
   let body = req.body.body !== undefined ? String(req.body.body).slice(0, EMAIL_BODY_MAX) : c.body, designJson = c.design;
   if (req.body.design !== undefined) { const d = req.body.design ? mailer.cleanDesign(req.body.design) : null; designJson = d ? JSON.stringify(d) : ''; if (d) body = designText(d); }
-  const link = req.body.link_code !== undefined ? cleanCampaignLink(req.body.link_code) : c.link_code;
+  const link = (req.body.link_code ? cleanCampaignLink(req.body.link_code) : '') || c.link_code || (designJson ? autoEmailLink(subject) : '');
   const aud = req.body.audience !== undefined ? JSON.stringify(cleanAudience(req.body.audience) || '') : c.audience;
   db.prepare('UPDATE email_campaigns SET subject = ?, body = ?, design = ?, link_code = ?, audience = ? WHERE id = ?').run(subject, body, designJson, link, aud, c.id);
   res.json(campaignOut(db.prepare('SELECT * FROM email_campaigns WHERE id = ?').get(c.id)));
